@@ -94,6 +94,10 @@
 - [ ] **Step 2: 建立 `.gitignore`**
 
 ```gitignore
+# Isolated worktrees and Subagent-Driven Development scratch
+.worktrees/
+.superpowers/
+
 # Project virtual environment
 .venv/
 
