@@ -166,7 +166,10 @@ def run_checks(checks: Sequence[Check]) -> int:
         try:
             check()
         except (Exception, SystemExit) as exc:
-            print(f"[FAIL] {name}: {type(exc).__name__}: {exc}", file=sys.stderr)
+            if name == "pymongo":
+                print(f"[FAIL] {name}: {type(exc).__name__}", file=sys.stderr)
+            else:
+                print(f"[FAIL] {name}: {type(exc).__name__}: {exc}", file=sys.stderr)
             return 1
         print(f"[PASS] {name}")
     return 0

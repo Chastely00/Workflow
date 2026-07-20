@@ -229,13 +229,40 @@ class PyMongoContractTests(unittest.TestCase):
                 side_effect=AssertionError("DNS lookup attempted"),
             ) as resolve,
         ):
-            with self.assertRaisesRegex(
-                (ConfigurationError, UserWarning),
-                "Unknown option",
-            ):
+            with self.assertRaisesRegex(ConfigurationError, "Unknown option"):
                 verify_environment.check_pymongo()
 
         resolve.assert_not_called()
+
+    def test_malformed_srv_credential_is_redacted_by_runner_before_dns_or_client(
+        self,
+    ) -> None:
+        marker = "RED_CREDENTIAL_MARKER"
+        malformed_uri = (
+            "mongodb+srv://user:password?"
+            f"{marker}=true@cluster.example.com/"
+        )
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with (
+            mock.patch.dict(os.environ, {"MONGODB_URI": malformed_uri}),
+            mock.patch(
+                "dns.resolver.resolve",
+                side_effect=AssertionError("DNS lookup attempted"),
+            ) as resolve,
+            mock.patch("pymongo.MongoClient") as mongo_client,
+            contextlib.redirect_stdout(stdout),
+            contextlib.redirect_stderr(stderr),
+        ):
+            result = run_checks([("pymongo", verify_environment.check_pymongo)])
+
+        self.assertEqual(result, 1)
+        self.assertEqual(stdout.getvalue(), "")
+        self.assertEqual(stderr.getvalue(), "[FAIL] pymongo: ConfigurationError\n")
+        self.assertNotIn(marker, stderr.getvalue())
+        self.assertNotIn(malformed_uri, stderr.getvalue())
+        resolve.assert_not_called()
+        mongo_client.assert_not_called()
 
     def test_default_uri_uses_localhost_without_connecting(self) -> None:
         client = mock.Mock()
