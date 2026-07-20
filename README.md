@@ -29,6 +29,8 @@ py -3.12 -m venv .venv
 
 本專案不需要執行 `ipykernel install --user`，也不會建立全域 kernel。
 
+提交 `.ipynb` 前，必須清除 cell output，並人工檢查不得殘留帳密、連線字串、token、查詢結果或其他敏感資料。
+
 ## 新增依賴
 
 新增套件後必須重新執行完整驗證，再更新鎖定檔：

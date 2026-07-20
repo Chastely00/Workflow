@@ -9,6 +9,7 @@ from types import ModuleType, SimpleNamespace
 from unittest import mock
 
 import numpy as np
+from pymongo.errors import InvalidURI
 
 from scripts import verify_environment
 from scripts.verify_environment import run_checks
@@ -26,16 +27,67 @@ class RunChecksTests(unittest.TestCase):
         self.assertEqual(stderr.getvalue(), "")
 
     def test_fails_closed_and_names_component(self) -> None:
+        sentinel_ran = False
+
         def fail() -> None:
             raise RuntimeError("boom")
 
+        def sentinel() -> None:
+            nonlocal sentinel_ran
+            sentinel_ran = True
+
+        stdout = io.StringIO()
         stderr = io.StringIO()
-        with contextlib.redirect_stderr(stderr):
-            result = run_checks([("broken_component", fail)])
+        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+            result = run_checks(
+                [("broken_component", fail), ("must_not_run", sentinel)]
+            )
 
         self.assertEqual(result, 1)
-        self.assertIn("broken_component", stderr.getvalue())
-        self.assertIn("RuntimeError: boom", stderr.getvalue())
+        self.assertEqual(stdout.getvalue(), "")
+        self.assertEqual(
+            stderr.getvalue(),
+            "[FAIL] broken_component: RuntimeError: boom\n",
+        )
+        self.assertFalse(sentinel_ran)
+
+    def test_system_exit_zero_is_a_named_failure_and_short_circuits(self) -> None:
+        sentinel_ran = False
+
+        def exit_successfully() -> None:
+            raise SystemExit(0)
+
+        def sentinel() -> None:
+            nonlocal sentinel_ran
+            sentinel_ran = True
+
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+            try:
+                result = run_checks(
+                    [
+                        ("exiting_component", exit_successfully),
+                        ("must_not_run", sentinel),
+                    ]
+                )
+            except SystemExit as exc:
+                self.fail(f"run_checks propagated SystemExit({exc.code!r})")
+
+        self.assertEqual(result, 1)
+        self.assertEqual(stdout.getvalue(), "")
+        self.assertEqual(
+            stderr.getvalue(),
+            "[FAIL] exiting_component: SystemExit: 0\n",
+        )
+        self.assertFalse(sentinel_ran)
+
+    def test_keyboard_interrupt_propagates(self) -> None:
+        def interrupt() -> None:
+            raise KeyboardInterrupt
+
+        with self.assertRaises(KeyboardInterrupt):
+            run_checks([("interrupting_component", interrupt)])
 
 
 class OptimizedRuntimeChecksTests(unittest.TestCase):
@@ -94,10 +146,16 @@ class OptimizedRuntimeChecksTests(unittest.TestCase):
             mock.patch(
                 "pymongo.uri_parser.parse_uri",
                 return_value={"nodelist": [("not-localhost", 27017)]},
-            ),
+            ) as parse_uri,
         ):
             with self.assertRaisesRegex(RuntimeError, "localhost"):
                 verify_environment.check_pymongo()
+
+        parse_uri.assert_called_once_with(
+            verify_environment.DEFAULT_MONGODB_URI,
+            warn=False,
+        )
+        client.close.assert_not_called()
 
 
 class PyMongoContractTests(unittest.TestCase):
@@ -106,9 +164,17 @@ class PyMongoContractTests(unittest.TestCase):
         with (
             mock.patch.dict(os.environ, {}, clear=True),
             mock.patch("pymongo.MongoClient", return_value=client) as mongo_client,
+            mock.patch(
+                "pymongo.uri_parser.parse_uri",
+                return_value={"nodelist": [("localhost", 27017)]},
+            ) as parse_uri,
         ):
             verify_environment.check_pymongo()
 
+        parse_uri.assert_called_once_with(
+            verify_environment.DEFAULT_MONGODB_URI,
+            warn=False,
+        )
         mongo_client.assert_called_once_with(
             verify_environment.DEFAULT_MONGODB_URI,
             connect=False,
@@ -126,12 +192,12 @@ class PyMongoContractTests(unittest.TestCase):
         ):
             verify_environment.check_pymongo()
 
+        parse_uri.assert_called_once_with(explicit_uri, warn=False)
         mongo_client.assert_called_once_with(
             explicit_uri,
             connect=False,
             serverSelectionTimeoutMS=1000,
         )
-        parse_uri.assert_not_called()
         client.close.assert_called_once_with()
 
     def test_explicit_uri_client_error_propagates_without_localhost_fallback(
@@ -154,12 +220,34 @@ class PyMongoContractTests(unittest.TestCase):
                 verify_environment.check_pymongo()
 
         self.assertIs(caught.exception, sentinel_error)
+        parse_uri.assert_called_once_with(explicit_uri, warn=False)
         mongo_client.assert_called_once_with(
             explicit_uri,
             connect=False,
             serverSelectionTimeoutMS=1000,
         )
-        parse_uri.assert_not_called()
+
+    def test_invalid_tls_option_fails_before_client_construction(self) -> None:
+        invalid_uri = "mongodb://localhost:27017/?tls=NOTREAL"
+        with (
+            mock.patch.dict(os.environ, {"MONGODB_URI": invalid_uri}),
+            mock.patch("pymongo.MongoClient") as mongo_client,
+        ):
+            with self.assertRaisesRegex(ValueError, "tls"):
+                verify_environment.check_pymongo()
+
+        mongo_client.assert_not_called()
+
+    def test_invalid_uri_format_fails_before_client_construction(self) -> None:
+        invalid_uri = "not-a-mongodb-uri"
+        with (
+            mock.patch.dict(os.environ, {"MONGODB_URI": invalid_uri}),
+            mock.patch("pymongo.MongoClient") as mongo_client,
+        ):
+            with self.assertRaisesRegex(InvalidURI, "Invalid URI scheme"):
+                verify_environment.check_pymongo()
+
+        mongo_client.assert_not_called()
 
 
 if __name__ == "__main__":

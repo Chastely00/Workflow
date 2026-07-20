@@ -42,3 +42,10 @@
 - 只要 API 支援，涉及隨機性的研究必須設定明確 seed。
 - PyMongo 未收到 URI 時使用 `mongodb://localhost:27017/`；若已明確提供其他 URI 而連線失敗，不得回退 localhost。
 - 新增依賴必須是有意識的決策，安裝後更新 `requirements.txt` 並重新執行環境驗證。
+
+## Repository 資料與機密邊界
+
+- 禁止提交帳號、密碼、API key、憑證、token、MongoDB 或其他服務的連線字串。
+- 禁止提交含敏感資料的 Notebook cell output；提交 `.ipynb` 前必須清除並人工檢查輸出。
+- 禁止提交原始資料集、衍生資料集及本機資料目錄。
+- 唯一例外是經明確核准、範圍最小且不含真實或可回推敏感資訊的合成測試 fixture。

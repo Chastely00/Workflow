@@ -30,6 +30,10 @@ dist/
 !.env.example
 *.pem
 *.key
+*.pfx
+*.p12
+credentials*.json
+secrets/
 
 # Local editor and OS files
 .DS_Store

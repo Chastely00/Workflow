@@ -122,8 +122,9 @@ def check_pymongo() -> None:
     from pymongo.uri_parser import parse_uri
 
     uri = os.environ.get("MONGODB_URI", DEFAULT_MONGODB_URI)
+    parsed_uri = parse_uri(uri, warn=False)
     if uri == DEFAULT_MONGODB_URI:
-        nodelist = parse_uri(uri)["nodelist"]
+        nodelist = parsed_uri["nodelist"]
         if nodelist != [("localhost", 27017)]:
             raise RuntimeError(
                 "PyMongo default URI expected localhost:27017, "
@@ -153,7 +154,7 @@ def run_checks(checks: Sequence[Check]) -> int:
     for name, check in checks:
         try:
             check()
-        except Exception as exc:
+        except (Exception, SystemExit) as exc:
             print(f"[FAIL] {name}: {type(exc).__name__}: {exc}", file=sys.stderr)
             return 1
         print(f"[PASS] {name}")
