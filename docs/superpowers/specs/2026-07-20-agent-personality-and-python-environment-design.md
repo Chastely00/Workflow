@@ -89,6 +89,10 @@ py -3.12 -m venv .venv
 - `scikit-learn`
 - `TA-Lib`
 
+### PyMongo 預設連線
+
+當程式未收到 MongoDB URI 時，PyMongo 預設使用 `mongodb://localhost:27017/`。這是明確的專案預設值，不是錯誤後的備援路徑；若使用者或設定檔已提供其他 URI，而該 URI 連線失敗，程式必須直接回報原始錯誤，不得靜默改連 localhost。
+
 VS Code 只需要 `ipykernel`，即可使用 `.venv` 執行 Notebook。本環境不註冊成使用者層級的全域 Jupyter kernel；VS Code 將直接選擇專案內的解譯器。
 
 安裝成功後，將從實際解析完成的環境產生具有精確版本的 `requirements.txt`。此檔案是初始建置的可重現依賴鎖定檔。未來新增套件必須是有意識的決策，並在新增後重新驗證及更新版本鎖定。
@@ -117,7 +121,7 @@ VS Code 只需要 `ipykernel`，即可使用 `.venv` 執行 Notebook。本環境
 7. Matplotlib 與 seaborn 使用非互動式 backend 成功渲染。
 8. scikit-learn 擬合可重現的最小模型，並輸出預期的預測形狀。
 9. `talib.SMA` 產生預期的暖機期 `NaN` 與移動平均值。
-10. PyMongo 在停用主動連線的設定下成功建立 client，且不需要帳密或正在執行的資料庫服務。
+10. PyMongo 使用預設 URI `mongodb://localhost:27017/`，在停用主動連線的設定下成功建立 client；此項驗證不需要帳密或正在執行的資料庫服務。
 11. 任一檢查失敗時，驗證腳本必須以非零狀態結束，並指出失敗元件。
 12. Git 狀態確認 `.venv` 與產生的 cache 均已被忽略。
 
