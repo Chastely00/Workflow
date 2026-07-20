@@ -9,7 +9,8 @@ Check = tuple[str, Callable[[], None]]
 
 
 def check_python() -> None:
-    assert sys.version_info[:2] == (3, 12), sys.version
+    if sys.version_info[:2] != (3, 12):
+        raise RuntimeError(f"Expected Python 3.12, got {sys.version}")
 
 
 def check_direct_imports() -> None:
@@ -53,7 +54,9 @@ def check_numba() -> None:
     def sum_of_squares(values: np.ndarray) -> float:
         return float((values * values).sum())
 
-    assert sum_of_squares(np.array([1.0, 2.0, 3.0])) == 14.0
+    result = sum_of_squares(np.array([1.0, 2.0, 3.0]))
+    if result != 14.0:
+        raise RuntimeError(f"Numba sum-of-squares expected 14.0, got {result!r}")
 
 
 def check_statistics() -> None:
@@ -62,7 +65,10 @@ def check_statistics() -> None:
     from scipy import stats
 
     t_result = stats.ttest_1samp(np.array([1.0, 2.0, 3.0]), popmean=2.0)
-    assert np.isclose(t_result.statistic, 0.0)
+    if not np.isclose(t_result.statistic, 0.0):
+        raise RuntimeError(
+            f"SciPy t-test expected statistic 0.0, got {t_result.statistic!r}"
+        )
 
     x = sm.add_constant(np.array([0.0, 1.0, 2.0, 3.0]))
     y = np.array([1.0, 3.0, 5.0, 7.0])
@@ -92,7 +98,10 @@ def check_sklearn() -> None:
         np.array([1.0, 3.0, 5.0]),
     )
     prediction = model.predict(np.array([[3.0]]))
-    assert prediction.shape == (1,)
+    if prediction.shape != (1,):
+        raise RuntimeError(
+            f"scikit-learn prediction expected shape (1,), got {prediction.shape!r}"
+        )
     np.testing.assert_allclose(prediction, np.array([7.0]), atol=1e-12)
 
 
@@ -114,12 +123,16 @@ def check_pymongo() -> None:
 
     uri = os.environ.get("MONGODB_URI", DEFAULT_MONGODB_URI)
     if uri == DEFAULT_MONGODB_URI:
-        assert parse_uri(uri)["nodelist"] == [("localhost", 27017)]
+        nodelist = parse_uri(uri)["nodelist"]
+        if nodelist != [("localhost", 27017)]:
+            raise RuntimeError(
+                "PyMongo default URI expected localhost:27017, "
+                f"got {nodelist!r}"
+            )
     client = MongoClient(uri, connect=False, serverSelectionTimeoutMS=1000)
-    try:
-        assert client is not None
-    finally:
-        client.close()
+    if client is None:
+        raise RuntimeError("PyMongo client construction returned None")
+    client.close()
 
 
 CHECKS: list[Check] = [
