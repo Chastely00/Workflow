@@ -1,3 +1,39 @@
 # Isolated worktrees and Subagent-Driven Development scratch
 .worktrees/
 .superpowers/
+
+# Project virtual environment
+.venv/
+
+# Python generated files
+__pycache__/
+*.py[cod]
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.numba_cache/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Coverage and build outputs
+.coverage
+htmlcov/
+build/
+dist/
+*.egg-info/
+
+# Local secrets and environment variables
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Local editor and OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/*
+!.vscode/settings.json
