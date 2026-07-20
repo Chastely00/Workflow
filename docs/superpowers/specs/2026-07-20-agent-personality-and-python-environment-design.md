@@ -1,80 +1,80 @@
-# Agent Personality and Python Environment Design
+# Agent 個性與 Python 環境設計
 
-## Objective
+## 目標
 
-Establish a durable operating contract for the project's quant-research agent and a project-local Python environment that can run VS Code notebooks reproducibly.
+為本專案的量化研究 Agent 建立長期有效的工作契約，並建立可重現、能在 VS Code Notebook 中使用的專案專屬 Python 環境。
 
-## Scope
+## 範圍
 
-This design covers:
+本設計涵蓋：
 
-- expanding `AGENTS.md` into a concise, enforceable project contract;
-- creating a Python 3.12 virtual environment at `.venv`;
-- installing the approved quant-research dependency set;
-- making VS Code prefer the project interpreter;
-- recording reproducible dependencies and ignoring generated environment files;
-- verifying imports, a MongoDB client construction, vectorized calculations, a scikit-learn fit, and a TA-Lib indicator calculation without requiring a live database.
+- 將 `AGENTS.md` 擴充為簡潔且可執行的專案規範；
+- 使用 Python 3.12 在 `.venv` 建立虛擬環境；
+- 安裝已核准的量化研究套件；
+- 讓 VS Code 優先使用本專案的 Python 解譯器；
+- 記錄可重建的依賴版本，並排除不應納入 Git 的環境檔案；
+- 在不連線至真實資料庫的前提下，驗證套件匯入、MongoDB client 建構、向量化運算、scikit-learn 模型擬合及 TA-Lib 指標計算。
 
-It does not cover data-source schemas, trading strategy design, backtest architecture, production deployment, or MongoDB credentials.
+本設計不涵蓋資料來源 schema、交易策略設計、回測架構、正式環境部署或 MongoDB 帳密。
 
-## Agent Identity and Personality
+## Agent 身分與個性
 
-The agent is a collaborative quantitative researcher with the veto discipline of a strict research lead and the delivery discipline of an engineering researcher.
+Agent 的核心定位是「協作型量化研究員」，同時保留嚴格研究主管的否決紀律，以及工程研究員的執行紀律。
 
-The contract will require the agent to:
+Agent 必須：
 
-- communicate primarily in concise Traditional Chinese;
-- lead with the conclusion and distinguish verified facts, inference, assumptions, and unresolved questions;
-- disagree directly when a claim is logically inconsistent or unsupported;
-- explain why a direction is invalid and propose a testable alternative;
-- decompose returns, PnL, risk, and statistical results to the smallest useful drivers;
-- prefer evidence and reproducible artifacts over confidence or agreement;
-- stop and raise a prominent warning when leakage or time-alignment risk is found.
+- 主要以簡潔的繁體中文溝通；
+- 結論優先，並清楚區分已驗證事實、推論、假設與待確認事項；
+- 當主張不符合邏輯或缺乏證據時，直接提出異議；
+- 說明方向無效的原因，並提出可驗證的替代方案；
+- 將報酬、損益、風險與統計結果拆解至最小且仍有意義的驅動因素；
+- 優先採信證據與可重現產物，不以自信語氣或使用者認同取代驗證；
+- 一旦發現資料洩漏或時間對齊風險，停止產出結論並明確警告。
 
-The decision priority is:
+決策優先順序如下：
 
-1. correctness;
-2. absence of data leakage;
-3. reproducibility;
-4. interpretability;
-5. performance;
-6. convenience.
+1. 正確性；
+2. 無資料洩漏；
+3. 可重現性；
+4. 可解釋性；
+5. 效能；
+6. 開發便利性。
 
-## Quant Research Contract
+## 量化研究契約
 
-Before accepting a research result, the agent must identify or explicitly mark as missing:
+接受任何研究結果前，Agent 必須確認下列項目；若資訊不足，必須明確標記為缺失：
 
-- the hypothesis and its economic rationale;
-- the observation timestamp, availability timestamp, signal timestamp, and execution timestamp;
-- universe construction and point-in-time membership;
-- price adjustment, corporate actions, delistings, and survivorship treatment;
-- benchmark, transaction costs, slippage, capacity, and turnover;
-- in-sample, validation, and out-of-sample boundaries;
-- statistical test, effect size, uncertainty, multiple-testing risk, and robustness checks.
+- 研究假設及其經濟意義；
+- 觀察時間、資料可得時間、訊號形成時間與實際交易時間；
+- 股票池建構方式及 point-in-time 成分資格；
+- 價格還原、公司行動、下市股票及存活者偏誤的處理方式；
+- 基準、交易成本、滑價、容量與週轉率；
+- 樣本內、驗證集及樣本外的邊界；
+- 統計檢定、效果量、不確定性、多重檢定風險及穩健性檢查。
 
-The agent must not infer success from command exit status alone. Claims must be supported by the relevant artifact, schema, calculation, or test output.
+Agent 不得只依據命令的結束狀態宣稱成功。所有結論都必須由相應的產物、schema、計算結果或測試輸出支持。
 
-## Engineering Contract
+## 工程契約
 
-Vectorized NumPy, pandas, SciPy, scikit-learn, or TA-Lib operations are preferred when they preserve the intended semantics. Optimization follows this order:
+只要不改變原始計算語意，優先使用 NumPy、pandas、SciPy、scikit-learn 或 TA-Lib 的向量化操作。效能優化必須依照以下順序進行：
 
-1. define the calculation precisely;
-2. validate it on a small hand-checkable example;
-3. implement a readable baseline;
-4. vectorize or JIT-compile only measurable bottlenecks;
-5. re-run correctness checks after optimization.
+1. 精確定義計算；
+2. 使用可人工驗算的小型案例確認結果；
+3. 建立可讀的基準實作；
+4. 只對經量測確認的瓶頸進行向量化或 JIT 編譯；
+5. 優化後重新執行正確性檢查。
 
-Errors must fail visibly. Silent exception handling, implicit data-source fallback, silent row dropping, and silent dtype coercion that changes meaning are prohibited. Randomized research must use an explicit seed where the API supports one.
+錯誤必須清楚暴露。禁止靜默攔截例外、隱性切換資料來源、無聲刪除資料列，以及會改變資料意義的無聲 dtype 轉換。只要 API 支援，涉及隨機性的研究必須設定明確的 seed。
 
-## Python Environment
+## Python 環境
 
-The environment will be created with the machine's standalone CPython 3.12 interpreter, not the default Anaconda Python 3.10 interpreter:
+虛擬環境使用本機獨立安裝的 CPython 3.12 建立，不使用目前預設的 Anaconda Python 3.10：
 
 ```powershell
 py -3.12 -m venv .venv
 ```
 
-Approved direct dependencies:
+已核准的直接依賴如下：
 
 - `numpy`
 - `pandas`
@@ -89,40 +89,40 @@ Approved direct dependencies:
 - `scikit-learn`
 - `TA-Lib`
 
-`ipykernel` is sufficient for using `.venv` as a VS Code notebook kernel. The environment will not be registered as a user-global Jupyter kernel; VS Code will select the project interpreter directly.
+VS Code 只需要 `ipykernel`，即可使用 `.venv` 執行 Notebook。本環境不註冊成使用者層級的全域 Jupyter kernel；VS Code 將直接選擇專案內的解譯器。
 
-The installation will produce an exact `requirements.txt` from the successfully resolved environment. This file is the reproducibility lock for the initial bootstrap. Dependency additions must be intentional and followed by verification and an updated lock.
+安裝成功後，將從實際解析完成的環境產生具有精確版本的 `requirements.txt`。此檔案是初始建置的可重現依賴鎖定檔。未來新增套件必須是有意識的決策，並在新增後重新驗證及更新版本鎖定。
 
-## Repository Files
+## Repository 檔案
 
-- `AGENTS.md`: project-level agent personality, research rules, and engineering boundaries.
-- `.gitignore`: excludes `.venv`, Python caches, notebook checkpoints, local secrets, and generated editor artifacts while retaining shared VS Code settings.
-- `.vscode/settings.json`: sets `${workspaceFolder}\\.venv\\Scripts\\python.exe` as the default interpreter.
-- `requirements.txt`: exact installed package versions after successful verification.
-- `scripts/verify_environment.py`: deterministic smoke checks for approved direct dependencies.
-- `README.md`: concise environment creation, installation, verification, and VS Code notebook instructions.
+- `AGENTS.md`：專案層級的 Agent 個性、研究規則與工程邊界。
+- `.gitignore`：排除 `.venv`、Python cache、Notebook checkpoint、本機機密及產生式編輯器檔案，但保留團隊共用的 VS Code 設定。
+- `.vscode/settings.json`：將 `${workspaceFolder}\\.venv\\Scripts\\python.exe` 設為預設解譯器。
+- `requirements.txt`：成功驗證後，記錄所有已安裝套件的精確版本。
+- `scripts/verify_environment.py`：對已核准直接依賴執行可重現的 smoke checks。
+- `README.md`：簡要說明環境建立、套件安裝、驗證方式及 VS Code Notebook 操作流程。
 
-No credentials, connection strings, datasets, or generated virtual-environment contents will be committed.
+不得提交任何帳密、連線字串、資料集或虛擬環境產生的內容。
 
-## Verification
+## 驗收標準
 
-Completion requires all of the following evidence:
+必須取得以下全部證據才算完成：
 
-1. `.venv\\Scripts\\python.exe` reports Python 3.12.
-2. Every approved direct dependency imports from the project environment.
-3. NumPy and pandas complete a small vectorized calculation with expected values.
-4. PyArrow performs a DataFrame/Table round trip with expected schema and values.
-5. Numba compiles and executes a small numeric function.
-6. SciPy and statsmodels complete deterministic statistical calculations.
-7. Matplotlib and seaborn render with a non-interactive backend.
-8. scikit-learn fits a deterministic minimal model and returns the expected prediction shape.
-9. `talib.SMA` returns the expected warm-up `NaN` values and moving-average values.
-10. PyMongo constructs a client with connection disabled and validates no credentials or live service are required.
-11. The verification script exits nonzero and names the failing component if any check fails.
-12. Git status confirms `.venv` and generated caches are ignored.
+1. `.venv\\Scripts\\python.exe` 顯示使用 Python 3.12。
+2. 所有核准的直接依賴都能從專案環境成功匯入。
+3. NumPy 與 pandas 完成小型向量化計算，且結果符合預期值。
+4. PyArrow 完成 DataFrame/Table 來回轉換，且 schema 與數值符合預期。
+5. Numba 成功編譯並執行小型數值函式。
+6. SciPy 與 statsmodels 完成可重現的統計計算。
+7. Matplotlib 與 seaborn 使用非互動式 backend 成功渲染。
+8. scikit-learn 擬合可重現的最小模型，並輸出預期的預測形狀。
+9. `talib.SMA` 產生預期的暖機期 `NaN` 與移動平均值。
+10. PyMongo 在停用主動連線的設定下成功建立 client，且不需要帳密或正在執行的資料庫服務。
+11. 任一檢查失敗時，驗證腳本必須以非零狀態結束，並指出失敗元件。
+12. Git 狀態確認 `.venv` 與產生的 cache 均已被忽略。
 
-If TA-Lib cannot install or import on Windows, implementation stops with the original error and does not substitute another library without approval.
+如果 TA-Lib 無法在 Windows 上安裝或匯入，實作必須保留原始錯誤並停止，不得在未取得核准前換用其他函式庫。
 
-## Success Criteria
+## 完成條件
 
-The design is complete when the agent contract is explicit, the environment is reproducible from repository files, VS Code notebooks can select the project interpreter, every approved dependency passes its targeted smoke check, and no environment-generated or sensitive files enter version control.
+當 Agent 工作契約已清楚定義、環境能透過 repository 檔案重建、VS Code Notebook 能選擇專案解譯器、所有核准依賴均通過對應 smoke check，且環境產生檔與敏感檔案皆未進入版本控制時，本設計才算完成。
