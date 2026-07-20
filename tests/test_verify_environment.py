@@ -5,6 +5,7 @@ import io
 import os
 import sys
 import unittest
+import warnings
 from types import ModuleType, SimpleNamespace
 from unittest import mock
 
@@ -159,18 +160,63 @@ class OptimizedRuntimeChecksTests(unittest.TestCase):
 
 
 class PyMongoContractTests(unittest.TestCase):
+    def test_valid_cosmos_srv_uri_constructs_client_without_dns_lookup(self) -> None:
+        srv_uri = (
+            "mongodb+srv://account.mongo.cosmos.azure.com/?retryWrites=false"
+        )
+        with (
+            warnings.catch_warnings(record=True) as caught_warnings,
+            mock.patch.dict(os.environ, {"MONGODB_URI": srv_uri}),
+            mock.patch(
+                "dns.resolver.resolve",
+                side_effect=AssertionError("DNS lookup attempted"),
+            ) as resolve,
+        ):
+            warnings.simplefilter("always")
+            try:
+                verify_environment.check_pymongo()
+            finally:
+                resolve.assert_not_called()
+        self.assertTrue(
+            any("CosmosDB cluster" in str(item.message) for item in caught_warnings)
+        )
+
+    def test_valid_optional_compressor_srv_constructs_without_dns_lookup(
+        self,
+    ) -> None:
+        srv_uri = "mongodb+srv://cluster.example.com/?compressors=snappy"
+        with (
+            warnings.catch_warnings(record=True) as caught_warnings,
+            mock.patch.dict(os.environ, {"MONGODB_URI": srv_uri}),
+            mock.patch(
+                "dns.resolver.resolve",
+                side_effect=AssertionError("DNS lookup attempted"),
+            ) as resolve,
+        ):
+            warnings.simplefilter("always")
+            try:
+                verify_environment.check_pymongo()
+            finally:
+                resolve.assert_not_called()
+        self.assertTrue(
+            any(
+                "snappy is not available" in str(item.message)
+                for item in caught_warnings
+            )
+        )
+
     def test_valid_srv_uri_constructs_client_without_dns_lookup(self) -> None:
         srv_uri = "mongodb+srv://cluster.example.com/?retryWrites=true"
         with (
             mock.patch.dict(os.environ, {"MONGODB_URI": srv_uri}),
             mock.patch(
-                "pymongo.synchronous.srv_resolver._SrvResolver.get_hosts",
+                "dns.resolver.resolve",
                 side_effect=AssertionError("DNS lookup attempted"),
-            ) as get_hosts,
+            ) as resolve,
         ):
             verify_environment.check_pymongo()
 
-        get_hosts.assert_not_called()
+        resolve.assert_not_called()
 
     def test_invalid_srv_option_fails_closed_without_dns_lookup(self) -> None:
         invalid_srv_uri = (
@@ -179,9 +225,9 @@ class PyMongoContractTests(unittest.TestCase):
         with (
             mock.patch.dict(os.environ, {"MONGODB_URI": invalid_srv_uri}),
             mock.patch(
-                "pymongo.synchronous.srv_resolver._SrvResolver.get_hosts",
+                "dns.resolver.resolve",
                 side_effect=AssertionError("DNS lookup attempted"),
-            ) as get_hosts,
+            ) as resolve,
         ):
             with self.assertRaisesRegex(
                 (ConfigurationError, UserWarning),
@@ -189,7 +235,7 @@ class PyMongoContractTests(unittest.TestCase):
             ):
                 verify_environment.check_pymongo()
 
-        get_hosts.assert_not_called()
+        resolve.assert_not_called()
 
     def test_default_uri_uses_localhost_without_connecting(self) -> None:
         client = mock.Mock()

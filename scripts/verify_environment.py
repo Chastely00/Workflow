@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os
 import sys
-import warnings
 from collections.abc import Callable, Sequence
 
 DEFAULT_MONGODB_URI = "mongodb://localhost:27017/"
@@ -120,17 +119,18 @@ def check_talib() -> None:
 
 def check_pymongo() -> None:
     from pymongo import MongoClient
-    from pymongo.uri_parser import parse_uri
+    from pymongo.uri_parser import parse_uri, split_options
 
     uri = os.environ.get("MONGODB_URI", DEFAULT_MONGODB_URI)
     if uri.startswith("mongodb+srv://"):
-        with warnings.catch_warnings():
-            warnings.simplefilter("error")
-            client = MongoClient(
-                uri,
-                connect=False,
-                serverSelectionTimeoutMS=1000,
-            )
+        _, has_query, query = uri.partition("?")
+        if has_query:
+            split_options(query, warn=False)
+        client = MongoClient(
+            uri,
+            connect=False,
+            serverSelectionTimeoutMS=1000,
+        )
     else:
         parsed_uri = parse_uri(uri, warn=False)
         if uri == DEFAULT_MONGODB_URI:
