@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import sys
+import warnings
 from collections.abc import Callable, Sequence
 
 DEFAULT_MONGODB_URI = "mongodb://localhost:27017/"
@@ -122,15 +123,25 @@ def check_pymongo() -> None:
     from pymongo.uri_parser import parse_uri
 
     uri = os.environ.get("MONGODB_URI", DEFAULT_MONGODB_URI)
-    parsed_uri = parse_uri(uri, warn=False)
-    if uri == DEFAULT_MONGODB_URI:
-        nodelist = parsed_uri["nodelist"]
-        if nodelist != [("localhost", 27017)]:
-            raise RuntimeError(
-                "PyMongo default URI expected localhost:27017, "
-                f"got {nodelist!r}"
+    if uri.startswith("mongodb+srv://"):
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            client = MongoClient(
+                uri,
+                connect=False,
+                serverSelectionTimeoutMS=1000,
             )
-    client = MongoClient(uri, connect=False, serverSelectionTimeoutMS=1000)
+    else:
+        parsed_uri = parse_uri(uri, warn=False)
+        if uri == DEFAULT_MONGODB_URI:
+            nodelist = parsed_uri["nodelist"]
+            if nodelist != [("localhost", 27017)]:
+                raise RuntimeError(
+                    "PyMongo default URI expected localhost:27017, "
+                    f"got {nodelist!r}"
+                )
+        client = MongoClient(uri, connect=False, serverSelectionTimeoutMS=1000)
+
     if client is None:
         raise RuntimeError("PyMongo client construction returned None")
     client.close()

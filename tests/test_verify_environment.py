@@ -9,7 +9,7 @@ from types import ModuleType, SimpleNamespace
 from unittest import mock
 
 import numpy as np
-from pymongo.errors import InvalidURI
+from pymongo.errors import ConfigurationError, InvalidURI
 
 from scripts import verify_environment
 from scripts.verify_environment import run_checks
@@ -159,6 +159,38 @@ class OptimizedRuntimeChecksTests(unittest.TestCase):
 
 
 class PyMongoContractTests(unittest.TestCase):
+    def test_valid_srv_uri_constructs_client_without_dns_lookup(self) -> None:
+        srv_uri = "mongodb+srv://cluster.example.com/?retryWrites=true"
+        with (
+            mock.patch.dict(os.environ, {"MONGODB_URI": srv_uri}),
+            mock.patch(
+                "pymongo.synchronous.srv_resolver._SrvResolver.get_hosts",
+                side_effect=AssertionError("DNS lookup attempted"),
+            ) as get_hosts,
+        ):
+            verify_environment.check_pymongo()
+
+        get_hosts.assert_not_called()
+
+    def test_invalid_srv_option_fails_closed_without_dns_lookup(self) -> None:
+        invalid_srv_uri = (
+            "mongodb+srv://cluster.example.com/?notARealOption=true"
+        )
+        with (
+            mock.patch.dict(os.environ, {"MONGODB_URI": invalid_srv_uri}),
+            mock.patch(
+                "pymongo.synchronous.srv_resolver._SrvResolver.get_hosts",
+                side_effect=AssertionError("DNS lookup attempted"),
+            ) as get_hosts,
+        ):
+            with self.assertRaisesRegex(
+                (ConfigurationError, UserWarning),
+                "Unknown option",
+            ):
+                verify_environment.check_pymongo()
+
+        get_hosts.assert_not_called()
+
     def test_default_uri_uses_localhost_without_connecting(self) -> None:
         client = mock.Mock()
         with (
