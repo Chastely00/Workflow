@@ -134,6 +134,33 @@ class PyMongoContractTests(unittest.TestCase):
         parse_uri.assert_not_called()
         client.close.assert_called_once_with()
 
+    def test_explicit_uri_client_error_propagates_without_localhost_fallback(
+        self,
+    ) -> None:
+        explicit_uri = "mongodb://db.example:27018/"
+        sentinel_error = RuntimeError("explicit URI construction failed")
+        with (
+            mock.patch.dict(os.environ, {"MONGODB_URI": explicit_uri}),
+            mock.patch(
+                "pymongo.MongoClient",
+                side_effect=sentinel_error,
+            ) as mongo_client,
+            mock.patch("pymongo.uri_parser.parse_uri") as parse_uri,
+        ):
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "explicit URI construction failed",
+            ) as caught:
+                verify_environment.check_pymongo()
+
+        self.assertIs(caught.exception, sentinel_error)
+        mongo_client.assert_called_once_with(
+            explicit_uri,
+            connect=False,
+            serverSelectionTimeoutMS=1000,
+        )
+        parse_uri.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()
