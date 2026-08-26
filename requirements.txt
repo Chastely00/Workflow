@@ -12,6 +12,7 @@ fonttools==4.63.0
 ipykernel==7.3.0
 ipython_pygments_lexers==1.1.1
 ipython==9.15.0
+iniconfig==2.3.0
 jedi==0.20.0
 joblib==1.5.3
 jupyter_client==8.9.1
@@ -30,6 +31,7 @@ parso==0.8.7
 patsy==1.0.2
 pillow==12.3.0
 platformdirs==4.10.1
+pluggy==1.6.0
 prompt_toolkit==3.0.52
 psutil==7.2.2
 pure_eval==0.2.3
@@ -38,6 +40,7 @@ Pygments==2.20.0
 pymongo==4.17.0
 pyparsing==3.3.2
 pyproject_hooks==1.2.0
+pytest==9.1.1
 python-dateutil==2.9.0.post0
 pyzmq==27.1.0
 scikit-learn==1.9.0
