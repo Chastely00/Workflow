@@ -2,7 +2,7 @@
 
 Date: 2026-08-26
 
-Status: Approved in chat; pending written-spec review
+Status: Approved; authoritative design contract
 
 Scope: Design and prompt contract only. No implementation is authorized by this document.
 
