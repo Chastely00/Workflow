@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from .allocation import AllocationPlan, AllocationPlanner
 from .calendar import TradingCalendar
 from .data_gateway import DataGateway
 from .execution import PortfolioExecutionEngine
@@ -164,6 +165,81 @@ class ETFTrickLab:
         )
         self._last_result = result
         return result
+
+    def allocate(
+        self,
+        *,
+        etf_id: str,
+        as_of_date: str | pd.Timestamp,
+        capital: int | float | Decimal,
+    ) -> AllocationPlan:
+        targets, prices, execution_dates = self._allocation_context(etf_id, as_of_date)
+        return AllocationPlanner().allocate(
+            etf_id,
+            as_of_date,
+            targets,
+            prices,
+            execution_dates,
+            Decimal(str(capital)),
+        )
+
+    def rebalance(
+        self,
+        *,
+        etf_id: str,
+        as_of_date: str | pd.Timestamp,
+        current_positions: dict[str, int],
+        current_cash: int | float | Decimal,
+        capital_delta: int | float | Decimal,
+    ) -> AllocationPlan:
+        targets, prices, execution_dates = self._allocation_context(etf_id, as_of_date)
+        return AllocationPlanner().rebalance(
+            etf_id,
+            as_of_date,
+            targets,
+            prices,
+            execution_dates,
+            current_positions,
+            Decimal(str(current_cash)),
+            Decimal(str(capital_delta)),
+        )
+
+    def _allocation_context(
+        self, etf_id: str, as_of_date: str | pd.Timestamp
+    ) -> tuple[pd.DataFrame, pd.DataFrame, tuple[pd.Timestamp, ...]]:
+        if etf_id not in ETF_IDS:
+            raise KeyError(f"unknown ETF ID: {etf_id}")
+        if self._last_result is None:
+            raise RuntimeError("run_all must complete before allocate or rebalance")
+        as_of = pd.Timestamp(as_of_date)
+        target_history = self._last_result.monthly_targets
+        eligible = target_history[
+            target_history["etf_id"].eq(etf_id)
+            & pd.to_datetime(target_history["formation_date"]).le(as_of)
+        ]
+        if eligible.empty:
+            raise RuntimeError(f"no governed target is available for {etf_id} by {as_of.date()}")
+        formation = pd.to_datetime(eligible["formation_date"]).max()
+        targets = eligible[pd.to_datetime(eligible["formation_date"]).eq(formation)][
+            ["ticker", "stock_name", "target_weight"]
+        ].copy()
+        price_frame = self.gateway.read_artifact(
+            "daily_price_volume",
+            columns=["date", "ticker", "close"],
+            start=as_of,
+            end=as_of,
+        )
+        price_frame = price_frame[
+            price_frame["ticker"].astype(str).isin(targets["ticker"].astype(str))
+        ].rename(columns={"close": "raw_close"})
+        calendar = TradingCalendar(
+            self.gateway.read_artifact(
+                "trading_calendar", columns=["date", "market", "is_trading_day"]
+            )
+        )
+        target_month = as_of.to_period("M") + 1
+        execution_dates = calendar.month(target_month.start_time)
+        return targets, price_frame[["ticker", "raw_close"]], execution_dates
 
     @staticmethod
     def _formation_dates_for_run(
