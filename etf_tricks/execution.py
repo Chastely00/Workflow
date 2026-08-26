@@ -110,13 +110,12 @@ class PortfolioExecutionEngine:
         diagnostic_records: list[dict[str, object]] = []
 
         indexed_market = market_frame.set_index(["date", "ticker"])
-        tickers_by_date = market_frame.groupby("date")["ticker"].apply(list).to_dict()
 
         for date in days:
             month = date.to_period("M")
             month_days = calendar.month(date)
             k = month_days.index(date) + 1
-            current_tickers = set(shares) | set(tickers_by_date.get(date, []))
+            current_tickers = set(shares) | set(schedule_start) | set(schedule_target)
             month_targets = target_frame[target_frame["target_month"].eq(month)]
             current_tickers |= set(month_targets["ticker"])
 
