@@ -173,6 +173,26 @@ def test_operational_limitations_remain_warnings_not_hidden_failures():
     }.issubset(warning_codes)
 
 
+def test_zero_execution_with_missing_price_has_zero_notional() -> None:
+    result = _valid_result()
+    result.trades = pd.DataFrame(
+        {
+            "date": [DATES[1]],
+            "etf_id": ["momentum"],
+            "ticker": ["1102"],
+            "executed_shares": [0],
+            "raw_close": [float("nan")],
+            "notional": [0.0],
+            "commission": [0.0],
+            "tax": [0.0],
+        }
+    )
+
+    report = validate_result(result, _calendar(), ["momentum"])
+
+    assert "broken_trade_reconciliation" not in _codes(report)
+
+
 def test_selection_diagnostics_persist_shortage_and_zero_candidate_carry():
     audit = pd.DataFrame(
         {

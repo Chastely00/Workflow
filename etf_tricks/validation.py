@@ -274,9 +274,10 @@ def validate_result(
     trades = result.trades
     trade_fields = {"date", "etf_id", "executed_shares", "raw_close", "notional", "commission", "tax"}
     if not trades.empty and trade_fields.issubset(trades.columns):
-        trade_notional = (
-            pd.to_numeric(trades["executed_shares"], errors="coerce").abs()
-            * pd.to_numeric(trades["raw_close"], errors="coerce")
+        executed = pd.to_numeric(trades["executed_shares"], errors="coerce").abs()
+        raw_close = pd.to_numeric(trades["raw_close"], errors="coerce")
+        trade_notional = pd.Series(
+            np.where(executed.eq(0), 0.0, executed * raw_close), index=trades.index
         )
         recorded_notional = pd.to_numeric(trades["notional"], errors="coerce")
         if (

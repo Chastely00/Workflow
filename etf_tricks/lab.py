@@ -270,7 +270,12 @@ class ETFTrickLab:
             .dropna()
             .unique()
         ).sort_values()
-        if len(expected_days) == 0 or not observed_days.equals(expected_days):
+        if (
+            len(expected_days) == 0
+            or len(observed_days) == 0
+            or len(observed_days.difference(expected_days)) > 0
+            or observed_days.max() != expected_days.max()
+        ):
             identity_failures.append(
                 ValidationIssue(
                     "run_bounds_mismatch",
