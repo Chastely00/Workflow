@@ -31,6 +31,30 @@ py -3.12 -m venv .venv
 
 提交 `.ipynb` 前，必須清除 cell output，並人工檢查不得殘留帳密、連線字串、token、查詢結果或其他敏感資料。
 
+## ETF Tricks Notebook
+
+[`scripts/etf_tricks_quickstart.ipynb`](scripts/etf_tricks_quickstart.ipynb) 是唯一建議的 Notebook 起點。核心公式位於 `etf_tricks` package，Notebook 只負責設定參數與檢視輸出。
+
+```python
+from etf_tricks import ETFTrickLab
+
+lab = ETFTrickLab.from_data_analysts("DataAnalysts")
+result = lab.run_all(
+    start_date="2026-07-01",
+    end_date="2026-07-07",
+    initial_capital=10_000_000,
+)
+
+result.nav
+result.amount
+result.for_ffd("momentum")
+lab.validate(result)
+```
+
+`result` 同時提供 `holdings`、`trades`、`targets`、`candidates` 與 `diagnostics`。`lab.allocate(...)` 和 `lab.rebalance(...)` 接受任意資金，回傳實際整股、費稅、剩餘現金與依下一個月 `TRADEDAY_TWSE` 展開的逐日 schedule。NT$10,000,000 只是預設驗證本金，並非固定配置。
+
+目前範圍只建立 13 條 Daily NAV 與 ETF 成交金額曲線；`for_ffd()` 只輸出 `date, etf_id, nav, daily_return, etf_amount`，不執行 Dollar bar、FFD、ADF 或 ML。
+
 ## 新增依賴
 
 新增套件後必須重新執行完整驗證，再更新鎖定檔：

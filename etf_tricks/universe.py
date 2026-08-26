@@ -67,7 +67,7 @@ class UniverseEngine:
         self._exclude(
             audit,
             pd.to_numeric(
-                audit["stock_traded_value_observation_count"], errors="coerce"
+                audit["adv20_observation_count"], errors="coerce"
             ).ne(20),
             "incomplete_stock_liquidity_window",
         )
@@ -157,7 +157,7 @@ class UniverseEngine:
             "close",
             "adv20",
             "stock_traded_value_sum20",
-            "stock_traded_value_observation_count",
+            "adv20_observation_count",
             "market_cap",
             spec.signal_name,
         }

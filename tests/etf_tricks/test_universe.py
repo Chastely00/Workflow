@@ -28,7 +28,7 @@ def _features(tickers: list[str], *, signal: str = "momentum_12_1") -> pd.DataFr
             "close": 50.0,
             "adv20": [100.0 - index for index in range(len(tickers))],
             "stock_traded_value_sum20": 2.5,
-            "stock_traded_value_observation_count": 20,
+            "adv20_observation_count": 20,
             "market_cap": [1_000.0 - index for index in range(len(tickers))],
             signal: [10.0 - index for index in range(len(tickers))],
         }
@@ -173,7 +173,7 @@ def test_one_to_four_candidates_are_held_and_zero_requests_carry_forward():
 
 def test_stock_and_index_windows_cannot_be_misaligned_or_zero():
     features = _features(["1101"])
-    features["stock_traded_value_observation_count"] = 19
+    features["adv20_observation_count"] = 19
     incomplete = _select("momentum", features, _master(["1101"]))
     assert incomplete.targets.empty
     assert incomplete.candidates.iloc[0]["exclusion_reason"] == "incomplete_stock_liquidity_window"

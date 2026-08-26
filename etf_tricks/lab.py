@@ -15,6 +15,7 @@ from .features import PITFeatureEngine
 from .registry import ETF_IDS, get_etf_spec
 from .result import ETFTrickResult, attach_etf_amount
 from .universe import UniverseEngine
+from .validation import ReadinessReport, validate_result
 
 
 class ETFTrickLab:
@@ -69,8 +70,6 @@ class ETFTrickLab:
                 "ticker", "r18", "source_period_date", "source_available_date",
                 "source_row_id",
             ],
-            end=end,
-            date_column="source_available_date",
         )
         financial = self.gateway.read_artifact(
             "financial_statement_raw",
@@ -78,8 +77,6 @@ class ETFTrickLab:
                 "ticker", "r103", "no", "merg", "curr", "period_end_date",
                 "source_available_date", "revision_date", "source_row_id",
             ],
-            end=end,
-            date_column="source_available_date",
         )
         security_master = self.gateway.read_artifact(
             "security_master",
@@ -203,6 +200,22 @@ class ETFTrickLab:
             Decimal(str(current_cash)),
             Decimal(str(capital_delta)),
         )
+
+    def validate(self, result: ETFTrickResult | None = None) -> ReadinessReport:
+        selected = result or self._last_result
+        if selected is None:
+            raise RuntimeError("run_all must complete before validate")
+        config = selected.metadata.get("run_config", {})
+        start, end = config.get("start_date"), config.get("end_date")
+        if start is None or end is None:
+            raise ValueError("result metadata lacks run_config date bounds")
+        calendar_frame = self.gateway.read_artifact(
+            "trading_calendar", columns=["date", "market", "is_trading_day"]
+        )
+        calendar_frame = calendar_frame[
+            pd.to_datetime(calendar_frame["date"]).between(start, end)
+        ]
+        return validate_result(selected, TradingCalendar(calendar_frame), ETF_IDS)
 
     def _allocation_context(
         self, etf_id: str, as_of_date: str | pd.Timestamp
