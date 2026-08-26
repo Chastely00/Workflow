@@ -165,6 +165,8 @@ def test_operational_limitations_remain_warnings_not_hidden_failures():
                 "notional": [0.0],
                 "commission": [0.0],
                 "tax": [0.0],
+                "synthetic_ca_share_delta": [0],
+                "synthetic_ca_cash": [0.0],
                 "unfilled_shares": [2],
             "is_forced_delist_liquidation": [True],
         }
@@ -201,6 +203,8 @@ def test_zero_execution_with_missing_price_has_zero_notional() -> None:
             "notional": [0.0],
             "commission": [0.0],
             "tax": [0.0],
+            "synthetic_ca_share_delta": [0],
+            "synthetic_ca_cash": [0.0],
         }
     )], ignore_index=True)
 
@@ -225,6 +229,34 @@ def test_coordinated_wealth_injection_fails_share_and_cash_ledger() -> None:
     report = validate_result(result, _calendar(), ["momentum"])
 
     assert "broken_share_ledger" in _codes(report)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda r: setattr(r, "daily_holdings", r.daily_holdings.assign(shares=[9, 9.5])),
+        lambda r: setattr(r, "trades", r.trades.assign(executed_shares=[9.5])),
+        lambda r: (
+            setattr(
+                r,
+                "daily_holdings",
+                r.daily_holdings.assign(synthetic_ca_share_delta=[0, 0.5]),
+            ),
+            setattr(
+                r,
+                "trades",
+                r.trades.assign(synthetic_ca_share_delta=[0.5]),
+            ),
+        ),
+    ],
+)
+def test_fractional_share_ledger_values_fail_closed(mutation) -> None:
+    result = _valid_result()
+    mutation(result)
+
+    report = validate_result(result, _calendar(), ["momentum"])
+
+    assert "non_integer_share_ledger" in _codes(report)
 
 
 def test_selection_diagnostics_persist_shortage_and_zero_candidate_carry():

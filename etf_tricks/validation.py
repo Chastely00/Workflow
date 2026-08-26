@@ -276,6 +276,30 @@ def validate_result(
     trades = result.trades.copy()
     if "date" in trades.columns:
         trades["date"] = pd.to_datetime(trades["date"], errors="coerce")
+
+    integer_ledger_columns = (
+        (holdings, "shares"),
+        (holdings, "synthetic_ca_share_delta"),
+        (trades, "executed_shares"),
+        (trades, "synthetic_ca_share_delta"),
+    )
+    non_integer_ledger = False
+    for frame, column in integer_ledger_columns:
+        if frame.empty:
+            continue
+        if column not in frame.columns:
+            non_integer_ledger = True
+            continue
+        values = pd.to_numeric(frame[column], errors="coerce")
+        if (~np.isfinite(values) | values.ne(np.trunc(values))).any():
+            non_integer_ledger = True
+    if non_integer_ledger:
+        hard.append(
+            ValidationIssue(
+                "non_integer_share_ledger",
+                "holdings, executed trades, and corporate-action share deltas must be finite integers",
+            )
+        )
     trade_fields = {"date", "etf_id", "executed_shares", "raw_close", "notional", "commission", "tax"}
     if not trades.empty and trade_fields.issubset(trades.columns):
         executed = pd.to_numeric(trades["executed_shares"], errors="coerce").abs()
