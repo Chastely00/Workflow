@@ -10,6 +10,33 @@ from .calendar import TradingCalendar
 from .result import ETFTrickResult
 
 
+def build_selection_diagnostics(candidate_audit: pd.DataFrame) -> pd.DataFrame:
+    required = {"formation_date", "etf_id", "selected"}
+    missing = sorted(required.difference(candidate_audit.columns))
+    if missing:
+        raise ValueError(f"candidate_audit missing diagnostic columns: {missing}")
+    if candidate_audit.empty:
+        return pd.DataFrame(
+            columns=["date", "formation_date", "etf_id", "diagnostic", "candidate_count"]
+        )
+    frame = candidate_audit.copy()
+    frame["formation_date"] = pd.to_datetime(frame["formation_date"], errors="coerce")
+    frame["selected"] = frame["selected"].fillna(False).astype(bool)
+    counts = (
+        frame.groupby(["formation_date", "etf_id"], as_index=False)["selected"]
+        .sum()
+        .rename(columns={"selected": "candidate_count"})
+    )
+    counts["diagnostic"] = np.where(
+        counts["candidate_count"].eq(0),
+        "zero_candidate_carry_forward",
+        np.where(counts["candidate_count"].lt(5), "candidate_shortage", ""),
+    )
+    counts = counts[counts["diagnostic"].ne("")].copy()
+    counts.insert(0, "date", counts["formation_date"])
+    return counts.reset_index(drop=True)
+
+
 @dataclass(frozen=True)
 class ValidationIssue:
     code: str
@@ -49,7 +76,9 @@ def validate_result(
 
     if not {"date", "etf_id"}.issubset(daily.columns):
         hard.append(ValidationIssue("missing_daily_schema", "daily_etf lacks date or etf_id"))
-        return _report(expected, daily, holdings, hard, warnings)
+        return _report(
+            expected, daily, holdings, result.diagnostics, result.trades, hard, warnings
+        )
     daily["date"] = pd.to_datetime(daily["date"], errors="coerce")
     present = set(daily["etf_id"].astype(str))
     for etf_id in expected:
@@ -64,6 +93,16 @@ def validate_result(
         nav = pd.to_numeric(daily["nav"], errors="coerce")
         if (~np.isfinite(nav) | nav.le(0)).any():
             hard.append(ValidationIssue("invalid_nav", "NAV must be finite and positive"))
+    if "etf_amount" not in daily.columns:
+        hard.append(ValidationIssue("invalid_etf_amount", "daily_etf lacks etf_amount"))
+    else:
+        etf_amount = pd.to_numeric(daily["etf_amount"], errors="coerce")
+        if (~np.isfinite(etf_amount) | etf_amount.lt(0)).any():
+            hard.append(
+                ValidationIssue(
+                    "invalid_etf_amount", "ETF amount must be finite and non-negative"
+                )
+            )
     if "cash" not in daily.columns or (
         pd.to_numeric(daily.get("cash"), errors="coerce") < 0
     ).any():
@@ -128,6 +167,25 @@ def validate_result(
             )
 
     candidates = result.candidate_audit
+    if "formation_date" in candidates.columns:
+        candidate_formation = pd.to_datetime(
+            candidates["formation_date"], errors="coerce"
+        )
+        candidate_pit_violation = False
+        for column in ("r18_source_available_date", "r103_source_available_date"):
+            if column not in candidates.columns:
+                continue
+            available = pd.to_datetime(candidates[column], errors="coerce")
+            candidate_pit_violation |= bool(
+                (available.notna() & candidate_formation.notna() & available.gt(candidate_formation)).any()
+            )
+        if candidate_pit_violation:
+            hard.append(
+                ValidationIssue(
+                    "pit_timing_violation",
+                    "candidate source availability exceeds formation date",
+                )
+            )
     if (
         "liquidity_ratio_vs_ix0001_20d" not in candidates.columns
         or candidates.empty
@@ -181,13 +239,17 @@ def validate_result(
             ValidationIssue("zero_candidate_carry_forward", "prior holdings were carried forward")
         )
 
-    return _report(expected, daily, holdings, hard, warnings)
+    return _report(
+        expected, daily, holdings, result.diagnostics, result.trades, hard, warnings
+    )
 
 
 def _report(
     expected: tuple[str, ...],
     daily: pd.DataFrame,
     holdings: pd.DataFrame,
+    diagnostics: pd.DataFrame,
+    trades: pd.DataFrame,
     hard: list[ValidationIssue],
     warnings: list[ValidationIssue],
 ) -> ReadinessReport:
@@ -197,6 +259,28 @@ def _report(
         holding_group = holdings[
             holdings.get("etf_id", pd.Series(dtype=str)).eq(etf_id)
         ]
+        diagnostic_group = (
+            diagnostics[diagnostics["etf_id"].eq(etf_id)]
+            if {"etf_id", "diagnostic"}.issubset(diagnostics.columns)
+            else pd.DataFrame()
+        )
+        trade_group = (
+            trades[trades["etf_id"].eq(etf_id)]
+            if "etf_id" in trades.columns
+            else pd.DataFrame()
+        )
+        if not group.empty and "target_completion_ratio" in group.columns:
+            month_end = (
+                group.assign(month=pd.to_datetime(group["date"]).dt.to_period("M"))
+                .sort_values("date", kind="stable")
+                .groupby("month", as_index=False)
+                .tail(1)
+            )
+            incomplete_count = int(
+                (pd.to_numeric(month_end["target_completion_ratio"], errors="coerce") < 1).sum()
+            )
+        else:
+            incomplete_count = 0
         summaries.append(
             {
                 "etf_id": etf_id,
@@ -204,6 +288,10 @@ def _report(
                 "rows": len(group),
                 "final_nav": np.nan if group.empty or "nav" not in group else group.sort_values("date").iloc[-1]["nav"],
                 "maximum_stale_days": 0 if holding_group.empty or "stale_price_days" not in holding_group else pd.to_numeric(holding_group["stale_price_days"], errors="coerce").max(),
+                "candidate_shortage_count": 0 if diagnostic_group.empty else int(diagnostic_group["diagnostic"].eq("candidate_shortage").sum()),
+                "zero_candidate_carry_count": 0 if diagnostic_group.empty else int(diagnostic_group["diagnostic"].eq("zero_candidate_carry_forward").sum()),
+                "incomplete_transition_count": incomplete_count,
+                "forced_delisting_count": 0 if trade_group.empty or "is_forced_delist_liquidation" not in trade_group else int(trade_group["is_forced_delist_liquidation"].fillna(False).astype(bool).sum()),
                 "total_cost": np.nan if group.empty or "total_cost" not in group else pd.to_numeric(group["total_cost"], errors="coerce").sum(),
             }
         )

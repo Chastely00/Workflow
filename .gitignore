@@ -1,6 +1,7 @@
 # Isolated worktrees and Subagent-Driven Development scratch
 .worktrees/
 .superpowers/
+.artifacts/
 
 # Project virtual environment
 .venv/

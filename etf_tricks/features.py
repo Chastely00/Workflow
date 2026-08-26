@@ -49,6 +49,17 @@ class PITFeatureEngine:
             panels.get("financial_statement_raw", pd.DataFrame()).copy(),
             ("period_end_date", "source_available_date", "revision_date"),
         )
+        self._daily_by_date = self.daily.groupby("date", sort=False)
+        self._daily_by_ticker = {
+            str(ticker): group.set_index("date")
+            for ticker, group in self.daily.groupby("ticker", sort=False)
+        }
+        self._chip_by_ticker = {
+            str(ticker): group.set_index("date")
+            for ticker, group in self.chip.groupby("ticker", sort=False)
+        }
+        self._empty_daily_history = self.daily.iloc[:0].set_index("date")
+        self._empty_chip_history = self.chip.iloc[:0].set_index("date")
 
     def compute(self, formation_date: str | pd.Timestamp) -> pd.DataFrame:
         formation = pd.Timestamp(formation_date)
@@ -60,7 +71,10 @@ class PITFeatureEngine:
             )
         position = int(positions[0])
 
-        formation_rows = self.daily[self.daily["date"].eq(formation)].copy()
+        try:
+            formation_rows = self._daily_by_date.get_group(formation).copy()
+        except KeyError:
+            formation_rows = self.daily.iloc[:0].copy()
         duplicates = formation_rows[formation_rows.duplicated("ticker", keep=False)]
         if not duplicates.empty:
             tickers = sorted(duplicates["ticker"].unique())
@@ -69,13 +83,33 @@ class PITFeatureEngine:
             )
         formation_rows = formation_rows.sort_values("ticker", kind="stable")
 
+        if formation_rows.empty:
+            schema: dict[str, object] = {
+                "formation_date": formation,
+                "ticker": "",
+                "close": math.nan,
+                "adj_close": math.nan,
+                "market_cap": math.nan,
+            }
+            schema.update(
+                self._daily_signals(
+                    self._empty_daily_history,
+                    self._empty_chip_history,
+                    days,
+                    position,
+                )
+            )
+            schema.update(self._empty_sales())
+            schema.update(self._empty_roe())
+            return pd.DataFrame(columns=list(schema))
+
         sales = self._select_monthly_sales(formation)
         roe = self._select_roe(formation)
         records: list[dict[str, object]] = []
         for base in formation_rows.itertuples(index=False):
             ticker = str(base.ticker)
-            history = self.daily[self.daily["ticker"].eq(ticker)].set_index("date")
-            chip_history = self.chip[self.chip["ticker"].eq(ticker)].set_index("date")
+            history = self._daily_by_ticker.get(ticker, self._empty_daily_history)
+            chip_history = self._chip_by_ticker.get(ticker, self._empty_chip_history)
             record: dict[str, object] = {
                 "formation_date": formation,
                 "ticker": ticker,

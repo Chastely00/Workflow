@@ -51,6 +51,14 @@ result.for_ffd("momentum")
 lab.validate(result)
 ```
 
+已存在的 finalized artifact 可直接重新載入，不必每次重算完整歷史：
+
+```python
+from etf_tricks import ETFTrickResult
+
+result = ETFTrickResult.read(".artifacts/etf_tricks/full-history-20050103-20260707-v3")
+```
+
 `result` 同時提供 `holdings`、`trades`、`targets`、`candidates` 與 `diagnostics`。`lab.allocate(...)` 和 `lab.rebalance(...)` 接受任意資金，回傳實際整股、費稅、剩餘現金與依下一個月 `TRADEDAY_TWSE` 展開的逐日 schedule。NT$10,000,000 只是預設驗證本金，並非固定配置。
 
 目前範圍只建立 13 條 Daily NAV 與 ETF 成交金額曲線；`for_ffd()` 只輸出 `date, etf_id, nav, daily_return, etf_amount`，不執行 Dollar bar、FFD、ADF 或 ML。

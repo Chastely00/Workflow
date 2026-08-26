@@ -228,3 +228,25 @@ def test_post_formation_rows_and_input_order_cannot_change_output() -> None:
     actual = PITFeatureEngine(calendar, shuffled).compute(formation_date)
 
     pdt.assert_frame_equal(actual, expected)
+
+
+def test_valid_calendar_formation_without_daily_rows_returns_typed_empty_frame():
+    calendar, panels, _ = _panels()
+    formation = calendar.days[0]
+    panels["daily_price_volume"] = panels["daily_price_volume"][
+        ~panels["daily_price_volume"]["date"].eq(formation)
+    ]
+
+    frame = PITFeatureEngine(calendar, panels).compute(formation)
+
+    assert frame.empty
+    assert {
+        "formation_date",
+        "ticker",
+        "close",
+        "market_cap",
+        "adv20",
+        "stock_traded_value_sum20",
+        "r18",
+        "r103",
+    }.issubset(frame.columns)

@@ -15,7 +15,7 @@ from .features import PITFeatureEngine
 from .registry import ETF_IDS, get_etf_spec
 from .result import ETFTrickResult, attach_etf_amount
 from .universe import UniverseEngine
-from .validation import ReadinessReport, validate_result
+from .validation import ReadinessReport, build_selection_diagnostics, validate_result
 
 
 class ETFTrickLab:
@@ -100,6 +100,18 @@ class ETFTrickLab:
         )
 
         formation_dates = self._formation_dates_for_run(full_calendar, start, end)
+        daily_start = pd.to_datetime(daily["date"], errors="coerce").min()
+        ix_dates = pd.DatetimeIndex(
+            pd.to_datetime(ix0001["date"], errors="coerce").dropna().sort_values().unique()
+        )
+        if len(ix_dates) < 20:
+            raise ValueError("IX0001 has fewer than 20 observations in available coverage")
+        liquidity_warmup_end = ix_dates[19]
+        formation_dates = tuple(
+            formation
+            for formation in formation_dates
+            if formation >= daily_start and formation >= liquidity_warmup_end
+        )
         targets_by_etf: dict[str, list[pd.DataFrame]] = {etf_id: [] for etf_id in ETF_IDS}
         candidate_frames: list[pd.DataFrame] = []
         for formation in formation_dates:
@@ -141,14 +153,20 @@ class ETFTrickLab:
         daily_etf = self._concat([table.daily_etf for table in engine_tables])
         holdings = self._concat([table.daily_holdings for table in engine_tables])
         trades = self._concat([table.trades for table in engine_tables])
-        diagnostics = self._concat([table.diagnostics for table in engine_tables])
+        candidate_output = self._concat(candidate_frames)
+        diagnostics = self._concat(
+            [
+                *[table.diagnostics for table in engine_tables],
+                build_selection_diagnostics(candidate_output),
+            ]
+        )
         daily_etf = attach_etf_amount(daily_etf, holdings, execution_market)
         result = ETFTrickResult(
             daily_etf=daily_etf,
             daily_holdings=holdings,
             trades=trades,
             monthly_targets=self._concat(target_outputs),
-            candidate_audit=self._concat(candidate_frames),
+            candidate_audit=candidate_output,
             diagnostics=diagnostics,
             metadata={
                 "run_config": {

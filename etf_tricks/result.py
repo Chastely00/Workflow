@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
+import json
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -147,6 +150,83 @@ class ETFTrickResult:
             .loc[:, columns]
             .sort_values("date", kind="stable")
             .reset_index(drop=True)
+        )
+
+    def write(self, output_dir: str | Path) -> dict[str, Any]:
+        output = Path(output_dir).resolve()
+        output.mkdir(parents=True, exist_ok=True)
+        tables = {
+            "daily_etf": self.daily_etf,
+            "daily_holdings": self.daily_holdings,
+            "trades": self.trades,
+            "monthly_targets": self.monthly_targets,
+            "candidate_audit": self.candidate_audit,
+            "diagnostics": self.diagnostics,
+        }
+        table_manifest: dict[str, dict[str, Any]] = {}
+        for name, frame in tables.items():
+            final_path = output / f"{name}.parquet"
+            temporary_path = output / f".{name}.tmp.parquet"
+            frame.to_parquet(temporary_path, index=False)
+            temporary_path.replace(final_path)
+            table_manifest[name] = {
+                "path": final_path.name,
+                "rows": len(frame),
+                "sha256": hashlib.sha256(final_path.read_bytes()).hexdigest(),
+            }
+        manifest = {
+            "format_version": 1,
+            "metadata": self.metadata,
+            "tables": table_manifest,
+        }
+        manifest_path = output / "result_manifest.json"
+        temporary_manifest = output / ".result_manifest.tmp.json"
+        temporary_manifest.write_text(
+            json.dumps(manifest, ensure_ascii=False, sort_keys=True, indent=2, default=str),
+            encoding="utf-8",
+        )
+        temporary_manifest.replace(manifest_path)
+        return manifest
+
+    @classmethod
+    def read(cls, output_dir: str | Path) -> "ETFTrickResult":
+        output = Path(output_dir).resolve()
+        manifest_path = output / "result_manifest.json"
+        if not manifest_path.is_file():
+            raise ValueError(f"missing ETF Trick result manifest: {manifest_path}")
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if manifest.get("format_version") != 1:
+            raise ValueError("unsupported ETF Trick result format version")
+        frames: dict[str, pd.DataFrame] = {}
+        for name in (
+            "daily_etf",
+            "daily_holdings",
+            "trades",
+            "monthly_targets",
+            "candidate_audit",
+            "diagnostics",
+        ):
+            entry = manifest.get("tables", {}).get(name)
+            if not isinstance(entry, dict) or "path" not in entry:
+                raise ValueError(f"result manifest missing table: {name}")
+            path = (output / str(entry["path"])).resolve()
+            if not path.is_relative_to(output) or not path.is_file():
+                raise ValueError(f"invalid or missing result table path: {name}")
+            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            if digest != entry.get("sha256"):
+                raise ValueError(f"result table hash mismatch: {name}")
+            frame = pd.read_parquet(path)
+            if len(frame) != entry.get("rows"):
+                raise ValueError(f"result table row-count mismatch: {name}")
+            frames[name] = frame
+        return cls(
+            daily_etf=frames["daily_etf"],
+            daily_holdings=frames["daily_holdings"],
+            trades=frames["trades"],
+            monthly_targets=frames["monthly_targets"],
+            candidate_audit=frames["candidate_audit"],
+            diagnostics=frames["diagnostics"],
+            metadata=manifest.get("metadata", {}),
         )
 
     def _wide(self, value: str) -> pd.DataFrame:

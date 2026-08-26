@@ -133,3 +133,21 @@ def test_missing_stock_amount_contributes_zero_and_sets_quality_flag():
 def test_notebook_facade_binds_one_explicit_data_analysts_root(tmp_path):
     lab = ETFTrickLab.from_data_analysts(tmp_path)
     assert lab.gateway.data_analysts_root == tmp_path.resolve()
+
+
+def test_result_artifacts_round_trip_with_hashes_and_row_counts(tmp_path):
+    result = _result()
+    manifest = result.write(tmp_path / "run")
+    assert set(manifest["tables"]) == {
+        "daily_etf",
+        "daily_holdings",
+        "trades",
+        "monthly_targets",
+        "candidate_audit",
+        "diagnostics",
+    }
+    assert manifest["tables"]["daily_etf"]["rows"] == 26
+    assert len(manifest["tables"]["daily_etf"]["sha256"]) == 64
+    restored = ETFTrickResult.read(tmp_path / "run")
+    pd.testing.assert_frame_equal(restored.daily_etf, result.daily_etf)
+    assert restored.metadata["spec_hash"] == "abc"

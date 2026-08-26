@@ -136,7 +136,8 @@ class UniverseEngine:
             "liquidity_ratio_vs_ix0001_20d",
             "liquidity_threshold",
         ]
-        targets = eligible.loc[:, target_columns].reset_index(drop=True)
+        extra_columns = [column for column in eligible.columns if column not in target_columns]
+        targets = eligible.loc[:, [*target_columns, *extra_columns]].reset_index(drop=True)
         audit = audit.sort_values("ticker", kind="stable").reset_index(drop=True)
         return SelectionResult(
             etf_id=spec.etf_id,

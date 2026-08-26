@@ -5,7 +5,7 @@ import pytest
 
 from etf_tricks.calendar import TradingCalendar
 from etf_tricks.result import ETFTrickResult
-from etf_tricks.validation import validate_result
+from etf_tricks.validation import build_selection_diagnostics, validate_result
 
 
 DATES = pd.to_datetime(["2025-01-02", "2025-01-03"])
@@ -57,6 +57,7 @@ def _valid_result() -> ETFTrickResult:
             "etf_id": "momentum",
             "ticker": ["1101"],
             "liquidity_ratio_vs_ix0001_20d": [0.002],
+            "r18_source_available_date": [pd.Timestamp("2024-12-30")],
         }
     )
     return ETFTrickResult(
@@ -81,6 +82,7 @@ def test_valid_result_is_ready_and_has_explicit_availability_sections():
     assert isinstance(report.目前缺失限制, tuple)
     assert report.per_etf.iloc[0]["rows"] == 2
     assert report.per_etf.iloc[0]["inception_date"] == DATES[0]
+    assert report.per_etf.iloc[0]["candidate_shortage_count"] == 0
 
 
 def test_missing_etf_and_post_inception_calendar_date_are_hard_failures():
@@ -98,10 +100,12 @@ def test_missing_etf_and_post_inception_calendar_date_are_hard_failures():
     [
         (lambda r: setattr(r, "daily_etf", pd.concat([r.daily_etf, r.daily_etf.iloc[[0]]])), "duplicate_daily_key"),
         (lambda r: setattr(r, "daily_etf", r.daily_etf.assign(nav=[100.0, float("nan")])), "invalid_nav"),
+        (lambda r: setattr(r, "daily_etf", r.daily_etf.assign(etf_amount=[0.0, float("nan")])), "invalid_etf_amount"),
         (lambda r: setattr(r, "daily_etf", r.daily_etf.assign(cash=[100.0, -1.0])), "negative_cash"),
         (lambda r: setattr(r, "daily_holdings", r.daily_holdings.assign(shares=[9, -1])), "negative_shares"),
         (lambda r: setattr(r, "daily_etf", r.daily_etf.assign(total_assets=[1_000.0, 999.0])), "broken_asset_reconciliation"),
         (lambda r: setattr(r, "monthly_targets", r.monthly_targets.assign(source_available_date=pd.Timestamp("2025-01-01"))), "pit_timing_violation"),
+        (lambda r: setattr(r, "candidate_audit", r.candidate_audit.assign(r18_source_available_date=pd.Timestamp("2025-01-01"))), "pit_timing_violation"),
         (lambda r: setattr(r, "candidate_audit", r.candidate_audit.drop(columns="liquidity_ratio_vs_ix0001_20d")), "missing_ix0001_evidence"),
     ],
 )
@@ -146,3 +150,21 @@ def test_operational_limitations_remain_warnings_not_hidden_failures():
         "snapshot_industry_classification",
         "synthetic_corporate_action_model",
     }.issubset(warning_codes)
+
+
+def test_selection_diagnostics_persist_shortage_and_zero_candidate_carry():
+    audit = pd.DataFrame(
+        {
+            "formation_date": [pd.Timestamp("2025-01-31")] * 3
+            + [pd.Timestamp("2025-02-27")] * 2,
+            "etf_id": "momentum",
+            "ticker": ["1101", "1102", "1103", "1101", "1102"],
+            "selected": [True, True, True, False, False],
+        }
+    )
+    diagnostics = build_selection_diagnostics(audit)
+    assert diagnostics["diagnostic"].tolist() == [
+        "candidate_shortage",
+        "zero_candidate_carry_forward",
+    ]
+    assert diagnostics["candidate_count"].tolist() == [3, 0]
