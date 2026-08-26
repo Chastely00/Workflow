@@ -365,6 +365,39 @@ def validate_result(
             if not trades.empty
             else {}
         )
+        evidence_columns = [
+            "etf_id", "date", "ticker", "synthetic_ca_share_delta", "synthetic_ca_cash"
+        ]
+        evidence = pd.concat(
+            [
+                holdings[evidence_columns],
+                trades[evidence_columns] if not trades.empty else holdings.iloc[:0][evidence_columns],
+            ],
+            ignore_index=True,
+        )
+        evidence["ticker"] = evidence["ticker"].astype(str)
+        evidence["synthetic_ca_share_delta"] = pd.to_numeric(
+            evidence["synthetic_ca_share_delta"], errors="coerce"
+        )
+        evidence["synthetic_ca_cash"] = pd.to_numeric(
+            evidence["synthetic_ca_cash"], errors="coerce"
+        )
+        evidence_keys = ["etf_id", "date", "ticker"]
+        evidence_conflicts = evidence.groupby(evidence_keys, sort=False)[
+            ["synthetic_ca_share_delta", "synthetic_ca_cash"]
+        ].nunique(dropna=True)
+        if evidence_conflicts.gt(1).any(axis=None):
+            share_broken = True
+        evidence_first = evidence.groupby(evidence_keys, sort=False)[
+            ["synthetic_ca_share_delta", "synthetic_ca_cash"]
+        ].first()
+        evidence_lookup = {
+            (str(etf_id), pd.Timestamp(date), str(ticker)): (
+                0 if pd.isna(row.synthetic_ca_share_delta) else int(row.synthetic_ca_share_delta),
+                0.0 if pd.isna(row.synthetic_ca_cash) else float(row.synthetic_ca_cash),
+            )
+            for (etf_id, date, ticker), row in evidence_first.iterrows()
+        }
         for etf_id, daily_group in daily.groupby("etf_id", sort=False):
             previous_shares: dict[str, int] = {}
             previous_cash = initial_capital
@@ -390,30 +423,10 @@ def validate_result(
                 }
                 ca_cash = 0.0
                 for ticker in tickers:
-                    holding_evidence = holding_day[
-                        holding_day["ticker"].astype(str).eq(ticker)
-                    ]
-                    trade_evidence = trade_day[
-                        trade_day["ticker"].astype(str).eq(ticker)
-                    ]
-                    evidence = pd.concat(
-                        [
-                            holding_evidence[["synthetic_ca_share_delta", "synthetic_ca_cash"]],
-                            trade_evidence[["synthetic_ca_share_delta", "synthetic_ca_cash"]],
-                        ],
-                        ignore_index=True,
+                    share_delta, ticker_ca_cash = evidence_lookup.get(
+                        (str(etf_id), pd.Timestamp(date), ticker), (0, 0.0)
                     )
-                    deltas = pd.to_numeric(
-                        evidence["synthetic_ca_share_delta"], errors="coerce"
-                    ).dropna().unique()
-                    cash_values = pd.to_numeric(
-                        evidence["synthetic_ca_cash"], errors="coerce"
-                    ).dropna().unique()
-                    if len(deltas) > 1 or len(cash_values) > 1:
-                        share_broken = True
-                        break
-                    share_delta = int(deltas[0]) if len(deltas) else 0
-                    ca_cash += float(cash_values[0]) if len(cash_values) else 0.0
+                    ca_cash += ticker_ca_cash
                     expected_shares = (
                         previous_shares.get(ticker, 0)
                         + share_delta
