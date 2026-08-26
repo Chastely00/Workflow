@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+import copy
 from decimal import Decimal
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from etf_tricks import ETF_IDS, ETFTrickLab
 
@@ -24,6 +26,16 @@ def _publish(root: Path, artifact_id: str, frame: pd.DataFrame) -> None:
         "status": "ready",
         "columns": frame.columns.tolist(),
         "artifact_paths": [str(path.relative_to(store)).replace("\\", "/")],
+        "row_count": len(frame),
+        "duplicate_count": 0,
+        "logical_key": {
+            "trading_calendar": ["date", "market"],
+            "daily_price_volume": ["date", "ticker"],
+            "daily_chip": ["date", "ticker"],
+            "monthly_sales": ["source_row_id"],
+            "financial_statement_raw": ["source_row_id"],
+            "security_master": ["ticker"],
+        }[artifact_id],
     }
     if date_column is not None:
         dates = pd.to_datetime(frame[date_column])
@@ -160,3 +172,39 @@ def test_manifest_backed_public_api_produces_13_continuous_curves(tmp_path):
     assert allocation.status == "ready"
     assert allocation.supplied_capital == Decimal("2345678")
     assert allocation.basket["target_shares"].sum() > 0
+
+    rebalance = lab.rebalance(
+        etf_id="momentum",
+        as_of_date="2025-01-31",
+        current_positions={"IX0001": 1},
+        current_cash=Decimal("2345678"),
+        capital_delta=Decimal("0"),
+    )
+    assert rebalance.orders.set_index("ticker").loc["IX0001", "side"] == "sell"
+
+    with pytest.raises(ValueError, match="formation_date"):
+        lab.allocate(
+            etf_id="momentum",
+            as_of_date="2025-02-03",
+            capital=Decimal("2345678"),
+        )
+
+    stale = copy.deepcopy(result)
+    stale.metadata["manifest_hashes"]["daily_price_volume"] = "stale"
+    stale.metadata["spec_hash"] = "stale"
+    stale_report = lab.validate(stale)
+    assert stale_report.status == "NOT_READY"
+    assert {issue.code for issue in stale_report.hard_failures}.issuperset(
+        {"source_identity_mismatch", "spec_identity_mismatch"}
+    )
+
+    sales_manifest_path = tmp_path / "data_store" / "manifests" / "monthly_sales.json"
+    sales_manifest = json.loads(sales_manifest_path.read_text(encoding="utf-8"))
+    sales_manifest["date_range"] = ["2024-01-01", "2024-01-01"]
+    sales_manifest_path.write_text(json.dumps(sales_manifest), encoding="utf-8")
+    with pytest.raises(ValueError, match="monthly_sales.*stale"):
+        ETFTrickLab.from_data_analysts(tmp_path).run_all(
+            start_date=start,
+            end_date=end,
+            initial_capital=Decimal("1234567"),
+        )

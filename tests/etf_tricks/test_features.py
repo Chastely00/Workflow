@@ -205,6 +205,21 @@ def test_low_volatility_accepts_20_adjacent_returns_but_sharpe_requires_60() -> 
     assert math.isnan(row["sortino_60d"])
 
 
+def test_roe_revision_effective_after_formation_is_not_visible() -> None:
+    calendar, panels, formation_date = _panels()
+    mask = panels["financial_statement_raw"]["ticker"].eq("1101")
+    panels["financial_statement_raw"].loc[mask, "revision_date"] = "2025-09-02"
+
+    row = (
+        PITFeatureEngine(calendar, panels)
+        .compute(formation_date)
+        .set_index("ticker")
+        .loc["1101"]
+    )
+
+    assert math.isnan(row["r103"])
+
+
 def test_post_formation_rows_and_input_order_cannot_change_output() -> None:
     calendar, panels, formation_date = _panels()
     without_future = {

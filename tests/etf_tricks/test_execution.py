@@ -203,6 +203,40 @@ def test_duplicate_market_keys_and_negative_capital_fail_closed():
             _calendar(dates),
             Decimal("1000"),
         )
+
+
+def test_rotation_keeps_one_share_when_priced_target_is_unaffordable_after_fees():
+    dates = ["2025-01-31", "2025-02-03"]
+    targets = pd.concat(
+        [
+            _targets("2025-01", {"1101": 1.0}),
+            _targets("2025-02", {"1102": 1.0}),
+        ],
+        ignore_index=True,
+    )
+    market = pd.DataFrame(
+        [
+            {"date": dates[0], "ticker": "1101", "close": 10.0, "adj_close": 10.0, "traded_value": 1_000.0},
+            {"date": dates[0], "ticker": "1102", "close": 100.0, "adj_close": 100.0, "traded_value": 1_000.0},
+            {"date": dates[1], "ticker": "1101", "close": 10.0, "adj_close": 10.0, "traded_value": 1_000.0},
+            {"date": dates[1], "ticker": "1102", "close": 100.0, "adj_close": 100.0, "traded_value": 1_000.0},
+        ]
+    )
+
+    result = PortfolioExecutionEngine().run(
+        get_etf_spec("momentum"),
+        targets,
+        market,
+        _calendar(dates),
+        Decimal("101"),
+    )
+
+    final = result.daily_holdings[result.daily_holdings["date"].eq(pd.Timestamp(dates[1]))]
+    assert final.set_index("ticker")["shares"].to_dict() == {"1101": 1}
+    assert result.daily_etf.iloc[-1]["holdings_count"] == 1
+    feb = result.trades[result.trades["date"].eq(pd.Timestamp(dates[1]))].set_index("ticker")
+    assert feb.loc["1101", "executed_shares"] == -9
+    assert feb.loc["1102", "executed_shares"] == 0
     with pytest.raises(ValueError, match="initial_capital"):
         PortfolioExecutionEngine().run(
             get_etf_spec("momentum"),

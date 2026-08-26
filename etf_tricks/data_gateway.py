@@ -24,6 +24,15 @@ _DATE_COLUMNS = {
     "ex_date",
 }
 
+_LOGICAL_KEYS = {
+    "trading_calendar": ("date", "market"),
+    "daily_price_volume": ("date", "ticker"),
+    "daily_chip": ("date", "ticker"),
+    "monthly_sales": ("source_row_id",),
+    "financial_statement_raw": ("source_row_id",),
+    "security_master": ("ticker",),
+}
+
 
 class DataGateway:
     def __init__(self, data_analysts_root: Path) -> None:
@@ -50,6 +59,14 @@ class DataGateway:
         status = manifest.get("status")
         if status != "ready":
             raise DataContractError(f"artifact {artifact_id} status is {status}, expected ready")
+        row_count = manifest.get("row_count")
+        if not isinstance(row_count, int) or isinstance(row_count, bool) or row_count < 0:
+            raise DataContractError(f"artifact {artifact_id} has invalid row_count: {row_count}")
+        duplicate_count = manifest.get("duplicate_count")
+        if duplicate_count != 0:
+            raise DataContractError(
+                f"artifact {artifact_id} duplicate_count is {duplicate_count}, expected 0"
+            )
         return manifest
 
     def read_artifact(
@@ -71,6 +88,19 @@ class DataGateway:
             )
         self._validate_requested_coverage(artifact_id, manifest, start, end)
 
+        raw_logical_key = manifest.get("logical_key")
+        logical_key = _LOGICAL_KEYS.get(artifact_id)
+        if logical_key is None and isinstance(raw_logical_key, list):
+            logical_key = tuple(str(value) for value in raw_logical_key if str(value))
+        if not logical_key:
+            raise DataContractError(f"artifact {artifact_id} has no governed logical key")
+        missing_key_columns = sorted(set(logical_key).difference(declared_columns))
+        if missing_key_columns:
+            raise DataContractError(
+                f"artifact {artifact_id} logical key columns are absent: {missing_key_columns}"
+            )
+        read_columns = tuple(dict.fromkeys((*selected_columns, *logical_key)))
+
         frames: list[pd.DataFrame] = []
         raw_paths = manifest.get("artifact_paths")
         if not isinstance(raw_paths, list) or not raw_paths:
@@ -84,14 +114,22 @@ class DataGateway:
             if not path.is_file():
                 raise DataContractError(f"artifact {artifact_id} declared file is missing: {path}")
             try:
-                frames.append(pd.read_parquet(path, columns=list(selected_columns)))
+                frames.append(pd.read_parquet(path, columns=list(read_columns)))
             except Exception as exc:
                 raise DataContractError(
                     f"failed reading artifact {artifact_id} file {path}: {exc}"
                 ) from exc
 
         result = pd.concat(frames, ignore_index=True) if len(frames) > 1 else frames[0]
-        for column in selected_columns:
+        if len(result) != manifest["row_count"]:
+            raise DataContractError(
+                f"artifact {artifact_id} row_count mismatch: manifest={manifest['row_count']} physical={len(result)}"
+            )
+        if result.duplicated(list(logical_key)).any():
+            raise DataContractError(
+                f"artifact {artifact_id} contains duplicate logical key rows: {list(logical_key)}"
+            )
+        for column in read_columns:
             if column in _DATE_COLUMNS:
                 result[column] = pd.to_datetime(result[column], errors="coerce")
 
@@ -110,7 +148,7 @@ class DataGateway:
                 result = result[result[effective_date_column] >= pd.Timestamp(start)]
             if end is not None:
                 result = result[result[effective_date_column] <= pd.Timestamp(end)]
-        return result.reset_index(drop=True)
+        return result.loc[:, list(selected_columns)].reset_index(drop=True)
 
     @staticmethod
     def _validate_requested_coverage(
@@ -133,4 +171,3 @@ class DataGateway:
             raise DataContractError(
                 f"artifact {artifact_id} coverage ends at {upper.date()}, requested {end}"
             )
-

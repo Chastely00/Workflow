@@ -18,6 +18,8 @@ def _write_artifact(
     columns: tuple[str, ...] = ("date", "ticker", "close"),
     artifact_path: str = "canonical/raw/prices/year=2025/part.parquet",
     date_range: tuple[str, str] | None = ("2025-01-02", "2025-01-06"),
+    row_count: int = 3,
+    duplicate_count: int = 0,
 ) -> Path:
     manifest_dir = root / "data_store" / "manifests"
     parquet_path = root / "data_store" / artifact_path
@@ -37,6 +39,9 @@ def _write_artifact(
         "date_range": list(date_range) if date_range else None,
         "availability_date_range": None,
         "status": status,
+        "row_count": row_count,
+        "duplicate_count": duplicate_count,
+        "logical_key": ["date", "ticker"],
     }
     (manifest_dir / f"{artifact_id}.json").write_text(
         json.dumps(manifest), encoding="utf-8"
@@ -91,6 +96,26 @@ def test_gateway_rejects_requested_coverage_outside_manifest_range(tmp_path: Pat
         DataGateway.from_data_analysts(tmp_path).read_artifact(
             "prices", start="2025-01-01", end="2025-01-06"
         )
+
+
+def test_gateway_rejects_manifest_or_physical_row_count_mismatch(tmp_path: Path) -> None:
+    _write_artifact(tmp_path, row_count=4)
+
+    with pytest.raises(DataContractError, match="row_count"):
+        DataGateway.from_data_analysts(tmp_path).read_artifact("prices")
+
+
+def test_gateway_rejects_declared_or_physical_duplicate_logical_keys(tmp_path: Path) -> None:
+    _write_artifact(tmp_path, duplicate_count=1)
+    with pytest.raises(DataContractError, match="duplicate_count"):
+        DataGateway.from_data_analysts(tmp_path).read_artifact("prices")
+
+    path = _write_artifact(tmp_path)
+    duplicate = pd.read_parquet(path)
+    duplicate.loc[1, ["date", "ticker"]] = duplicate.loc[0, ["date", "ticker"]]
+    duplicate.to_parquet(path, index=False)
+    with pytest.raises(DataContractError, match="duplicate logical key"):
+        DataGateway.from_data_analysts(tmp_path).read_artifact("prices")
 
 
 def test_trading_calendar_returns_only_twse_trading_days_by_month() -> None:

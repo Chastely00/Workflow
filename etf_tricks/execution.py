@@ -223,15 +223,51 @@ class PortfolioExecutionEngine:
             day_commission = forced_commission
             day_tax = forced_tax
             day_trades: list[dict[str, object]] = []
+            sell_prices = {
+                ticker: self._current_trade_price(indexed_market, date, ticker)
+                for ticker, quantity in desired.items()
+                if quantity < 0
+            }
+            sell_quantities = {
+                ticker: (
+                    0
+                    if sell_prices[ticker] is None
+                    else min(-desired[ticker], shares.get(ticker, 0))
+                )
+                for ticker in sell_prices
+            }
+            projected_shares = shares.copy()
+            projected_cash = cash
+            for ticker in sorted(sell_quantities):
+                executed = sell_quantities[ticker]
+                cost = self._cost_or_zero("sell", executed, sell_prices[ticker])
+                projected_shares[ticker] = projected_shares.get(ticker, 0) - executed
+                projected_cash += cost.notional - cost.total
+
+            buy_desired = {ticker: quantity for ticker, quantity in desired.items() if quantity > 0}
+            buy_prices = {
+                ticker: self._current_trade_price(indexed_market, date, ticker)
+                for ticker in buy_desired
+            }
+            buy_quantities = self._allocate_buys(
+                buy_desired, buy_prices, projected_cash, projected_shares, schedule_target
+            )
+            if (
+                sum(shares.values()) > 0
+                and sum(projected_shares.values()) == 0
+                and sum(buy_quantities.values()) == 0
+            ):
+                protected = next(
+                    (ticker for ticker in sorted(sell_quantities) if sell_quantities[ticker] > 0),
+                    None,
+                )
+                if protected is not None:
+                    sell_quantities[protected] -= 1
+
             for ticker in sorted(ticker for ticker, quantity in desired.items() if quantity < 0):
                 wanted = -desired[ticker]
-                price = self._current_trade_price(indexed_market, date, ticker)
-                executed = 0 if price is None else min(wanted, shares.get(ticker, 0))
-                if executed and sum(shares.values()) == executed and not any(
-                    quantity > 0 and self._current_trade_price(indexed_market, date, buy_ticker) is not None
-                    for buy_ticker, quantity in desired.items()
-                ):
-                    executed = max(0, executed - 1)
+                price = sell_prices[ticker]
+                executed = sell_quantities[ticker]
                 cost = self._cost_or_zero("sell", executed, price)
                 shares[ticker] = shares.get(ticker, 0) - executed
                 cash += cost.notional - cost.total
@@ -247,11 +283,6 @@ class PortfolioExecutionEngine:
                 )
                 backlog[ticker] = unfilled
 
-            buy_desired = {ticker: quantity for ticker, quantity in desired.items() if quantity > 0}
-            buy_prices = {
-                ticker: self._current_trade_price(indexed_market, date, ticker)
-                for ticker in buy_desired
-            }
             buy_quantities = self._allocate_buys(
                 buy_desired, buy_prices, cash, shares, schedule_target
             )

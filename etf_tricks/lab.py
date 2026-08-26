@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import replace
 from decimal import Decimal
 from pathlib import Path
 
@@ -15,7 +16,12 @@ from .features import PITFeatureEngine
 from .registry import ETF_IDS, get_etf_spec
 from .result import ETFTrickResult, attach_etf_amount
 from .universe import UniverseEngine
-from .validation import ReadinessReport, build_selection_diagnostics, validate_result
+from .validation import (
+    ReadinessReport,
+    ValidationIssue,
+    build_selection_diagnostics,
+    validate_result,
+)
 
 
 class ETFTrickLab:
@@ -51,6 +57,13 @@ class ETFTrickLab:
                 {"date": run_days, "market": "TWSE", "is_trading_day": True}
             )
         )
+        formation_dates = self._formation_dates_for_run(full_calendar, start, end)
+        if formation_dates:
+            latest_formation = max(formation_dates)
+            self._assert_sparse_source_fresh("monthly_sales", latest_formation, 45)
+            self._assert_sparse_source_fresh(
+                "financial_statement_raw", latest_formation, 120
+            )
 
         daily_columns = [
             "date", "ticker", "close", "adj_close", "volume", "traded_value",
@@ -99,7 +112,6 @@ class ETFTrickLab:
             .rename(columns={"traded_value": "amt"})
         )
 
-        formation_dates = self._formation_dates_for_run(full_calendar, start, end)
         daily_start = pd.to_datetime(daily["date"], errors="coerce").min()
         ix_dates = pd.DatetimeIndex(
             pd.to_datetime(ix0001["date"], errors="coerce").dropna().sort_values().unique()
@@ -207,7 +219,9 @@ class ETFTrickLab:
         current_cash: int | float | Decimal,
         capital_delta: int | float | Decimal,
     ) -> AllocationPlan:
-        targets, prices, execution_dates = self._allocation_context(etf_id, as_of_date)
+        targets, prices, execution_dates = self._allocation_context(
+            etf_id, as_of_date, extra_tickers=current_positions
+        )
         return AllocationPlanner().rebalance(
             etf_id,
             as_of_date,
@@ -233,10 +247,55 @@ class ETFTrickLab:
         calendar_frame = calendar_frame[
             pd.to_datetime(calendar_frame["date"]).between(start, end)
         ]
-        return validate_result(selected, TradingCalendar(calendar_frame), ETF_IDS)
+        validation_calendar = TradingCalendar(calendar_frame)
+        report = validate_result(selected, validation_calendar, ETF_IDS)
+        identity_failures: list[ValidationIssue] = []
+        if selected.metadata.get("manifest_hashes") != self._manifest_hashes():
+            identity_failures.append(
+                ValidationIssue(
+                    "source_identity_mismatch",
+                    "result source manifest hashes do not match the current DataAnalysts artifacts",
+                )
+            )
+        if selected.metadata.get("spec_hash") != self._spec_hash():
+            identity_failures.append(
+                ValidationIssue(
+                    "spec_identity_mismatch",
+                    "result ETF specification hash does not match the current governed registry",
+                )
+            )
+        expected_days = pd.DatetimeIndex(validation_calendar.days)
+        observed_days = pd.DatetimeIndex(
+            pd.to_datetime(selected.daily_etf.get("date"), errors="coerce")
+            .dropna()
+            .unique()
+        ).sort_values()
+        if len(expected_days) == 0 or not observed_days.equals(expected_days):
+            identity_failures.append(
+                ValidationIssue(
+                    "run_bounds_mismatch",
+                    "daily ETF dates do not equal the governed trading days in run_config bounds",
+                )
+            )
+        if not identity_failures:
+            return report
+        hard = (*report.hard_failures, *identity_failures)
+        return replace(
+            report,
+            status="NOT_READY",
+            hard_failures=hard,
+            目前可用=(),
+            目前缺失限制=tuple(
+                issue.message for issue in (*hard, *report.warnings)
+            ),
+        )
 
     def _allocation_context(
-        self, etf_id: str, as_of_date: str | pd.Timestamp
+        self,
+        etf_id: str,
+        as_of_date: str | pd.Timestamp,
+        *,
+        extra_tickers: object = (),
     ) -> tuple[pd.DataFrame, pd.DataFrame, tuple[pd.Timestamp, ...]]:
         if etf_id not in ETF_IDS:
             raise KeyError(f"unknown ETF ID: {etf_id}")
@@ -251,25 +310,33 @@ class ETFTrickLab:
         if eligible.empty:
             raise RuntimeError(f"no governed target is available for {etf_id} by {as_of.date()}")
         formation = pd.to_datetime(eligible["formation_date"]).max()
-        targets = eligible[pd.to_datetime(eligible["formation_date"]).eq(formation)][
-            ["ticker", "stock_name", "target_weight"]
-        ].copy()
+        if as_of != formation:
+            raise ValueError(
+                f"as_of_date must equal the governed formation_date {formation.date()}"
+            )
+        governed = eligible[pd.to_datetime(eligible["formation_date"]).eq(formation)].copy()
+        target_months = pd.PeriodIndex(governed["target_month"], freq="M").unique()
+        if len(target_months) != 1:
+            raise ValueError("governed target must contain exactly one target_month")
+        targets = governed[["ticker", "stock_name", "target_weight"]].copy()
+        requested_tickers = set(targets["ticker"].astype(str)) | {
+            str(ticker) for ticker in extra_tickers
+        }
         price_frame = self.gateway.read_artifact(
             "daily_price_volume",
             columns=["date", "ticker", "close"],
-            start=as_of,
-            end=as_of,
+            start=formation,
+            end=formation,
         )
         price_frame = price_frame[
-            price_frame["ticker"].astype(str).isin(targets["ticker"].astype(str))
+            price_frame["ticker"].astype(str).isin(requested_tickers)
         ].rename(columns={"close": "raw_close"})
         calendar = TradingCalendar(
             self.gateway.read_artifact(
                 "trading_calendar", columns=["date", "market", "is_trading_day"]
             )
         )
-        target_month = as_of.to_period("M") + 1
-        execution_dates = calendar.month(target_month.start_time)
+        execution_dates = calendar.month(target_months[0].start_time)
         return targets, price_frame[["ticker", "raw_close"]], execution_dates
 
     @staticmethod
@@ -281,10 +348,7 @@ class ETFTrickLab:
         values = []
         for target_month in pd.period_range(first_target_month, last_target_month, freq="M"):
             formation_month = target_month - 1
-            try:
-                values.append(calendar.month_end(formation_month.start_time))
-            except Exception:
-                continue
+            values.append(calendar.month_end(formation_month.start_time))
         return tuple(values)
 
     @staticmethod
@@ -303,6 +367,21 @@ class ETFTrickLab:
             payload = json.dumps(manifest, sort_keys=True, ensure_ascii=False).encode("utf-8")
             hashes[artifact_id] = hashlib.sha256(payload).hexdigest()
         return hashes
+
+    def _assert_sparse_source_fresh(
+        self, artifact_id: str, formation_date: pd.Timestamp, max_staleness_days: int
+    ) -> None:
+        manifest = self.gateway.load_manifest(artifact_id)
+        raw_range = manifest.get("availability_date_range") or manifest.get("date_range")
+        if not isinstance(raw_range, list) or len(raw_range) != 2:
+            raise ValueError(f"{artifact_id} manifest lacks availability coverage")
+        upper = pd.Timestamp(raw_range[1])
+        age = (formation_date - upper).days
+        if age > max_staleness_days:
+            raise ValueError(
+                f"{artifact_id} availability coverage is {age} days stale at formation_date "
+                f"{formation_date.date()}, limit={max_staleness_days}"
+            )
 
     @staticmethod
     def _spec_hash() -> str:

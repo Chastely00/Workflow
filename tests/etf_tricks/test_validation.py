@@ -28,6 +28,8 @@ def _valid_result() -> ETFTrickResult:
             "total_assets": [1_000.0, 1_000.0],
             "cash": [100.0, 100.0],
             "target_completion_ratio": [0.5, 1.0],
+            "commission": [0.0, 0.0],
+            "tax": [0.0, 0.0],
             "total_cost": [0.0, 0.0],
             "missing_traded_value_count": [0, 0],
         }
@@ -38,7 +40,9 @@ def _valid_result() -> ETFTrickResult:
             "etf_id": "momentum",
             "ticker": "1101",
             "shares": [9, 9],
+            "raw_close": [100.0, 100.0],
             "market_value": [900.0, 900.0],
+            "actual_weight": [0.9, 0.9],
             "stale_price_days": [0, 0],
         }
     )
@@ -67,7 +71,13 @@ def _valid_result() -> ETFTrickResult:
         monthly_targets=targets,
         candidate_audit=candidates,
         diagnostics=pd.DataFrame(),
-        metadata={},
+        metadata={
+            "run_config": {
+                "start_date": "2025-01-02",
+                "end_date": "2025-01-03",
+                "initial_capital": "1000",
+            }
+        },
     )
 
 
@@ -100,12 +110,18 @@ def test_missing_etf_and_post_inception_calendar_date_are_hard_failures():
     [
         (lambda r: setattr(r, "daily_etf", pd.concat([r.daily_etf, r.daily_etf.iloc[[0]]])), "duplicate_daily_key"),
         (lambda r: setattr(r, "daily_etf", r.daily_etf.assign(nav=[100.0, float("nan")])), "invalid_nav"),
+        (lambda r: setattr(r, "daily_etf", r.daily_etf.assign(nav=[1_000.0, 100.0])), "broken_nav_reconciliation"),
+        (lambda r: setattr(r, "daily_etf", r.daily_etf.assign(daily_return=[float("nan"), 123.0])), "broken_return_reconciliation"),
         (lambda r: setattr(r, "daily_etf", r.daily_etf.assign(etf_amount=[0.0, float("nan")])), "invalid_etf_amount"),
         (lambda r: setattr(r, "daily_etf", r.daily_etf.assign(cash=[100.0, -1.0])), "negative_cash"),
         (lambda r: setattr(r, "daily_holdings", r.daily_holdings.assign(shares=[9, -1])), "negative_shares"),
+        (lambda r: setattr(r, "daily_holdings", r.daily_holdings.assign(raw_close=[99.0, 100.0])), "broken_holding_reconciliation"),
+        (lambda r: setattr(r, "daily_holdings", r.daily_holdings.assign(actual_weight=[0.8, 0.9])), "broken_holding_reconciliation"),
+        (lambda r: setattr(r, "daily_etf", r.daily_etf.assign(commission=[1.0, 0.0], tax=[0.0, 0.0], total_cost=[1.0, 0.0])), "broken_cost_reconciliation"),
         (lambda r: setattr(r, "daily_etf", r.daily_etf.assign(total_assets=[1_000.0, 999.0])), "broken_asset_reconciliation"),
         (lambda r: setattr(r, "monthly_targets", r.monthly_targets.assign(source_available_date=pd.Timestamp("2025-01-01"))), "pit_timing_violation"),
         (lambda r: setattr(r, "candidate_audit", r.candidate_audit.assign(r18_source_available_date=pd.Timestamp("2025-01-01"))), "pit_timing_violation"),
+        (lambda r: setattr(r, "candidate_audit", r.candidate_audit.assign(r103_revision_date=pd.Timestamp("2025-01-01"))), "pit_timing_violation"),
         (lambda r: setattr(r, "candidate_audit", r.candidate_audit.drop(columns="liquidity_ratio_vs_ix0001_20d")), "missing_ix0001_evidence"),
     ],
 )
@@ -127,8 +143,13 @@ def test_operational_limitations_remain_warnings_not_hidden_failures():
         {
             "date": [DATES[1]],
             "etf_id": ["momentum"],
-            "ticker": ["1101"],
-            "unfilled_shares": [2],
+                "ticker": ["1101"],
+                "executed_shares": [0],
+                "raw_close": [100.0],
+                "notional": [0.0],
+                "commission": [0.0],
+                "tax": [0.0],
+                "unfilled_shares": [2],
             "is_forced_delist_liquidation": [True],
         }
     )

@@ -292,6 +292,7 @@ class PITFeatureEngine:
             & frame["merg"].eq("Y")
             & frame["curr"].eq("NTD")
             & frame["source_available_date"].le(formation)
+            & (frame["revision_date"].isna() | frame["revision_date"].le(formation))
             & frame["period_end_date"].notna()
             & np.isfinite(frame["r103"])
             & frame["r103"].gt(0)
@@ -319,6 +320,7 @@ class PITFeatureEngine:
                 "r103": float(row.r103),
                 "r103_period_end_date": row.period_end_date,
                 "r103_source_available_date": row.source_available_date,
+                "r103_revision_date": row.revision_date,
                 "r103_age_days": int(row.r103_age_days),
             }
             for row in frame.itertuples(index=False)
@@ -390,5 +392,6 @@ class PITFeatureEngine:
             "r103": math.nan,
             "r103_period_end_date": pd.NaT,
             "r103_source_available_date": pd.NaT,
+            "r103_revision_date": pd.NaT,
             "r103_age_days": math.nan,
         }

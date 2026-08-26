@@ -137,51 +137,46 @@ class AllocationPlanner:
         for ticker in positions:
             target_quantities.setdefault(ticker, 0)
 
-        available_cash = Decimal(current_cash) + Decimal(capital_delta)
-        if not available_cash.is_finite():
+        starting_cash = Decimal(current_cash) + Decimal(capital_delta)
+        if not starting_cash.is_finite():
             raise ValueError("current cash and capital delta must be finite")
-        sell_orders = {
-            ticker: positions.get(ticker, 0) - target
-            for ticker, target in target_quantities.items()
-            if positions.get(ticker, 0) > target
-        }
-        sell_costs = {}
-        for ticker, quantity in sell_orders.items():
-            cost = transaction_cost("sell", quantity, prices_by_ticker[ticker], self.cost_policy)
-            sell_costs[ticker] = cost
-            available_cash += cost.notional - cost.total
-
-        buy_orders = {
-            ticker: target - positions.get(ticker, 0)
-            for ticker, target in target_quantities.items()
-            if target > positions.get(ticker, 0)
-        }
-        while self._buy_cost(buy_orders, prices_by_ticker) > available_cash:
-            reducible = [ticker for ticker, quantity in buy_orders.items() if quantity > 0]
-            if not reducible:
+        while True:
+            net_orders = {
+                ticker: target - positions.get(ticker, 0)
+                for ticker, target in target_quantities.items()
+                if target != positions.get(ticker, 0)
+            }
+            schedule, available_cash, feasible = self._simulate_schedule(
+                etf_id=etf_id,
+                as_of_date=pd.Timestamp(as_of_date),
+                net_orders=net_orders,
+                prices=prices_by_ticker,
+                dates=dates,
+                starting_cash=starting_cash,
+            )
+            if feasible:
                 break
+            reducible = [
+                ticker
+                for ticker, target in target_quantities.items()
+                if target > positions.get(ticker, 0)
+            ]
+            if not reducible:
+                raise ValueError("scheduled rebalance is not self-financing")
             ticker = max(
                 reducible,
                 key=lambda value: (
-                    (positions.get(value, 0) + buy_orders[value])
-                    * prices_by_ticker[value]
-                    / capital,
+                    target_quantities[value] * prices_by_ticker[value] / capital,
                     value,
                 ),
             )
-            buy_orders[ticker] -= 1
             target_quantities[ticker] -= 1
 
-        buy_costs = {
-            ticker: transaction_cost("buy", quantity, prices_by_ticker[ticker], self.cost_policy)
-            for ticker, quantity in buy_orders.items()
-            if quantity > 0
-        }
-        available_cash -= sum(
-            (cost.notional + cost.total for cost in buy_costs.values()), Decimal("0")
+        cost_by_ticker = (
+            schedule.groupby("ticker", as_index=True)[["commission", "tax"]].sum()
+            if not schedule.empty
+            else pd.DataFrame(columns=["commission", "tax"])
         )
-        if available_cash < 0:
-            raise ValueError("allocation produced negative residual cash")
 
         merged["target_shares"] = merged["ticker"].map(target_quantities).astype(int)
         merged["actual_allocated_notional"] = [
@@ -189,14 +184,14 @@ class AllocationPlanner:
             for row in merged.itertuples(index=False)
         ]
         merged["estimated_commission"] = merged["ticker"].map(
-            lambda ticker: float(
-                (buy_costs.get(ticker) or sell_costs.get(ticker)).commission
-                if ticker in buy_costs or ticker in sell_costs
-                else Decimal("0")
-            )
+            lambda ticker: float(cost_by_ticker.loc[ticker, "commission"])
+            if ticker in cost_by_ticker.index
+            else 0.0
         )
         merged["estimated_sell_tax"] = merged["ticker"].map(
-            lambda ticker: float(sell_costs[ticker].tax) if ticker in sell_costs else 0.0
+            lambda ticker: float(cost_by_ticker.loc[ticker, "tax"])
+            if ticker in cost_by_ticker.index
+            else 0.0
         )
         merged["unallocated_odd_lot_difference"] = (
             merged["theoretical_target_notional"] - merged["actual_allocated_notional"]
@@ -205,14 +200,9 @@ class AllocationPlanner:
         merged.insert(0, "etf_id", etf_id)
 
         order_rows = []
-        for ticker in sorted(set(sell_orders) | set(buy_orders)):
-            sell_quantity = sell_orders.get(ticker, 0)
-            buy_quantity = buy_orders.get(ticker, 0)
-            net = -sell_quantity if sell_quantity else buy_quantity
-            if net == 0:
-                continue
+        for ticker, net in sorted(net_orders.items()):
             side = "sell" if net < 0 else "buy"
-            cost = sell_costs[ticker] if side == "sell" else buy_costs[ticker]
+            ticker_schedule = schedule[schedule["ticker"].eq(ticker)]
             order_rows.append(
                 {
                     "etf_id": etf_id,
@@ -221,9 +211,9 @@ class AllocationPlanner:
                     "side": side,
                     "net_order_shares": net,
                     "raw_close": float(prices_by_ticker[ticker]),
-                    "notional": float(cost.notional),
-                    "commission": float(cost.commission),
-                    "tax": float(cost.tax),
+                    "notional": float(abs(net) * prices_by_ticker[ticker]),
+                    "commission": float(ticker_schedule["commission"].sum()),
+                    "tax": float(ticker_schedule["tax"].sum()),
                     "execution_priority": 1 if side == "sell" else 2,
                 }
             )
@@ -233,36 +223,7 @@ class AllocationPlanner:
                 ["execution_priority", "ticker"], kind="stable"
             ).reset_index(drop=True)
 
-        schedule_rows = []
-        for ticker, net in (
-            orders.set_index("ticker")["net_order_shares"].to_dict().items()
-            if not orders.empty
-            else []
-        ):
-            previous = 0
-            for k, date in enumerate(dates, start=1):
-                cumulative = scheduled_position(0, int(net), k, len(dates))
-                schedule_rows.append(
-                    {
-                        "etf_id": etf_id,
-                        "as_of_date": pd.Timestamp(as_of_date),
-                        "execution_date": date,
-                        "ticker": ticker,
-                        "scheduled_order_shares": cumulative - previous,
-                        "cumulative_scheduled_shares": cumulative,
-                    }
-                )
-                previous = cumulative
-        schedule = pd.DataFrame(schedule_rows)
-        if not schedule.empty:
-            schedule = schedule.sort_values(
-                ["execution_date", "ticker"], kind="stable"
-            ).reset_index(drop=True)
-
-        total_cost = sum(
-            (cost.total for cost in [*sell_costs.values(), *buy_costs.values()]),
-            Decimal("0"),
-        )
+        total_cost = Decimal(str(schedule["total_cost"].sum())) if not schedule.empty else Decimal("0")
         status = "ready" if sum(target_quantities.values()) > 0 else "infeasible_allocation"
         return AllocationPlan(
             etf_id=etf_id,
@@ -319,15 +280,86 @@ class AllocationPlanner:
                 result[str(ticker)] = quantity
         return result
 
-    def _buy_cost(
-        self, orders: Mapping[str, int], prices: Mapping[str, Decimal]
-    ) -> Decimal:
-        return sum(
-            (
-                transaction_cost("buy", quantity, prices[ticker], self.cost_policy).notional
-                + transaction_cost("buy", quantity, prices[ticker], self.cost_policy).total
-                for ticker, quantity in orders.items()
-                if quantity > 0
-            ),
-            Decimal("0"),
-        )
+    def _simulate_schedule(
+        self,
+        *,
+        etf_id: str,
+        as_of_date: pd.Timestamp,
+        net_orders: Mapping[str, int],
+        prices: Mapping[str, Decimal],
+        dates: Sequence[pd.Timestamp],
+        starting_cash: Decimal,
+    ) -> tuple[pd.DataFrame, Decimal, bool]:
+        planned: dict[tuple[pd.Timestamp, str], tuple[int, int]] = {}
+        for ticker, net in sorted(net_orders.items()):
+            previous = 0
+            for k, date in enumerate(dates, start=1):
+                cumulative = scheduled_position(0, int(net), k, len(dates))
+                planned[(date, ticker)] = (cumulative - previous, cumulative)
+                previous = cumulative
+
+        cash = starting_cash
+        rows: list[dict[str, object]] = []
+        feasible = cash >= 0
+        for date in dates:
+            for side in ("sell", "buy"):
+                for ticker in sorted(net_orders):
+                    quantity, cumulative = planned[(date, ticker)]
+                    if (side == "sell" and quantity >= 0) or (side == "buy" and quantity <= 0):
+                        continue
+                    absolute_quantity = abs(quantity)
+                    cost = transaction_cost(
+                        side, absolute_quantity, prices[ticker], self.cost_policy
+                    )
+                    if side == "sell":
+                        cash += cost.notional - cost.total
+                    else:
+                        cash -= cost.notional + cost.total
+                    feasible &= cash >= 0
+                    rows.append(
+                        {
+                            "etf_id": etf_id,
+                            "as_of_date": as_of_date,
+                            "execution_date": date,
+                            "ticker": ticker,
+                            "scheduled_order_shares": quantity,
+                            "cumulative_scheduled_shares": cumulative,
+                            "raw_close": float(prices[ticker]),
+                            "notional": float(cost.notional),
+                            "commission": float(cost.commission),
+                            "tax": float(cost.tax),
+                            "total_cost": float(cost.total),
+                            "cash_after": float(cash),
+                            "execution_priority": 1 if side == "sell" else 2,
+                        }
+                    )
+            zero_tickers = [
+                ticker
+                for ticker in sorted(net_orders)
+                if planned[(date, ticker)][0] == 0
+            ]
+            for ticker in zero_tickers:
+                _, cumulative = planned[(date, ticker)]
+                rows.append(
+                    {
+                        "etf_id": etf_id,
+                        "as_of_date": as_of_date,
+                        "execution_date": date,
+                        "ticker": ticker,
+                        "scheduled_order_shares": 0,
+                        "cumulative_scheduled_shares": cumulative,
+                        "raw_close": float(prices[ticker]),
+                        "notional": 0.0,
+                        "commission": 0.0,
+                        "tax": 0.0,
+                        "total_cost": 0.0,
+                        "cash_after": float(cash),
+                        "execution_priority": 3,
+                    }
+                )
+        schedule = pd.DataFrame(rows)
+        if not schedule.empty:
+            schedule = schedule.sort_values(
+                ["execution_date", "execution_priority", "ticker"], kind="stable"
+            ).reset_index(drop=True)
+        return schedule, cash, bool(feasible and cash >= 0)

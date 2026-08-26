@@ -38,8 +38,8 @@ def test_allocate_accepts_arbitrary_capital_and_reconciles_integer_basket():
     assert basket["actual_allocated_notional"].to_dict() == pytest.approx(
         {"1101": 500.0, "1102": 400.0}
     )
-    assert plan.total_cost == Decimal("2")
-    assert plan.residual_cash == Decimal("98")
+    assert plan.total_cost == Decimal("5")
+    assert plan.residual_cash == Decimal("95")
     assert sum(basket["actual_allocated_notional"]) + float(plan.total_cost + plan.residual_cash) == pytest.approx(1000.0)
 
 
@@ -74,12 +74,14 @@ def test_rebalance_sells_before_buys_and_reconciles_costs_and_cash():
 
     assert plan.status == "ready"
     orders = plan.orders.set_index("ticker")
-    assert orders["net_order_shares"].to_dict() == {"1101": -5, "1102": 2}
+    assert orders["net_order_shares"].to_dict() == {"1101": -5, "1102": 1}
     assert orders.loc["1101", "side"] == "sell"
     assert orders.loc["1102", "side"] == "buy"
-    assert plan.total_cost == Decimal("4")
-    assert plan.residual_cash == Decimal("96")
+    assert plan.total_cost == Decimal("6")
+    assert plan.residual_cash == Decimal("294")
     assert plan.orders["execution_priority"].tolist() == [1, 2]
+    assert plan.schedule["cash_after"].ge(0).all()
+    assert plan.schedule["total_cost"].sum() == pytest.approx(float(plan.total_cost))
 
 
 def test_schedule_uses_every_supplied_trading_day_and_cumulative_rounding():
@@ -96,10 +98,10 @@ def test_schedule_uses_every_supplied_trading_day_and_cumulative_rounding():
     schedule = plan.schedule
     assert schedule["execution_date"].nunique() == 3
     assert schedule[schedule["ticker"].eq("1101")]["scheduled_order_shares"].tolist() == [-2, -1, -2]
-    assert schedule[schedule["ticker"].eq("1102")]["scheduled_order_shares"].tolist() == [1, 0, 1]
+    assert schedule[schedule["ticker"].eq("1102")]["scheduled_order_shares"].tolist() == [0, 1, 0]
     assert schedule.groupby("ticker")["scheduled_order_shares"].sum().to_dict() == {
         "1101": -5,
-        "1102": 2,
+        "1102": 1,
     }
 
 

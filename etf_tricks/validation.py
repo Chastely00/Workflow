@@ -93,6 +93,78 @@ def validate_result(
         nav = pd.to_numeric(daily["nav"], errors="coerce")
         if (~np.isfinite(nav) | nav.le(0)).any():
             hard.append(ValidationIssue("invalid_nav", "NAV must be finite and positive"))
+
+    run_config = result.metadata.get("run_config", {}) if isinstance(result.metadata, dict) else {}
+    try:
+        initial_capital = float(run_config["initial_capital"])
+    except (KeyError, TypeError, ValueError):
+        initial_capital = float("nan")
+    if not np.isfinite(initial_capital) or initial_capital <= 0:
+        hard.append(
+            ValidationIssue(
+                "broken_nav_reconciliation",
+                "metadata.run_config.initial_capital must be finite and positive",
+            )
+        )
+    elif {"nav", "total_assets"}.issubset(daily.columns):
+        expected_nav = (
+            pd.to_numeric(daily["total_assets"], errors="coerce")
+            / initial_capital
+            * 100.0
+        )
+        observed_nav = pd.to_numeric(daily["nav"], errors="coerce")
+        if (
+            ~np.isfinite(expected_nav)
+            | ~np.isfinite(observed_nav)
+            | ~np.isclose(observed_nav, expected_nav, rtol=1e-10, atol=1e-8)
+        ).any():
+            hard.append(
+                ValidationIssue(
+                    "broken_nav_reconciliation",
+                    "NAV does not equal 100 times total assets divided by initial capital",
+                )
+            )
+    else:
+        hard.append(
+            ValidationIssue(
+                "broken_nav_reconciliation", "NAV reconciliation fields are missing"
+            )
+        )
+
+    if "daily_return" not in daily.columns:
+        hard.append(
+            ValidationIssue("broken_return_reconciliation", "daily_return is missing")
+        )
+    else:
+        broken_return = False
+        for _, group in daily.groupby("etf_id", sort=False):
+            ordered = group.sort_values("date", kind="stable")
+            observed = pd.to_numeric(ordered["daily_return"], errors="coerce")
+            expected_return = pd.to_numeric(ordered["nav"], errors="coerce").pct_change(
+                fill_method=None
+            )
+            if not pd.isna(observed.iloc[0]):
+                broken_return = True
+                break
+            comparable = observed.iloc[1:].notna() & expected_return.iloc[1:].notna()
+            if (
+                (~comparable).any()
+                or not np.isclose(
+                    observed.iloc[1:][comparable],
+                    expected_return.iloc[1:][comparable],
+                    rtol=1e-10,
+                    atol=1e-12,
+                ).all()
+            ):
+                broken_return = True
+                break
+        if broken_return:
+            hard.append(
+                ValidationIssue(
+                    "broken_return_reconciliation",
+                    "daily_return does not equal the ETF NAV percentage change",
+                )
+            )
     if "etf_amount" not in daily.columns:
         hard.append(ValidationIssue("invalid_etf_amount", "daily_etf lacks etf_amount"))
     else:
@@ -157,6 +229,108 @@ def validate_result(
             ValidationIssue("broken_asset_reconciliation", "required reconciliation fields are missing")
         )
 
+    holding_fields = {
+        "date", "etf_id", "ticker", "shares", "raw_close", "market_value", "actual_weight"
+    }
+    if holding_fields.issubset(holdings.columns):
+        if holdings.duplicated(["date", "etf_id", "ticker"]).any():
+            hard.append(
+                ValidationIssue("broken_holding_reconciliation", "daily_holdings has duplicate keys")
+            )
+        holding_value = (
+            pd.to_numeric(holdings["shares"], errors="coerce")
+            * pd.to_numeric(holdings["raw_close"], errors="coerce")
+        )
+        recorded_value = pd.to_numeric(holdings["market_value"], errors="coerce")
+        asset_lookup = daily.drop_duplicates(["date", "etf_id"], keep="last").set_index(
+            ["date", "etf_id"]
+        )["total_assets"]
+        row_assets = pd.Series(
+            [asset_lookup.get((row.date, row.etf_id), np.nan) for row in holdings.itertuples()],
+            index=holdings.index,
+            dtype="float64",
+        )
+        expected_weight = recorded_value / row_assets
+        recorded_weight = pd.to_numeric(holdings["actual_weight"], errors="coerce")
+        if (
+            ~np.isfinite(holding_value)
+            | ~np.isclose(holding_value, recorded_value, rtol=1e-10, atol=1e-6)
+            | ~np.isfinite(expected_weight)
+            | ~np.isclose(expected_weight, recorded_weight, rtol=1e-10, atol=1e-10)
+        ).any():
+            hard.append(
+                ValidationIssue(
+                    "broken_holding_reconciliation",
+                    "holding value or actual weight does not reconcile to shares, raw close, and assets",
+                )
+            )
+    else:
+        hard.append(
+            ValidationIssue(
+                "broken_holding_reconciliation", "daily_holdings reconciliation fields are missing"
+            )
+        )
+
+    trades = result.trades
+    trade_fields = {"date", "etf_id", "executed_shares", "raw_close", "notional", "commission", "tax"}
+    if not trades.empty and trade_fields.issubset(trades.columns):
+        trade_notional = (
+            pd.to_numeric(trades["executed_shares"], errors="coerce").abs()
+            * pd.to_numeric(trades["raw_close"], errors="coerce")
+        )
+        recorded_notional = pd.to_numeric(trades["notional"], errors="coerce")
+        if (
+            ~np.isfinite(trade_notional)
+            | ~np.isclose(trade_notional, recorded_notional, rtol=1e-10, atol=1e-6)
+        ).any():
+            hard.append(
+                ValidationIssue(
+                    "broken_trade_reconciliation",
+                    "trade notional does not reconcile to executed shares and raw close",
+                )
+            )
+
+    daily_cost_fields = {"date", "etf_id", "commission", "tax", "total_cost"}
+    if daily_cost_fields.issubset(daily.columns):
+        recorded_commission = pd.to_numeric(daily["commission"], errors="coerce")
+        recorded_tax = pd.to_numeric(daily["tax"], errors="coerce")
+        recorded_total = pd.to_numeric(daily["total_cost"], errors="coerce")
+        if trades.empty:
+            grouped_costs = pd.DataFrame(columns=["date", "etf_id", "trade_commission", "trade_tax"])
+        elif trade_fields.issubset(trades.columns):
+            grouped_costs = (
+                trades.groupby(["date", "etf_id"], as_index=False)[["commission", "tax"]]
+                .sum()
+                .rename(columns={"commission": "trade_commission", "tax": "trade_tax"})
+            )
+        else:
+            grouped_costs = None
+        if grouped_costs is None:
+            hard.append(ValidationIssue("broken_cost_reconciliation", "trade cost fields are missing"))
+        else:
+            cost_check = daily[["date", "etf_id"]].merge(
+                grouped_costs, on=["date", "etf_id"], how="left"
+            ).fillna({"trade_commission": 0.0, "trade_tax": 0.0})
+            trade_commission = pd.to_numeric(
+                cost_check["trade_commission"], errors="coerce"
+            )
+            trade_tax = pd.to_numeric(cost_check["trade_tax"], errors="coerce")
+            if (
+                ~np.isclose(recorded_total, recorded_commission + recorded_tax, rtol=0, atol=1e-8)
+                | ~np.isclose(recorded_commission, trade_commission, rtol=0, atol=1e-8)
+                | ~np.isclose(recorded_tax, trade_tax, rtol=0, atol=1e-8)
+            ).any():
+                hard.append(
+                    ValidationIssue(
+                        "broken_cost_reconciliation",
+                        "daily costs do not reconcile to trade commissions and taxes",
+                    )
+                )
+    else:
+        hard.append(
+            ValidationIssue("broken_cost_reconciliation", "daily cost fields are missing")
+        )
+
     targets = result.monthly_targets
     if {"formation_date", "source_available_date"}.issubset(targets.columns):
         formation = pd.to_datetime(targets["formation_date"], errors="coerce")
@@ -172,7 +346,11 @@ def validate_result(
             candidates["formation_date"], errors="coerce"
         )
         candidate_pit_violation = False
-        for column in ("r18_source_available_date", "r103_source_available_date"):
+        for column in (
+            "r18_source_available_date",
+            "r103_source_available_date",
+            "r103_revision_date",
+        ):
             if column not in candidates.columns:
                 continue
             available = pd.to_datetime(candidates[column], errors="coerce")
