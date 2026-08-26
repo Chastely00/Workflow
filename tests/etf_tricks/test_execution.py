@@ -158,10 +158,12 @@ def test_synthetic_corporate_action_scales_live_schedule_without_strategy_trade(
     holdings = result.daily_holdings.set_index("date")
     assert holdings.loc[pd.Timestamp("2025-01-02"), "shares"] == 5
     assert holdings.loc[pd.Timestamp("2025-01-03"), "synthetic_ca_multiplier"] == pytest.approx(2.0)
+    assert holdings.loc[pd.Timestamp("2025-01-03"), "synthetic_ca_share_delta"] == 5
     assert holdings.loc[pd.Timestamp("2025-01-03"), "shares"] == 19
     second_day_trade = result.trades[result.trades["date"].eq(pd.Timestamp("2025-01-03"))].iloc[0]
     assert second_day_trade["side"] == "buy"
     assert second_day_trade["executed_shares"] == 9
+    assert second_day_trade["synthetic_ca_share_delta"] == 5
 
 
 def test_missing_price_carries_last_value_and_delisting_forces_settlement():

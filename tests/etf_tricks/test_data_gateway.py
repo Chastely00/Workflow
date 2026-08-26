@@ -98,6 +98,15 @@ def test_gateway_rejects_requested_coverage_outside_manifest_range(tmp_path: Pat
         )
 
 
+def test_gateway_rejects_requested_bounds_without_coverage_metadata(tmp_path: Path) -> None:
+    _write_artifact(tmp_path, date_range=None)
+
+    with pytest.raises(DataContractError, match="coverage metadata"):
+        DataGateway.from_data_analysts(tmp_path).read_artifact(
+            "prices", start="2025-01-02", end="2025-01-06"
+        )
+
+
 def test_gateway_rejects_manifest_or_physical_row_count_mismatch(tmp_path: Path) -> None:
     _write_artifact(tmp_path, row_count=4)
 

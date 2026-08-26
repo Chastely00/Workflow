@@ -208,3 +208,26 @@ def test_manifest_backed_public_api_produces_13_continuous_curves(tmp_path):
             end_date=end,
             initial_capital=Decimal("1234567"),
         )
+
+
+def test_run_all_rejects_physically_truncated_trading_calendar(tmp_path):
+    start, end = _data_analysts_fixture(tmp_path)
+    calendar_path = tmp_path / "data_store" / "canonical" / "trading_calendar.parquet"
+    calendar = pd.read_parquet(calendar_path)
+    calendar = calendar[pd.to_datetime(calendar["date"]).lt(end)]
+    calendar.to_parquet(calendar_path, index=False)
+    manifest_path = tmp_path / "data_store" / "manifests" / "trading_calendar.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["row_count"] = len(calendar)
+    manifest["date_range"] = [
+        str(pd.to_datetime(calendar["date"]).min().date()),
+        str(pd.to_datetime(calendar["date"]).max().date()),
+    ]
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="trading_calendar physical coverage"):
+        ETFTrickLab.from_data_analysts(tmp_path).run_all(
+            start_date=start,
+            end_date=end,
+            initial_capital=Decimal("1234567"),
+        )

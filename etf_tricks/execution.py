@@ -120,6 +120,7 @@ class PortfolioExecutionEngine:
             current_tickers |= set(month_targets["ticker"])
 
             ca_by_ticker: dict[str, CorporateActionConversion] = {}
+            ca_share_delta: dict[str, int] = {}
             price_state: dict[str, tuple[Decimal | None, pd.Timestamp | None, int]] = {}
             for ticker in sorted(current_tickers):
                 row = self._market_row(indexed_market, date, ticker)
@@ -127,6 +128,7 @@ class PortfolioExecutionEngine:
                 previous = last_valid.get(ticker)
                 if current_close is not None and current_adj is not None:
                     if previous is not None and shares.get(ticker, 0) > 0:
+                        opening_shares = shares[ticker]
                         conversion = apply_synthetic_corporate_action(
                             shares=shares[ticker],
                             previous_close=previous[1],
@@ -135,6 +137,7 @@ class PortfolioExecutionEngine:
                             current_adj_close=current_adj,
                         )
                         shares[ticker] = conversion.shares
+                        ca_share_delta[ticker] = conversion.shares - opening_shares
                         cash += conversion.cash
                         ca_by_ticker[ticker] = conversion
                         if schedule_month == month:
@@ -172,7 +175,9 @@ class PortfolioExecutionEngine:
                 trade_records.append(
                     self._trade_record(
                         date, spec.etf_id, ticker, "sell", -quantity, 0, -quantity,
-                        0, price, cost, cash, True
+                        0, price, cost, cash, True,
+                        ca_share_delta.get(ticker, 0),
+                        ca_by_ticker.get(ticker, CorporateActionConversion(Decimal("1"), 0, Decimal("0"))).cash,
                     )
                 )
                 schedule_start.pop(ticker, None)
@@ -278,7 +283,9 @@ class PortfolioExecutionEngine:
                     self._trade_record(
                         date, spec.etf_id, ticker, "sell", desired[ticker],
                         backlog.get(ticker, 0), -executed, unfilled,
-                        price, cost, cash, False
+                        price, cost, cash, False,
+                        ca_share_delta.get(ticker, 0),
+                        ca_by_ticker.get(ticker, CorporateActionConversion(Decimal("1"), 0, Decimal("0"))).cash,
                     )
                 )
                 backlog[ticker] = unfilled
@@ -299,7 +306,9 @@ class PortfolioExecutionEngine:
                     self._trade_record(
                         date, spec.etf_id, ticker, "buy", wanted,
                         backlog.get(ticker, 0), executed, unfilled,
-                        price, cost, cash, False
+                        price, cost, cash, False,
+                        ca_share_delta.get(ticker, 0),
+                        ca_by_ticker.get(ticker, CorporateActionConversion(Decimal("1"), 0, Decimal("0"))).cash,
                     )
                 )
                 backlog[ticker] = unfilled
@@ -368,6 +377,7 @@ class PortfolioExecutionEngine:
                         "actual_weight": float(market_value / assets),
                         "target_weight": target_weights.get(ticker, 0.0),
                         "synthetic_ca_multiplier": float(conversion.multiplier),
+                        "synthetic_ca_share_delta": ca_share_delta.get(ticker, 0),
                         "synthetic_ca_cash": float(conversion.cash),
                         "stale_price_days": stale,
                         "source_price_date": source_date,
@@ -553,6 +563,8 @@ class PortfolioExecutionEngine:
         cost: CostBreakdown,
         cash_after: Decimal,
         forced: bool,
+        synthetic_ca_share_delta: int = 0,
+        synthetic_ca_cash: Decimal = Decimal("0"),
     ) -> dict[str, object]:
         return {
             "date": date,
@@ -569,4 +581,6 @@ class PortfolioExecutionEngine:
             "tax": float(cost.tax),
             "cash_after": float(cash_after),
             "is_forced_delist_liquidation": forced,
+            "synthetic_ca_share_delta": synthetic_ca_share_delta,
+            "synthetic_ca_cash": float(synthetic_ca_cash),
         }

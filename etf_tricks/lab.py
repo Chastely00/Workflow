@@ -49,6 +49,7 @@ class ETFTrickLab:
             "trading_calendar", columns=["date", "market", "is_trading_day"]
         )
         full_calendar = TradingCalendar(calendar_frame)
+        self._assert_calendar_covers(full_calendar, start, end)
         run_days = full_calendar.trading_days(start, end)
         if not run_days:
             raise ValueError("requested interval has no TRADEDAY_TWSE dates")
@@ -244,6 +245,10 @@ class ETFTrickLab:
         calendar_frame = self.gateway.read_artifact(
             "trading_calendar", columns=["date", "market", "is_trading_day"]
         )
+        full_validation_calendar = TradingCalendar(calendar_frame)
+        self._assert_calendar_covers(
+            full_validation_calendar, pd.Timestamp(start), pd.Timestamp(end)
+        )
         calendar_frame = calendar_frame[
             pd.to_datetime(calendar_frame["date"]).between(start, end)
         ]
@@ -386,6 +391,17 @@ class ETFTrickLab:
             raise ValueError(
                 f"{artifact_id} availability coverage is {age} days stale at formation_date "
                 f"{formation_date.date()}, limit={max_staleness_days}"
+            )
+
+    @staticmethod
+    def _assert_calendar_covers(
+        calendar: TradingCalendar, start: pd.Timestamp, end: pd.Timestamp
+    ) -> None:
+        days = pd.DatetimeIndex(calendar.days)
+        if len(days) == 0 or days.min() > start or days.max() < end:
+            raise ValueError(
+                f"trading_calendar physical coverage does not contain requested bounds "
+                f"{start.date()}..{end.date()}"
             )
 
     @staticmethod

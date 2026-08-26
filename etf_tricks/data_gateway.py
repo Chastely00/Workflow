@@ -161,7 +161,9 @@ class DataGateway:
             return
         raw_range = manifest.get("date_range") or manifest.get("availability_date_range")
         if not isinstance(raw_range, list) or len(raw_range) != 2:
-            return
+            raise DataContractError(
+                f"artifact {artifact_id} lacks coverage metadata for requested bounds"
+            )
         lower, upper = pd.Timestamp(raw_range[0]), pd.Timestamp(raw_range[1])
         if start is not None and pd.Timestamp(start) < lower:
             raise DataContractError(

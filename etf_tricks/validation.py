@@ -73,6 +73,8 @@ def validate_result(
     ]
     daily = result.daily_etf.copy()
     holdings = result.daily_holdings.copy()
+    if "date" in holdings.columns:
+        holdings["date"] = pd.to_datetime(holdings["date"], errors="coerce")
 
     if not {"date", "etf_id"}.issubset(daily.columns):
         hard.append(ValidationIssue("missing_daily_schema", "daily_etf lacks date or etf_id"))
@@ -271,7 +273,9 @@ def validate_result(
             )
         )
 
-    trades = result.trades
+    trades = result.trades.copy()
+    if "date" in trades.columns:
+        trades["date"] = pd.to_datetime(trades["date"], errors="coerce")
     trade_fields = {"date", "etf_id", "executed_shares", "raw_close", "notional", "commission", "tax"}
     if not trades.empty and trade_fields.issubset(trades.columns):
         executed = pd.to_numeric(trades["executed_shares"], errors="coerce").abs()
@@ -330,6 +334,131 @@ def validate_result(
     else:
         hard.append(
             ValidationIssue("broken_cost_reconciliation", "daily cost fields are missing")
+        )
+
+    ledger_fields = {
+        "date", "etf_id", "ticker", "shares",
+        "synthetic_ca_share_delta", "synthetic_ca_cash",
+    }
+    trade_ledger_fields = {
+        "date", "etf_id", "ticker", "executed_shares", "notional", "commission", "tax",
+        "synthetic_ca_share_delta", "synthetic_ca_cash",
+    }
+    if ledger_fields.issubset(holdings.columns) and (
+        trades.empty or trade_ledger_fields.issubset(trades.columns)
+    ):
+        share_broken = False
+        cash_broken = False
+        holding_groups = {
+            (str(etf_id), pd.Timestamp(date)): group
+            for (etf_id, date), group in holdings.groupby(
+                ["etf_id", "date"], sort=False
+            )
+        }
+        trade_groups = (
+            {
+                (str(etf_id), pd.Timestamp(date)): group
+                for (etf_id, date), group in trades.groupby(
+                    ["etf_id", "date"], sort=False
+                )
+            }
+            if not trades.empty
+            else {}
+        )
+        for etf_id, daily_group in daily.groupby("etf_id", sort=False):
+            previous_shares: dict[str, int] = {}
+            previous_cash = initial_capital
+            for daily_row in daily_group.sort_values("date", kind="stable").itertuples():
+                date = daily_row.date
+                holding_day = holding_groups.get(
+                    (str(etf_id), pd.Timestamp(date)), holdings.iloc[:0]
+                )
+                trade_day = trade_groups.get(
+                    (str(etf_id), pd.Timestamp(date)), trades.iloc[:0]
+                )
+                current_shares = {
+                    str(row.ticker): int(row.shares)
+                    for row in holding_day.itertuples(index=False)
+                }
+                executed = (
+                    trade_day.groupby("ticker")["executed_shares"].sum().to_dict()
+                    if not trade_day.empty
+                    else {}
+                )
+                tickers = set(previous_shares) | set(current_shares) | {
+                    str(ticker) for ticker in executed
+                }
+                ca_cash = 0.0
+                for ticker in tickers:
+                    holding_evidence = holding_day[
+                        holding_day["ticker"].astype(str).eq(ticker)
+                    ]
+                    trade_evidence = trade_day[
+                        trade_day["ticker"].astype(str).eq(ticker)
+                    ]
+                    evidence = pd.concat(
+                        [
+                            holding_evidence[["synthetic_ca_share_delta", "synthetic_ca_cash"]],
+                            trade_evidence[["synthetic_ca_share_delta", "synthetic_ca_cash"]],
+                        ],
+                        ignore_index=True,
+                    )
+                    deltas = pd.to_numeric(
+                        evidence["synthetic_ca_share_delta"], errors="coerce"
+                    ).dropna().unique()
+                    cash_values = pd.to_numeric(
+                        evidence["synthetic_ca_cash"], errors="coerce"
+                    ).dropna().unique()
+                    if len(deltas) > 1 or len(cash_values) > 1:
+                        share_broken = True
+                        break
+                    share_delta = int(deltas[0]) if len(deltas) else 0
+                    ca_cash += float(cash_values[0]) if len(cash_values) else 0.0
+                    expected_shares = (
+                        previous_shares.get(ticker, 0)
+                        + share_delta
+                        + int(executed.get(ticker, 0))
+                    )
+                    if expected_shares != current_shares.get(ticker, 0):
+                        share_broken = True
+                        break
+                trade_cash_effect = 0.0
+                if not trade_day.empty:
+                    executed_values = pd.to_numeric(
+                        trade_day["executed_shares"], errors="coerce"
+                    )
+                    notionals = pd.to_numeric(trade_day["notional"], errors="coerce")
+                    fees = pd.to_numeric(trade_day["commission"], errors="coerce") + pd.to_numeric(
+                        trade_day["tax"], errors="coerce"
+                    )
+                    trade_cash_effect = float(
+                        np.where(executed_values.lt(0), notionals, -notionals).sum()
+                        - fees.sum()
+                    )
+                expected_cash = previous_cash + ca_cash + trade_cash_effect
+                if not np.isclose(expected_cash, float(daily_row.cash), rtol=0, atol=1e-6):
+                    cash_broken = True
+                previous_shares = current_shares
+                previous_cash = float(daily_row.cash)
+        if share_broken:
+            hard.append(
+                ValidationIssue(
+                    "broken_share_ledger",
+                    "daily shares do not reconcile to prior shares, corporate actions, and trades",
+                )
+            )
+        if cash_broken:
+            hard.append(
+                ValidationIssue(
+                    "broken_cash_ledger",
+                    "daily cash does not reconcile to prior cash, corporate actions, and trades",
+                )
+            )
+    else:
+        hard.append(
+            ValidationIssue(
+                "broken_share_ledger", "share or trade ledger fields are missing"
+            )
         )
 
     targets = result.monthly_targets

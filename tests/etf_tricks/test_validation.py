@@ -43,6 +43,8 @@ def _valid_result() -> ETFTrickResult:
             "raw_close": [100.0, 100.0],
             "market_value": [900.0, 900.0],
             "actual_weight": [0.9, 0.9],
+            "synthetic_ca_share_delta": [0, 0],
+            "synthetic_ca_cash": [0.0, 0.0],
             "stale_price_days": [0, 0],
         }
     )
@@ -67,7 +69,21 @@ def _valid_result() -> ETFTrickResult:
     return ETFTrickResult(
         daily_etf=daily,
         daily_holdings=holdings,
-        trades=pd.DataFrame(),
+        trades=pd.DataFrame(
+            {
+                "date": [DATES[0]],
+                "etf_id": ["momentum"],
+                "ticker": ["1101"],
+                "side": ["buy"],
+                "executed_shares": [9],
+                "raw_close": [100.0],
+                "notional": [900.0],
+                "commission": [0.0],
+                "tax": [0.0],
+                "synthetic_ca_share_delta": [0],
+                "synthetic_ca_cash": [0.0],
+            }
+        ),
         monthly_targets=targets,
         candidate_audit=candidates,
         diagnostics=pd.DataFrame(),
@@ -139,7 +155,7 @@ def test_operational_limitations_remain_warnings_not_hidden_failures():
     result.daily_holdings.loc[1, "stale_price_days"] = 2
     result.daily_etf.loc[1, "target_completion_ratio"] = 0.8
     result.daily_etf.loc[1, "missing_traded_value_count"] = 1
-    result.trades = pd.DataFrame(
+    result.trades = pd.concat([result.trades, pd.DataFrame(
         {
             "date": [DATES[1]],
             "etf_id": ["momentum"],
@@ -152,7 +168,7 @@ def test_operational_limitations_remain_warnings_not_hidden_failures():
                 "unfilled_shares": [2],
             "is_forced_delist_liquidation": [True],
         }
-    )
+    )], ignore_index=True)
     result.diagnostics = pd.DataFrame(
         {"diagnostic": ["zero_candidate_carry_forward"]}
     )
@@ -175,7 +191,7 @@ def test_operational_limitations_remain_warnings_not_hidden_failures():
 
 def test_zero_execution_with_missing_price_has_zero_notional() -> None:
     result = _valid_result()
-    result.trades = pd.DataFrame(
+    result.trades = pd.concat([result.trades, pd.DataFrame(
         {
             "date": [DATES[1]],
             "etf_id": ["momentum"],
@@ -186,11 +202,29 @@ def test_zero_execution_with_missing_price_has_zero_notional() -> None:
             "commission": [0.0],
             "tax": [0.0],
         }
-    )
+    )], ignore_index=True)
 
     report = validate_result(result, _calendar(), ["momentum"])
 
     assert "broken_trade_reconciliation" not in _codes(report)
+
+
+def test_coordinated_wealth_injection_fails_share_and_cash_ledger() -> None:
+    result = _valid_result()
+    result.daily_holdings.loc[1, ["shares", "market_value", "actual_weight"]] = [
+        10,
+        1_000.0,
+        1_000.0 / 1_100.0,
+    ]
+    result.daily_etf.loc[1, ["total_assets", "nav", "daily_return"]] = [
+        1_100.0,
+        110.0,
+        0.1,
+    ]
+
+    report = validate_result(result, _calendar(), ["momentum"])
+
+    assert "broken_share_ledger" in _codes(report)
 
 
 def test_selection_diagnostics_persist_shortage_and_zero_candidate_carry():
