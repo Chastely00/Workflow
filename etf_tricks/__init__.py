@@ -3,6 +3,7 @@ from .registry import ETF_IDS, get_etf_spec
 from .lab import ETFTrickLab
 from .result import ETFTrickResult
 from .allocation import AllocationPlan
+from .validation import ReadinessReport, validate_result
 
 __all__ = [
     "CostPolicy",
@@ -11,7 +12,9 @@ __all__ = [
     "ETFTrickLab",
     "ETFTrickResult",
     "AllocationPlan",
+    "ReadinessReport",
     "LiquidityPolicy",
     "RunConfig",
     "get_etf_spec",
+    "validate_result",
 ]
