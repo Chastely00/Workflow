@@ -8,23 +8,38 @@ Final acceptance window, not used for iterative profiling: `2005-01-01` through 
 
 ## Conclusion first
 
-`run_all()` 的慢點不是 `ETFTrickLab.from_data_analysts()`，也不是單純 parquet I/O。2024–2026 的 fresh baseline 花費 `286.996` 秒，前三大 bottleneck 是：
+優化已完成並通過代表區間與完整歷史 acceptance。保存的 fresh 2024–2026 oracle 為 `224.936` 秒；最終 commit 的相同 public API 為 `27.101` 秒，快 `8.30x`、wall time 減少 `87.95%`，達成 `<=30` 秒完成門檻，但尚未達到 `<=15` 秒 stretch goal。
 
-1. `PITFeatureEngine.compute()`：`180.871` 秒，63.02%；
-2. 13 個 ETF execution：合計 `67.037` 秒，23.36%；
-3. `UniverseEngine.select()`：`15.557` 秒，5.42%。
+已實作的架構為：
 
-`attach_etf_amount()` 另耗 `11.494` 秒。資料讀取只有 `6.454` 秒，但現行 gateway 將 21 年共 972 萬列價格與 917 萬列籌碼全部 materialize，再於 pandas 內過濾，profiling process 觀察到約 4.27 GB working set。這不是主要 wall-time bottleneck，卻是主要 memory bottleneck。
+- 有限暖機區間的 `date × ticker` 2D feature arrays，一次計算所有 formation dates；
+- 13 ETF 共用唯讀 prepared execution market，且只查正持倉、當月 schedule 與當月 targets；
+- 每個 formation 共用一份已驗證、已 merge、已計算 IX0001 分母與 base eligibility 的 Universe context；
+- ETF amount 改為 previous-date relational alignment，並用明確 sequential accumulator 保留原始浮點加總結果；
+- daily/chip bounded-read 下界會 clamp 到各 artifact manifest 的實際 coverage start。
 
-最有效的架構不是把整套流程盲目改成 GPU/3D tensor，而是：
+### Measured implementation outcome
 
-- 特徵層改為同質 `date × ticker` 2D arrays，一次處理所有 formation dates；
-- execution 保留時間軸 state machine，但共用 prepared market arrays，只處理正持股與當月 schedule tickers；
-- Universe 共用 master、IX0001 denominator 與 base eligibility；
-- ETF amount 使用一次 merge/alignment，移除逐日逐持股 MultiIndex lookup；
-- 最後才處理 partition pruning 與其他低占比項目。
+| Checkpoint | Wall seconds | Change versus fresh oracle |
+|---|---:|---:|
+| Fresh pre-change oracle | 224.936 | baseline |
+| Slice 1: batched features | 82.439 | -63.35% |
+| Slice 2: prepared execution | 40.102 | -82.17% |
+| Slice 3: prepared Universe | 32.177 | -85.69% |
+| Final verified commit | **27.101** | **-87.95%** |
 
-代表區間的初始完成預算為 `<=30` 秒（相對 baseline 至少 9.5x）；stretch goal 為 `<=15` 秒。這是實作 gate，不是目前已達成的結果。
+Post-Slice-2 的同一個 lightweight wrapper run 為 `39.697` 秒：features `7.371`、Universe `11.221`、execution `6.067`、ETF amount `7.128`、reads `5.137` 秒。後續 Universe shared context 將總時間降至 `32.177` 秒；真實 106,926 筆持倉的 ETF amount 單獨重算為 `0.373` 秒且與舊輸出 value-exact。Feature stage 的 `<=5` 秒子門檻尚未達成，後續最高價值項目是 sparse PIT fundamentals as-of preparation；overall completion gate 已達成。
+
+### Output equivalence
+
+- `daily_etf`、`daily_holdings`、`trades`、`monthly_targets`、`diagnostics` 與 fresh oracle 的 parquet SHA-256 完全相同；
+- 1,041,846 筆 `candidate_audit` schema、rows、NaN masks 與非風險欄位一致；差異只在 `vol_60d` 2,249 值及其 `signal_value` 173 值，最大絕對差 `8.881784197001252e-16`；
+- 3,967 筆代表區間 targets、ticker、rank、weight，以及所有 shares、cash、cost、NAV、ETF amount 都 exact；
+- 最終 scoped suite 為 `112 passed` with `-W error`，`pip check` 無 broken requirements。
+
+### One-time full-history acceptance
+
+`2005-01-01..2026-07-07` 最終 run 為 `164.883` 秒並回報 `READY`、13 ETF、0 hard failures。輸出包含 65,053 筆 Daily NAV、880,761 筆 holdings、883,593 筆 trades、30,988 筆 monthly targets 與 6,192,420 筆 candidate audit。各 ETF 依訊號實際可得時間開始，之後連續至 `2026-07-07`；最晚為 chip 的 `2015-01-05`，這是資料 availability 造成的 delayed inception，不是中途完全空倉。
 
 ## Baseline environment
 
@@ -362,22 +377,20 @@ Run focused tests, all `tests/etf_tricks/`, `tests/test_verify_environment.py`, 
 
 ### 目前可用
 
-- Complete authoritative optimization Prompt.
-- Fresh 2024–2026 wall-time baseline and stage timings.
-- Function-level root causes for features, execution, amount and selection.
-- Artifact read ledger and warm-up partition estimate.
-- Throwaway 2D feature prototype with exact 3,967 selection rows and ranks.
-- Prioritized, rollback-safe implementation roadmap.
+- Complete authoritative optimization Prompt, implementation plan and fresh persisted oracle.
+- Production batched feature, prepared execution, prepared Universe and relational ETF amount paths.
+- 2024–2026 public API in `27.101` seconds with 13 Daily NAV curves and exact downstream ledgers.
+- One-time 2005–2026 acceptance in `164.883` seconds with `READY` and no hard failures.
+- Notebook-facing `ETFTrickLab.run_all()`、result views、allocation/rebalance API 與六張 canonical schemas 均保留。
 
 ### 目前缺失／限制
 
-- No production optimization has been implemented.
-- The fresh 2024 canonical result tables were not persisted during the timing run; one final pre-change oracle run is required.
-- Peak memory is a sampled working-set observation, not a formal peak-RSS trace.
-- Float reductions in risk features and ETF amount need a governed exact/tolerance decision even though selections were exact.
-- Partition pruning is not authorized until physical validation semantics are preserved.
-- The final 2005–2026 run has deliberately not been repeated during this study.
+- Feature stage measured `7.371` seconds after Slice 2, above its internal `<=5` second sub-gate; sparse PIT sales/ROE as-of preparation remains optional follow-up work.
+- `candidate_audit` 的 `vol_60d`／low-volatility signal 有最大 `8.88e-16` ULP 差異，但 targets 與所有 downstream ledgers exact。
+- Peak memory remains a sampled working-set observation, not a formal peak-RSS trace.
+- Gateway 仍會在 filtering 前驗證並 materialize manifest 宣告的全部 partition；physical partition pruning 未在缺少 per-partition hash/row-count 契約時實作。
+- 完整歷史各 ETF 的 inception 取決於各 signal/source availability；要求在資料尚不存在前硬造持倉會構成不正確回填。
 
 ## Recommended next action
 
-Approve Slices 0–2 as the first implementation batch. They address 86.38% of measured wall time and have the strongest evidence. Re-profile before authorizing Slices 3–5; the bottleneck order will change substantially after feature and execution fixes.
+Merge the verified optimization branch. Future performance work should first optimize sparse PIT fundamentals and design per-partition validation metadata before physical partition pruning；不要以 GPU、float accounting、audit sampling 或 validation bypass 追求 stretch goal。
