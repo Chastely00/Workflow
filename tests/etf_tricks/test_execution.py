@@ -3,10 +3,12 @@ from __future__ import annotations
 from decimal import Decimal
 
 import pandas as pd
+import pandas.testing as pdt
 import pytest
 
 from etf_tricks.calendar import TradingCalendar
 from etf_tricks.execution import (
+    PreparedExecutionMarket,
     PortfolioExecutionEngine,
     apply_synthetic_corporate_action,
     round_half_away_from_zero,
@@ -95,6 +97,29 @@ def test_hand_checkable_three_day_self_financing_ledger():
     }
 
 
+def test_prepared_market_preserves_the_exact_hand_ledger():
+    dates = ["2025-01-02", "2025-01-03", "2025-01-06"]
+    engine = PortfolioExecutionEngine()
+    spec = get_etf_spec("momentum")
+    targets = _targets("2025-01", {"1101": 0.5, "1102": 0.5})
+    market = _market(dates, ["1101", "1102"])
+    calendar = _calendar(dates)
+
+    expected = engine.run(spec, targets, market, calendar, Decimal("1000"))
+    actual = engine.run(
+        spec,
+        targets,
+        engine.prepare_market(market),
+        calendar,
+        Decimal("1000"),
+    )
+
+    pdt.assert_frame_equal(actual.daily_etf, expected.daily_etf)
+    pdt.assert_frame_equal(actual.daily_holdings, expected.daily_holdings)
+    pdt.assert_frame_equal(actual.trades, expected.trades)
+    pdt.assert_frame_equal(actual.diagnostics, expected.diagnostics)
+
+
 def test_next_month_starts_from_actual_holdings_and_sells_before_buys():
     dates = [
         "2025-01-02",
@@ -127,6 +152,47 @@ def test_next_month_starts_from_actual_holdings_and_sells_before_buys():
     final = result.daily_holdings[result.daily_holdings["date"].eq(pd.Timestamp(dates[-1]))]
     assert final.set_index("ticker")["shares"].to_dict() == {"1102": 9}
     assert result.daily_etf.iloc[-1]["cash"] >= 0
+
+
+def test_fully_exited_ticker_is_not_looked_up_after_its_schedule_month(monkeypatch):
+    dates = [
+        "2025-01-31",
+        "2025-02-03",
+        "2025-02-04",
+        "2025-03-03",
+        "2025-03-04",
+    ]
+    targets = pd.concat(
+        [
+            _targets("2025-01", {"1101": 1.0}),
+            _targets("2025-02", {"1102": 1.0}),
+        ],
+        ignore_index=True,
+    )
+    engine = PortfolioExecutionEngine()
+    prepared = engine.prepare_market(_market(dates, ["1101", "1102"], close=10.0))
+    calls: list[tuple[pd.Timestamp, str]] = []
+    original = PreparedExecutionMarket.lookup
+
+    def recording_lookup(self, date, ticker):
+        calls.append((pd.Timestamp(date), str(ticker)))
+        return original(self, date, ticker)
+
+    monkeypatch.setattr(PreparedExecutionMarket, "lookup", recording_lookup)
+
+    result = engine.run(
+        get_etf_spec("momentum"),
+        targets,
+        prepared,
+        _calendar(dates),
+        Decimal("1000"),
+    )
+
+    march_calls = [ticker for date, ticker in calls if date.month == 3]
+    assert "1102" in march_calls
+    assert "1101" not in march_calls
+    final = result.daily_holdings[result.daily_holdings["date"].eq(pd.Timestamp(dates[-1]))]
+    assert final.set_index("ticker")["shares"].to_dict() == {"1102": 99}
 
 
 def test_synthetic_corporate_action_converts_integer_shares_and_fraction_to_cash():

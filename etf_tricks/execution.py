@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping
 from dataclasses import dataclass
 from decimal import Decimal, ROUND_FLOOR, ROUND_HALF_UP
+from types import MappingProxyType
 
 import numpy as np
 import pandas as pd
@@ -29,6 +31,28 @@ class EngineTables:
     daily_holdings: pd.DataFrame
     trades: pd.DataFrame
     diagnostics: pd.DataFrame
+
+
+@dataclass(frozen=True)
+class PreparedExecutionMarket:
+    date_positions: Mapping[pd.Timestamp, int]
+    ticker_positions: Mapping[str, int]
+    close: np.ndarray
+    adj_close: np.ndarray
+    traded_value: np.ndarray
+
+    def lookup(
+        self, date: pd.Timestamp, ticker: str
+    ) -> tuple[np.float64, np.float64, np.float64] | None:
+        date_position = self.date_positions.get(pd.Timestamp(date))
+        ticker_position = self.ticker_positions.get(str(ticker))
+        if date_position is None or ticker_position is None:
+            return None
+        return (
+            self.close[date_position, ticker_position],
+            self.adj_close[date_position, ticker_position],
+            self.traded_value[date_position, ticker_position],
+        )
 
 
 def round_half_away_from_zero(value: Decimal) -> int:
@@ -77,7 +101,7 @@ class PortfolioExecutionEngine:
         self,
         spec: ETFSpec,
         targets: pd.DataFrame,
-        market: pd.DataFrame,
+        market: pd.DataFrame | PreparedExecutionMarket,
         calendar: TradingCalendar,
         initial_capital: Decimal,
         *,
@@ -86,10 +110,27 @@ class PortfolioExecutionEngine:
         capital = Decimal(initial_capital)
         if not capital.is_finite() or capital <= 0:
             raise ExecutionInvariantError("initial_capital must be finite and positive")
-        market_frame = self._normalize_market(market)
+        prepared_market = (
+            market
+            if isinstance(market, PreparedExecutionMarket)
+            else self.prepare_market(market)
+        )
         target_frame = self._normalize_targets(targets, spec)
         delist_dates = self._delist_dates(security_master)
         days = tuple(pd.Timestamp(day) for day in calendar.days)
+        days_by_month: dict[pd.Period, list[pd.Timestamp]] = {}
+        for day in days:
+            days_by_month.setdefault(day.to_period("M"), []).append(day)
+        day_schedule = {
+            day: (month, index, len(month_days))
+            for month, month_days in days_by_month.items()
+            for index, day in enumerate(month_days, start=1)
+        }
+        targets_by_month = {
+            month: group
+            for month, group in target_frame.groupby("target_month", sort=False)
+        }
+        empty_targets = target_frame.iloc[:0]
 
         cash = capital
         shares: dict[str, int] = {}
@@ -109,21 +150,22 @@ class PortfolioExecutionEngine:
         trade_records: list[dict[str, object]] = []
         diagnostic_records: list[dict[str, object]] = []
 
-        indexed_market = market_frame.set_index(["date", "ticker"])
-
         for date in days:
-            month = date.to_period("M")
-            month_days = calendar.month(date)
-            k = month_days.index(date) + 1
-            current_tickers = set(shares) | set(schedule_start) | set(schedule_target)
-            month_targets = target_frame[target_frame["target_month"].eq(month)]
+            month, k, month_day_count = day_schedule[date]
+            current_tickers = {
+                ticker for ticker, quantity in shares.items() if quantity > 0
+            }
+            if schedule_month == month:
+                current_tickers.update(schedule_start)
+                current_tickers.update(schedule_target)
+            month_targets = targets_by_month.get(month, empty_targets)
             current_tickers |= set(month_targets["ticker"])
 
             ca_by_ticker: dict[str, CorporateActionConversion] = {}
             ca_share_delta: dict[str, int] = {}
             price_state: dict[str, tuple[Decimal | None, pd.Timestamp | None, int]] = {}
             for ticker in sorted(current_tickers):
-                row = self._market_row(indexed_market, date, ticker)
+                row = self._market_row(prepared_market, date, ticker)
                 current_close, current_adj = self._valid_pair(row)
                 previous = last_valid.get(ticker)
                 if current_close is not None and current_adj is not None:
@@ -211,7 +253,7 @@ class PortfolioExecutionEngine:
                             )
                         )
                 schedule_month = month
-                schedule_n = len(month_days)
+                schedule_n = month_day_count
                 backlog = {ticker: 0 for ticker in schedule_target}
 
             desired: dict[str, int] = {}
@@ -229,7 +271,7 @@ class PortfolioExecutionEngine:
             day_tax = forced_tax
             day_trades: list[dict[str, object]] = []
             sell_prices = {
-                ticker: self._current_trade_price(indexed_market, date, ticker)
+                ticker: self._current_trade_price(prepared_market, date, ticker)
                 for ticker, quantity in desired.items()
                 if quantity < 0
             }
@@ -251,7 +293,7 @@ class PortfolioExecutionEngine:
 
             buy_desired = {ticker: quantity for ticker, quantity in desired.items() if quantity > 0}
             buy_prices = {
-                ticker: self._current_trade_price(indexed_market, date, ticker)
+                ticker: self._current_trade_price(prepared_market, date, ticker)
                 for ticker in buy_desired
             }
             buy_quantities = self._allocate_buys(
@@ -391,6 +433,35 @@ class PortfolioExecutionEngine:
             pd.DataFrame(diagnostic_records),
         )
 
+    @classmethod
+    def prepare_market(cls, market: pd.DataFrame) -> PreparedExecutionMarket:
+        frame = cls._normalize_market(market)
+        dates = pd.DatetimeIndex(frame["date"].drop_duplicates())
+        tickers = pd.Index(frame["ticker"].drop_duplicates(), dtype=object)
+        date_codes = dates.get_indexer(frame["date"])
+        ticker_codes = tickers.get_indexer(frame["ticker"])
+        shape = (len(dates), len(tickers))
+
+        matrices = []
+        for column in ("close", "adj_close", "traded_value"):
+            matrix = np.full(shape, np.nan, dtype=np.float64)
+            matrix[date_codes, ticker_codes] = pd.to_numeric(
+                frame[column], errors="coerce"
+            ).to_numpy(dtype=np.float64)
+            matrix.setflags(write=False)
+            matrices.append(matrix)
+        return PreparedExecutionMarket(
+            date_positions=MappingProxyType(
+                {pd.Timestamp(date): index for index, date in enumerate(dates)}
+            ),
+            ticker_positions=MappingProxyType(
+                {str(ticker): index for index, ticker in enumerate(tickers)}
+            ),
+            close=matrices[0],
+            adj_close=matrices[1],
+            traded_value=matrices[2],
+        )
+
     @staticmethod
     def _normalize_market(market: pd.DataFrame) -> pd.DataFrame:
         required = {"date", "ticker", "close", "adj_close", "traded_value"}
@@ -441,11 +512,10 @@ class PortfolioExecutionEngine:
         return dict(zip(frame["ticker"], frame["delist_date"], strict=True))
 
     @staticmethod
-    def _market_row(indexed: pd.DataFrame, date: pd.Timestamp, ticker: str) -> pd.Series | None:
-        try:
-            return indexed.loc[(date, ticker)]
-        except KeyError:
-            return None
+    def _market_row(
+        market: PreparedExecutionMarket, date: pd.Timestamp, ticker: str
+    ) -> tuple[np.float64, np.float64, np.float64] | None:
+        return market.lookup(date, ticker)
 
     @staticmethod
     def _valid_decimal(value: object) -> Decimal | None:
@@ -456,19 +526,21 @@ class PortfolioExecutionEngine:
         return result if result.is_finite() and result > 0 else None
 
     @classmethod
-    def _valid_pair(cls, row: pd.Series | None) -> tuple[Decimal | None, Decimal | None]:
+    def _valid_pair(
+        cls, row: tuple[np.float64, np.float64, np.float64] | None
+    ) -> tuple[Decimal | None, Decimal | None]:
         if row is None:
             return None, None
-        close = cls._valid_decimal(row["close"])
-        adj = cls._valid_decimal(row["adj_close"])
+        close = cls._valid_decimal(row[0])
+        adj = cls._valid_decimal(row[1])
         return (close, adj) if close is not None and adj is not None else (None, None)
 
     @classmethod
     def _current_trade_price(
-        cls, indexed: pd.DataFrame, date: pd.Timestamp, ticker: str
+        cls, market: PreparedExecutionMarket, date: pd.Timestamp, ticker: str
     ) -> Decimal | None:
-        row = cls._market_row(indexed, date, ticker)
-        return None if row is None else cls._valid_decimal(row["close"])
+        row = cls._market_row(market, date, ticker)
+        return None if row is None else cls._valid_decimal(row[0])
 
     def _cost_or_zero(
         self, side: str, quantity: int, price: Decimal | None

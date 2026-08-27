@@ -157,6 +157,7 @@ class ETFTrickLab:
             daily["date"].between(run_days[0], run_days[-1])
         ].copy()
         engine = PortfolioExecutionEngine()
+        prepared_execution_market = engine.prepare_market(execution_market)
         engine_tables = []
         target_outputs = []
         for etf_id in ETF_IDS:
@@ -166,7 +167,7 @@ class ETFTrickLab:
                 engine.run(
                     get_etf_spec(etf_id),
                     target,
-                    execution_market,
+                    prepared_execution_market,
                     run_calendar,
                     Decimal(str(initial_capital)),
                     security_master=security_master,
