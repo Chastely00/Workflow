@@ -173,6 +173,19 @@ def test_filtered_scan_reads_only_ix0001_rows(manifest_fixture):
     assert frame["date"].between("2024-01-01", "2024-01-31").all()
 
 
+def test_filtered_scan_binds_dates_to_physical_string_schema(manifest_fixture):
+    gateway = DataGateway.from_data_analysts(manifest_fixture)
+    frame = gateway.scan_artifact(
+        "daily_price_volume",
+        columns=["date", "ticker"],
+        filters=[("ticker", "==", "IX0001")],
+        start=pd.Timestamp("2024-01-01"),
+        end=pd.Timestamp("2024-01-31"),
+    )
+    assert pd.api.types.is_datetime64_any_dtype(frame["date"])
+    assert frame["date"].min() >= pd.Timestamp("2024-01-01")
+
+
 def test_capability_audit_does_not_invent_unavailable_features(manifest_fixture):
     table = SourceCapabilityAuditor(
         DataGateway.from_data_analysts(manifest_fixture)
@@ -194,7 +207,7 @@ Expected: failures name the missing `scan_artifact` and `SourceCapabilityAuditor
 
 - [ ] **Step 3: Implement manifest-first predicate scans and capability evidence**
 
-`scan_artifact` must validate requested columns, coverage metadata, resolved paths inside `data_store`, and filtered logical-key uniqueness. It must never use undeclared files or silently fall back to a different store. The capability audit records required fields, observed artifact/columns, manifest hash, coverage, PIT policy, reason, and evidence timestamp; constituent daily OHLC must not qualify as true synthetic ETF Trick OHLC.
+`scan_artifact` must validate requested columns, coverage metadata, resolved paths inside `data_store`, and filtered logical-key uniqueness. It inspects each physical Arrow schema before constructing predicates: the current daily-price `date` field is an ISO string, so bounded predicates bind ISO strings at scan time and normalize/revalidate timestamps after scan. It must never use undeclared files or silently fall back to a different store. The capability audit records required fields, observed artifact/columns, manifest hash, selected-row content hash, coverage, PIT policy, revision status, reason, and evidence timestamp; constituent daily OHLC must not qualify as true synthetic ETF Trick OHLC.
 
 - [ ] **Step 4: Run tests and measure the real IX0001 bounded scan**
 
