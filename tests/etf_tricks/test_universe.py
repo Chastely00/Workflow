@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pandas as pd
+import pandas.testing as pdt
 import pytest
 
 from etf_tricks.calendar import TradingCalendar
@@ -181,3 +182,20 @@ def test_stock_and_index_windows_cannot_be_misaligned_or_zero():
     ix = _ix0001(total=0.0)
     with pytest.raises(ValueError, match="positive"):
         _select("momentum", _features(["1101"]), _master(["1101"]), ix)
+
+
+def test_prepared_formation_context_preserves_each_spec_selection():
+    tickers = [str(1101 + index) for index in range(7)]
+    features = _features(tickers)
+    master = _master(tickers)
+    engine = UniverseEngine(_calendar())
+    context = engine.prepare(FORMATION, features, master, _ix0001())
+
+    for etf_id in ("momentum", "market_cap"):
+        spec = get_etf_spec(etf_id)
+        expected = engine.select(spec, FORMATION, features, master, _ix0001())
+        actual = engine.select_prepared(spec, context)
+        assert actual.liquidity_threshold == expected.liquidity_threshold
+        assert actual.carry_forward == expected.carry_forward
+        pdt.assert_frame_equal(actual.candidates, expected.candidates)
+        pdt.assert_frame_equal(actual.targets, expected.targets)

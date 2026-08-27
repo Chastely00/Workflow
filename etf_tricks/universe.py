@@ -23,6 +23,13 @@ class SelectionResult:
     carry_forward: bool
 
 
+@dataclass(frozen=True)
+class PreparedUniverseContext:
+    formation_date: pd.Timestamp
+    ix0001_sum20: float
+    base_audit: pd.DataFrame
+
+
 class UniverseEngine:
     def __init__(self, calendar: TradingCalendar) -> None:
         self.calendar = calendar
@@ -35,17 +42,47 @@ class UniverseEngine:
         security_master: pd.DataFrame,
         ix0001: pd.DataFrame,
     ) -> SelectionResult:
+        if spec.signal_name not in features.columns:
+            raise UniverseContractError(
+                f"features missing columns: {[spec.signal_name]}"
+            )
+        context = self.prepare(formation_date, features, security_master, ix0001)
+        return self.select_prepared(spec, context)
+
+    def prepare(
+        self,
+        formation_date: str | pd.Timestamp,
+        features: pd.DataFrame,
+        security_master: pd.DataFrame,
+        ix0001: pd.DataFrame,
+    ) -> PreparedUniverseContext:
         formation = pd.Timestamp(formation_date)
-        feature_frame = self._validate_features(features, formation, spec)
+        feature_frame = self._validate_features(features, formation)
         master = self._validate_master(security_master)
         denominator = self._ix0001_sum20(ix0001, formation)
-
-        audit = feature_frame.merge(
+        base_audit = feature_frame.merge(
             master,
             on="ticker",
             how="left",
             validate="one_to_one",
         )
+        base_audit["exclusion_reason"] = ""
+        self._apply_base_eligibility(base_audit, formation)
+        base_audit = base_audit.rename(
+            columns={"exclusion_reason": "_base_exclusion_reason"}
+        )
+        return PreparedUniverseContext(formation, denominator, base_audit)
+
+    def select_prepared(
+        self, spec: ETFSpec, context: PreparedUniverseContext
+    ) -> SelectionResult:
+        formation = context.formation_date
+        if spec.signal_name not in context.base_audit.columns:
+            raise UniverseContractError(
+                f"features missing columns: {[spec.signal_name]}"
+            )
+        audit = context.base_audit.copy()
+        base_exclusion_reason = audit.pop("_base_exclusion_reason")
         audit.insert(0, "etf_id", spec.etf_id)
         audit["formation_date"] = formation
         audit["signal_value"] = pd.to_numeric(
@@ -53,11 +90,10 @@ class UniverseEngine:
         )
         audit["liquidity_ratio_vs_ix0001_20d"] = (
             pd.to_numeric(audit["stock_traded_value_sum20"], errors="coerce")
-            / denominator
+            / context.ix0001_sum20
         )
-        audit["exclusion_reason"] = ""
+        audit["exclusion_reason"] = base_exclusion_reason.to_numpy()
 
-        self._apply_base_eligibility(audit, formation)
         self._apply_industry_eligibility(audit, spec)
         self._exclude(
             audit,
@@ -150,7 +186,7 @@ class UniverseEngine:
 
     @staticmethod
     def _validate_features(
-        features: pd.DataFrame, formation: pd.Timestamp, spec: ETFSpec
+        features: pd.DataFrame, formation: pd.Timestamp
     ) -> pd.DataFrame:
         required = {
             "formation_date",
@@ -160,7 +196,6 @@ class UniverseEngine:
             "stock_traded_value_sum20",
             "adv20_observation_count",
             "market_cap",
-            spec.signal_name,
         }
         missing = sorted(required.difference(features.columns))
         if missing:

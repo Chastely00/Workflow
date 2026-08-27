@@ -12,6 +12,7 @@ import pytest
 from etf_tricks import ETF_IDS, ETFTrickLab
 from etf_tricks.features import PITFeatureEngine
 from etf_tricks.execution import PortfolioExecutionEngine
+from etf_tricks.universe import UniverseEngine
 
 
 def _publish(root: Path, artifact_id: str, frame: pd.DataFrame) -> None:
@@ -256,6 +257,26 @@ def test_run_all_prepares_the_execution_market_once_for_all_etfs(tmp_path, monke
     )
 
     assert len(calls) == 1
+
+
+def test_run_all_prepares_one_universe_context_per_formation(tmp_path, monkeypatch):
+    start, end = _data_analysts_fixture(tmp_path)
+    calls: list[pd.Timestamp] = []
+    original = UniverseEngine.prepare
+
+    def recording_prepare(self, formation_date, features, security_master, ix0001):
+        calls.append(pd.Timestamp(formation_date))
+        return original(self, formation_date, features, security_master, ix0001)
+
+    monkeypatch.setattr(UniverseEngine, "prepare", recording_prepare)
+
+    ETFTrickLab.from_data_analysts(tmp_path).run_all(
+        start_date=start,
+        end_date=end,
+        initial_capital=Decimal("1234567"),
+    )
+
+    assert calls == [pd.Timestamp("2025-01-31")]
 
 
 def test_run_all_rejects_physically_truncated_trading_calendar(tmp_path):

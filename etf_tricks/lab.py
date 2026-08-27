@@ -139,11 +139,12 @@ class ETFTrickLab:
         features_by_date = feature_engine.compute_many(formation_dates)
         for formation in formation_dates:
             features = features_by_date[formation]
+            universe_context = universe_engine.prepare(
+                formation, features, security_master, ix0001
+            )
             for etf_id in ETF_IDS:
                 spec = get_etf_spec(etf_id)
-                selection = universe_engine.select(
-                    spec, formation, features, security_master, ix0001
-                )
+                selection = universe_engine.select_prepared(spec, universe_context)
                 candidate_frames.append(selection.candidates)
                 if selection.targets.empty:
                     continue
