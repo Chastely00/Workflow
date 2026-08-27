@@ -66,16 +66,25 @@ class ETFTrickLab:
                 "financial_statement_raw", latest_formation, 120
             )
 
+        calendar_days = pd.DatetimeIndex(full_calendar.days)
+        earliest_formation_position = int(
+            calendar_days.get_loc(min(formation_dates))
+        )
+        feature_warmup_start = calendar_days[
+            max(0, earliest_formation_position - 252)
+        ]
+
         daily_columns = [
             "date", "ticker", "close", "adj_close", "volume", "traded_value",
             "turnover", "market_cap",
         ]
         daily = self.gateway.read_artifact(
-            "daily_price_volume", columns=daily_columns, end=end
+            "daily_price_volume", columns=daily_columns, start=feature_warmup_start, end=end
         )
         chip = self.gateway.read_artifact(
             "daily_chip",
             columns=["date", "ticker", "qfii_examt", "fund_examt", "dlrp_examt"],
+            start=feature_warmup_start,
             end=end,
         )
         sales = self.gateway.read_artifact(
@@ -127,8 +136,9 @@ class ETFTrickLab:
         )
         targets_by_etf: dict[str, list[pd.DataFrame]] = {etf_id: [] for etf_id in ETF_IDS}
         candidate_frames: list[pd.DataFrame] = []
+        features_by_date = feature_engine.compute_many(formation_dates)
         for formation in formation_dates:
-            features = feature_engine.compute(formation)
+            features = features_by_date[formation]
             for etf_id in ETF_IDS:
                 spec = get_etf_spec(etf_id)
                 selection = universe_engine.select(

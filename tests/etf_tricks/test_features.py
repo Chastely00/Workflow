@@ -265,3 +265,61 @@ def test_valid_calendar_formation_without_daily_rows_returns_typed_empty_frame()
         "r18",
         "r103",
     }.issubset(frame.columns)
+
+
+def test_compute_many_builds_two_pit_feature_snapshots_and_ignores_nontrading_rows():
+    calendar, panels, final_formation = _panels()
+    prior_formation = pd.Timestamp(calendar.days[-2])
+    nontrading_date = pd.Timestamp("2025-08-23")
+    panels["daily_price_volume"] = pd.concat(
+        [
+            panels["daily_price_volume"],
+            pd.DataFrame(
+                [
+                    {
+                        "date": nontrading_date,
+                        "ticker": "1101",
+                        "close": 999_999.0,
+                        "adj_close": 999_999.0,
+                        "volume": 999_999.0,
+                        "traded_value": 999_999_000_000.0,
+                        "turnover": 999.0,
+                        "market_cap": 999_999_000_000.0,
+                    }
+                ]
+            ),
+        ],
+        ignore_index=True,
+    )
+    panels["daily_chip"] = pd.concat(
+        [
+            panels["daily_chip"],
+            pd.DataFrame(
+                [
+                    {
+                        "date": nontrading_date,
+                        "ticker": "1101",
+                        "qfii_examt": 999_999.0,
+                        "fund_examt": 999_999.0,
+                        "dlrp_examt": 999_999.0,
+                    }
+                ]
+            ),
+        ],
+        ignore_index=True,
+    )
+
+    snapshots = PITFeatureEngine(calendar, panels).compute_many(
+        (prior_formation, final_formation)
+    )
+
+    assert tuple(snapshots) == (prior_formation, final_formation)
+    prior = snapshots[prior_formation].set_index("ticker")
+    final = snapshots[final_formation].set_index("ticker")
+    assert prior.index.tolist() == ["1101", "1102"]
+    assert final.index.tolist() == ["1101", "1102"]
+    assert prior.loc["1101", "adv20_observation_count"] == 20
+    assert final.loc["1101", "adv20"] == 290.5 * 1_000_000
+    assert final.loc["1101", "chip_20d"] == 50.0
+    assert final.loc["1101", "momentum_recent_date"] == calendar.days[-22]
+    assert final.loc["1101", "momentum_old_date"] == calendar.days[-253]

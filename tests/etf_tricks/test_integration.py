@@ -10,6 +10,7 @@ import pandas as pd
 import pytest
 
 from etf_tricks import ETF_IDS, ETFTrickLab
+from etf_tricks.features import PITFeatureEngine
 
 
 def _publish(root: Path, artifact_id: str, frame: pd.DataFrame) -> None:
@@ -208,6 +209,28 @@ def test_manifest_backed_public_api_produces_13_continuous_curves(tmp_path):
             end_date=end,
             initial_capital=Decimal("1234567"),
         )
+
+
+def test_run_all_computes_all_formation_features_in_one_batch(tmp_path, monkeypatch):
+    start, end = _data_analysts_fixture(tmp_path)
+    calls: list[tuple[pd.Timestamp, ...]] = []
+    original = PITFeatureEngine.compute_many
+
+    def recording_compute_many(self, formation_dates):
+        normalized = tuple(pd.Timestamp(value) for value in formation_dates)
+        calls.append(normalized)
+        return original(self, normalized)
+
+    monkeypatch.setattr(PITFeatureEngine, "compute_many", recording_compute_many)
+
+    ETFTrickLab.from_data_analysts(tmp_path).run_all(
+        start_date=start,
+        end_date=end,
+        initial_capital=Decimal("1234567"),
+    )
+
+    assert len(calls) == 1
+    assert calls[0] == (pd.Timestamp("2025-01-31"),)
 
 
 def test_run_all_rejects_physically_truncated_trading_calendar(tmp_path):
