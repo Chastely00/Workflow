@@ -20,7 +20,7 @@
 
 ## Final artifact
 
-目錄：`C:\Users\ChastLai\Documents\量化交易Workflow\.worktrees\etf-tricks-engine\.artifacts\etf_tricks\full-history-20050103-20260707-v5`
+目錄：`C:\Users\ChastLai\Documents\量化交易Workflow\.artifacts\etf_tricks\full-history-20050103-20260707-v5`
 
 | Table | Rows | SHA-256 |
 |---|---:|---|
