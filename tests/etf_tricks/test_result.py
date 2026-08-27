@@ -130,6 +130,44 @@ def test_missing_stock_amount_contributes_zero_and_sets_quality_flag():
     assert bool(calculated.iloc[1]["has_data_quality_flag"]) is True
 
 
+def test_etf_amount_aligns_tables_without_iterating_daily_rows(monkeypatch):
+    dates = pd.to_datetime(["2025-01-02", "2025-01-03"])
+    daily = pd.DataFrame(
+        {
+            "date": dates,
+            "etf_id": "momentum",
+            "nav": [100.0, 101.0],
+            "daily_return": [float("nan"), 0.01],
+            "has_data_quality_flag": False,
+        }
+    )
+    holdings = pd.DataFrame(
+        [
+            {
+                "date": dates[0],
+                "etf_id": "momentum",
+                "ticker": "1101",
+                "actual_weight": 0.75,
+            }
+        ]
+    )
+    market = pd.DataFrame(
+        [
+            {"date": dates[1], "ticker": "1101", "traded_value": 2_000.0},
+        ]
+    )
+
+    def reject_row_iteration(*args, **kwargs):
+        raise AssertionError("ETF amount must use relational alignment, not iterrows")
+
+    monkeypatch.setattr(pd.DataFrame, "iterrows", reject_row_iteration)
+
+    calculated = attach_etf_amount(daily, holdings, market)
+
+    assert calculated["etf_amount"].tolist() == [0.0, 1_500.0]
+    assert calculated["missing_traded_value_count"].tolist() == [0, 0]
+
+
 def test_notebook_facade_binds_one_explicit_data_analysts_root(tmp_path):
     lab = ETFTrickLab.from_data_analysts(tmp_path)
     assert lab.gateway.data_analysts_root == tmp_path.resolve()

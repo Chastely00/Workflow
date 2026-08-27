@@ -12,6 +12,13 @@ import pandas as pd
 from .registry import ETF_IDS
 
 
+def _sequential_float_sum(values: pd.Series) -> float:
+    total = 0.0
+    for value in values:
+        total += float(value)
+    return total
+
+
 def attach_etf_amount(
     daily_etf: pd.DataFrame,
     daily_holdings: pd.DataFrame,
@@ -44,38 +51,61 @@ def attach_etf_amount(
     if amounts.duplicated(["date", "ticker"]).any():
         raise ValueError("market contains duplicate date-ticker keys")
 
-    amount_lookup = amounts.set_index(["date", "ticker"])["traded_value"]
-    holdings_lookup = {
-        key: group for key, group in holdings.groupby(["date", "etf_id"], sort=False)
-    }
-    output_amount: dict[int, float] = {}
-    missing_counts: dict[int, int] = {}
-    for etf_id, group in daily.groupby("etf_id", sort=False):
-        ordered = group.sort_values("date", kind="stable")
-        previous_date: pd.Timestamp | None = None
-        for index, row in ordered.iterrows():
-            total = 0.0
-            missing_count = 0
-            if previous_date is not None:
-                previous = holdings_lookup.get((previous_date, etf_id), pd.DataFrame())
-                for holding in previous.itertuples(index=False):
-                    weight = float(holding.actual_weight)
-                    if not np.isfinite(weight) or weight < 0:
-                        raise ValueError("daily_holdings actual_weight must be finite and non-negative")
-                    try:
-                        value = float(amount_lookup.loc[(row.date, str(holding.ticker))])
-                    except KeyError:
-                        value = float("nan")
-                    if not np.isfinite(value) or value < 0:
-                        missing_count += 1
-                    else:
-                        total += value * weight
-            output_amount[index] = total
-            missing_counts[index] = missing_count
-            previous_date = row.date
+    if daily.empty:
+        daily["etf_amount"] = pd.Series(dtype="float64")
+        daily["missing_traded_value_count"] = pd.Series(dtype="int64")
+    else:
+        daily["_result_row"] = np.arange(len(daily), dtype=np.int64)
+        pairs = daily.loc[:, ["_result_row", "date", "etf_id"]].sort_values(
+            ["etf_id", "date"], kind="stable"
+        )
+        pairs["holding_date"] = pairs.groupby("etf_id", sort=False)["date"].shift()
+        previous_holdings = holdings.loc[
+            :, ["date", "etf_id", "ticker", "actual_weight"]
+        ].rename(columns={"date": "holding_date"})
+        aligned = pairs.merge(
+            previous_holdings,
+            on=["holding_date", "etf_id"],
+            how="left",
+            sort=False,
+            validate="one_to_many",
+        )
+        aligned = aligned.merge(
+            amounts.loc[:, ["date", "ticker", "traded_value"]],
+            on=["date", "ticker"],
+            how="left",
+            sort=False,
+            validate="many_to_one",
+        )
 
-    daily["etf_amount"] = pd.Series(output_amount)
-    daily["missing_traded_value_count"] = pd.Series(missing_counts, dtype="int64")
+        has_holding = aligned["ticker"].notna()
+        weights = pd.to_numeric(aligned["actual_weight"], errors="coerce")
+        invalid_weight = has_holding & (~np.isfinite(weights) | weights.lt(0))
+        if invalid_weight.any():
+            raise ValueError(
+                "daily_holdings actual_weight must be finite and non-negative"
+            )
+        traded_values = pd.to_numeric(aligned["traded_value"], errors="coerce")
+        missing_amount = has_holding & (
+            ~np.isfinite(traded_values) | traded_values.lt(0)
+        )
+        aligned["_missing_amount"] = missing_amount.astype("int64")
+        aligned["_amount_contribution"] = np.where(
+            has_holding & ~missing_amount,
+            traded_values * weights,
+            0.0,
+        )
+
+        grouped = aligned.groupby("_result_row", sort=False)
+        amount_by_row = grouped["_amount_contribution"].agg(
+            _sequential_float_sum
+        )
+        missing_by_row = grouped["_missing_amount"].sum()
+        daily["etf_amount"] = daily["_result_row"].map(amount_by_row)
+        daily["missing_traded_value_count"] = (
+            daily["_result_row"].map(missing_by_row).astype("int64")
+        )
+        daily = daily.drop(columns="_result_row")
     if "has_data_quality_flag" not in daily.columns:
         daily["has_data_quality_flag"] = False
     daily["has_data_quality_flag"] = (
