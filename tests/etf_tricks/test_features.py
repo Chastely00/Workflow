@@ -323,3 +323,41 @@ def test_compute_many_builds_two_pit_feature_snapshots_and_ignores_nontrading_ro
     assert final.loc["1101", "chip_20d"] == 50.0
     assert final.loc["1101", "momentum_recent_date"] == calendar.days[-22]
     assert final.loc["1101", "momentum_old_date"] == calendar.days[-253]
+
+
+def test_compute_many_preserves_scalar_nonfinite_value_semantics():
+    calendar, panels, formation = _panels()
+    daily = panels["daily_price_volume"]
+    ticker_1101 = daily["ticker"].eq("1101")
+    ticker_1102 = daily["ticker"].eq("1102")
+    formation_mask = daily["date"].eq(formation)
+    daily.loc[
+        ticker_1101 & formation_mask,
+        ["close", "adj_close", "market_cap", "traded_value", "turnover", "volume"],
+    ] = float("inf")
+    daily.loc[
+        ticker_1101 & daily["date"].eq(calendar.days[-22]), "adj_close"
+    ] = float("inf")
+    daily.loc[
+        ticker_1102 & daily["date"].eq(calendar.days[-70]), "volume"
+    ] = float("-inf")
+    daily.loc[
+        ticker_1102 & formation_mask,
+        ["market_cap", "traded_value", "turnover"],
+    ] = float("-inf")
+    daily.loc[
+        ticker_1102 & daily["date"].eq(calendar.days[-253]), "adj_close"
+    ] = float("-inf")
+    chip = panels["daily_chip"]
+    chip.loc[
+        chip["ticker"].eq("1101") & chip["date"].eq(formation), "qfii_examt"
+    ] = float("inf")
+    chip.loc[
+        chip["ticker"].eq("1102") & chip["date"].eq(formation), "fund_examt"
+    ] = float("-inf")
+
+    engine = PITFeatureEngine(calendar, panels)
+    expected = engine._compute_scalar(formation)
+    actual = engine.compute_many((formation,))[formation]
+
+    pdt.assert_frame_equal(actual, expected)

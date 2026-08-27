@@ -230,11 +230,12 @@ class PITFeatureEngine:
             last20_start = max(0, int(position) - 19)
             last20 = slice(last20_start, int(position) + 1)
             traded20 = traded_value[last20, selected]
-            traded_count = np.isfinite(traded20).sum(axis=0)
+            traded_count = (~np.isnan(traded20)).sum(axis=0)
             turnover20 = turnover[last20, selected]
-            turnover_count = np.isfinite(turnover20).sum(axis=0)
-            traded_sum = np.nansum(traded20, axis=0)
-            turnover_sum = np.nansum(turnover20, axis=0)
+            turnover_count = (~np.isnan(turnover20)).sum(axis=0)
+            with np.errstate(invalid="ignore"):
+                traded_sum = np.nansum(traded20, axis=0)
+                turnover_sum = np.nansum(turnover20, axis=0)
             traded_mean = np.divide(
                 traded_sum,
                 traded_count,
@@ -256,20 +257,21 @@ class PITFeatureEngine:
             if volume80.shape[0] == 80:
                 denominator = volume80[:60]
                 numerator = volume80[60:]
-                denominator_count = np.isfinite(denominator).sum(axis=0)
-                numerator_count = np.isfinite(numerator).sum(axis=0)
-                denominator_mean = np.divide(
-                    np.nansum(denominator, axis=0),
-                    denominator_count,
-                    out=np.full(selected.size, np.nan),
-                    where=denominator_count > 0,
-                )
-                numerator_mean = np.divide(
-                    np.nansum(numerator, axis=0),
-                    numerator_count,
-                    out=np.full(selected.size, np.nan),
-                    where=numerator_count > 0,
-                )
+                denominator_count = (~np.isnan(denominator)).sum(axis=0)
+                numerator_count = (~np.isnan(numerator)).sum(axis=0)
+                with np.errstate(invalid="ignore"):
+                    denominator_mean = np.divide(
+                        np.nansum(denominator, axis=0),
+                        denominator_count,
+                        out=np.full(selected.size, np.nan),
+                        where=denominator_count > 0,
+                    )
+                    numerator_mean = np.divide(
+                        np.nansum(numerator, axis=0),
+                        numerator_count,
+                        out=np.full(selected.size, np.nan),
+                        where=numerator_count > 0,
+                    )
                 denominator_mean[denominator_count != 60] = np.nan
                 numerator_mean[numerator_count != 20] = np.nan
                 with np.errstate(divide="ignore", invalid="ignore"):
@@ -289,20 +291,25 @@ class PITFeatureEngine:
             chip20 = chip_components[
                 :, last20_start : int(position) + 1, selected
             ]
-            chip_complete = np.isfinite(chip20).all(axis=0)
+            chip_complete = (~np.isnan(chip20)).all(axis=0)
             chip_count = chip_complete.sum(axis=0)
             chip_signal = np.full(selected.size, np.nan)
             if chip20.shape[1] == 20:
                 chip_valid = chip_count == 20
-                chip_signal[chip_valid] = chip20[:, :, chip_valid].sum(axis=(0, 1))
+                with np.errstate(invalid="ignore"):
+                    chip_signal[chip_valid] = chip20[:, :, chip_valid].sum(
+                        axis=(0, 1)
+                    )
 
             if absolute_position >= 252:
                 recent_absolute = int(absolute_position) - 21
                 old_absolute = int(absolute_position) - 252
                 recent_position = recent_absolute - warmup_start
                 old_position = old_absolute - warmup_start
-                recent_price = adjusted[recent_position, selected]
-                old_price = adjusted[old_position, selected]
+                recent_price = adjusted[recent_position, selected].copy()
+                old_price = adjusted[old_position, selected].copy()
+                recent_price[~np.isfinite(recent_price)] = np.nan
+                old_price[~np.isfinite(old_price)] = np.nan
                 with np.errstate(divide="ignore", invalid="ignore"):
                     momentum = recent_price / old_price - 1.0
                 momentum[(recent_price <= 0) | (old_price <= 0)] = np.nan
@@ -342,13 +349,19 @@ class PITFeatureEngine:
                 sortino = return_mean / downside * math.sqrt(252)
             sortino[(return_count != 60) | ~(downside > 0)] = np.nan
 
+            formation_close = close[position, selected].copy()
+            formation_adjusted = adjusted[position, selected].copy()
+            formation_market_cap = market_cap[position, selected].copy()
+            formation_close[~np.isfinite(formation_close)] = np.nan
+            formation_adjusted[~np.isfinite(formation_adjusted)] = np.nan
+            formation_market_cap[~np.isfinite(formation_market_cap)] = np.nan
             frame = pd.DataFrame(
                 {
                     "formation_date": formation,
                     "ticker": selected_tickers.to_numpy(),
-                    "close": close[position, selected],
-                    "adj_close": adjusted[position, selected],
-                    "market_cap": market_cap[position, selected],
+                    "close": formation_close,
+                    "adj_close": formation_adjusted,
+                    "market_cap": formation_market_cap,
                     "adv20_observation_count": traded_count,
                     "adv20": traded_mean,
                     "stock_traded_value_sum20": traded_sum,

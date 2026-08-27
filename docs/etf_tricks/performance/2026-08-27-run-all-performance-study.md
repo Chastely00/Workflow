@@ -28,6 +28,8 @@ Final acceptance window, not used for iterative profiling: `2005-01-01` through 
 | Slice 3: prepared Universe | 32.177 | -85.69% |
 | Final verified commit | **27.101** | **-87.95%** |
 
+合併前 review 修正 nonfinite scalar/batch 邊界後的 fresh run 為 `25.604` 秒；文件仍以較保守的 `27.101` 秒作 completion budget 證據。
+
 Post-Slice-2 的同一個 lightweight wrapper run 為 `39.697` 秒：features `7.371`、Universe `11.221`、execution `6.067`、ETF amount `7.128`、reads `5.137` 秒。後續 Universe shared context 將總時間降至 `32.177` 秒；真實 106,926 筆持倉的 ETF amount 單獨重算為 `0.373` 秒且與舊輸出 value-exact。Feature stage 的 `<=5` 秒子門檻尚未達成，後續最高價值項目是 sparse PIT fundamentals as-of preparation；overall completion gate 已達成。
 
 ### Output equivalence
@@ -35,7 +37,7 @@ Post-Slice-2 的同一個 lightweight wrapper run 為 `39.697` 秒：features `7
 - `daily_etf`、`daily_holdings`、`trades`、`monthly_targets`、`diagnostics` 與 fresh oracle 的 parquet SHA-256 完全相同；
 - 1,041,846 筆 `candidate_audit` schema、rows、NaN masks 與非風險欄位一致；差異只在 `vol_60d` 2,249 值及其 `signal_value` 173 值，最大絕對差 `8.881784197001252e-16`；
 - 3,967 筆代表區間 targets、ticker、rank、weight，以及所有 shares、cash、cost、NAV、ETF amount 都 exact；
-- 最終 scoped suite 為 `112 passed` with `-W error`，`pip check` 無 broken requirements。
+- 最終 scoped suite 為 `113 passed` with `-W error`，`pip check` 無 broken requirements；新增 `±inf` scalar-vs-batch mutation coverage。
 
 ### One-time full-history acceptance
 
