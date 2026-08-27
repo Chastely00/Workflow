@@ -78,13 +78,21 @@ class ETFTrickLab:
             "date", "ticker", "close", "adj_close", "volume", "traded_value",
             "turnover", "market_cap",
         ]
+        daily_read_start = max(
+            feature_warmup_start,
+            self._artifact_coverage_start("daily_price_volume"),
+        )
+        chip_read_start = max(
+            feature_warmup_start,
+            self._artifact_coverage_start("daily_chip"),
+        )
         daily = self.gateway.read_artifact(
-            "daily_price_volume", columns=daily_columns, start=feature_warmup_start, end=end
+            "daily_price_volume", columns=daily_columns, start=daily_read_start, end=end
         )
         chip = self.gateway.read_artifact(
             "daily_chip",
             columns=["date", "ticker", "qfii_examt", "fund_examt", "dlrp_examt"],
-            start=feature_warmup_start,
+            start=chip_read_start,
             end=end,
         )
         sales = self.gateway.read_artifact(
@@ -404,6 +412,18 @@ class ETFTrickLab:
                 f"{artifact_id} availability coverage is {age} days stale at formation_date "
                 f"{formation_date.date()}, limit={max_staleness_days}"
             )
+
+    def _artifact_coverage_start(self, artifact_id: str) -> pd.Timestamp:
+        manifest = self.gateway.load_manifest(artifact_id)
+        raw_range = manifest.get("date_range") or manifest.get(
+            "availability_date_range"
+        )
+        if not isinstance(raw_range, list) or len(raw_range) != 2:
+            raise ValueError(f"{artifact_id} manifest lacks coverage metadata")
+        lower = pd.Timestamp(raw_range[0])
+        if pd.isna(lower):
+            raise ValueError(f"{artifact_id} manifest has invalid coverage start")
+        return lower
 
     @staticmethod
     def _assert_calendar_covers(

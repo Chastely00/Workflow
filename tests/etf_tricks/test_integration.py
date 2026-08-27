@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+import etf_tricks.lab as lab_module
 from etf_tricks import ETF_IDS, ETFTrickLab
 from etf_tricks.features import PITFeatureEngine
 from etf_tricks.execution import PortfolioExecutionEngine
@@ -300,3 +301,38 @@ def test_run_all_rejects_physically_truncated_trading_calendar(tmp_path):
             end_date=end,
             initial_capital=Decimal("1234567"),
         )
+
+
+def test_run_all_clamps_feature_warmup_to_each_artifact_coverage_start(
+    tmp_path, monkeypatch
+):
+    start, end = _data_analysts_fixture(tmp_path)
+    monkeypatch.setattr(lab_module, "ETF_IDS", ("market_cap",))
+    calculated_warmup_start = pd.Timestamp("2024-02-14")
+    for artifact_id in ("daily_price_volume", "daily_chip"):
+        parquet_path = (
+            tmp_path / "data_store" / "canonical" / f"{artifact_id}.parquet"
+        )
+        frame = pd.read_parquet(parquet_path)
+        frame = frame[
+            pd.to_datetime(frame["date"]).gt(calculated_warmup_start)
+        ].copy()
+        frame.to_parquet(parquet_path, index=False)
+        manifest_path = (
+            tmp_path / "data_store" / "manifests" / f"{artifact_id}.json"
+        )
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["row_count"] = len(frame)
+        manifest["date_range"] = [
+            str(pd.to_datetime(frame["date"]).min().date()),
+            str(pd.to_datetime(frame["date"]).max().date()),
+        ]
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    result = ETFTrickLab.from_data_analysts(tmp_path).run_all(
+        start_date=start,
+        end_date=end,
+        initial_capital=Decimal("1234567"),
+    )
+
+    assert result.daily_etf["etf_id"].unique().tolist() == ["market_cap"]
