@@ -297,8 +297,10 @@ class PITFeatureEngine:
             if chip20.shape[1] == 20:
                 chip_valid = chip_count == 20
                 with np.errstate(invalid="ignore"):
-                    chip_signal[chip_valid] = chip20[:, :, chip_valid].sum(
-                        axis=(0, 1)
+                    daily_chip_sum = chip20[:, :, chip_valid].sum(axis=0)
+                    chip_signal[chip_valid] = np.nansum(
+                        daily_chip_sum,
+                        axis=0,
                     )
 
             if absolute_position >= 252:

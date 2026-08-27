@@ -353,11 +353,15 @@ def test_compute_many_preserves_scalar_nonfinite_value_semantics():
         chip["ticker"].eq("1101") & chip["date"].eq(formation), "qfii_examt"
     ] = float("inf")
     chip.loc[
+        chip["ticker"].eq("1101") & chip["date"].eq(formation), "fund_examt"
+    ] = float("-inf")
+    chip.loc[
         chip["ticker"].eq("1102") & chip["date"].eq(formation), "fund_examt"
     ] = float("-inf")
 
     engine = PITFeatureEngine(calendar, panels)
-    expected = engine._compute_scalar(formation)
+    with np.errstate(invalid="ignore"):
+        expected = engine._compute_scalar(formation)
     actual = engine.compute_many((formation,))[formation]
 
     pdt.assert_frame_equal(actual, expected)
