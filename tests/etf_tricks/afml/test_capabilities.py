@@ -99,3 +99,21 @@ def test_current_snapshot_manifest_is_partial_even_when_ix_rows_exist(
     assert ix["status"] == "PARTIAL_COVERAGE"
     assert ix["revision_status"] == "PIT_REVISION_UNVERIFIED"
     assert "revision" in ix["reason"].lower()
+
+
+def test_declared_availability_field_must_exist_in_schema(capability_root: Path) -> None:
+    manifest_path = (
+        capability_root / "data_store" / "manifests" / "daily_price_volume.json"
+    )
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["availability_field"] = "missing_available_at"
+    manifest["revision_policy"] = "append_only_vintages"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    table = SourceCapabilityAuditor(
+        DataGateway.from_data_analysts(capability_root)
+    ).audit()
+    ix = table.set_index("feature_id").loc["IX0001"]
+
+    assert ix["status"] == "PARTIAL_COVERAGE"
+    assert ix["revision_status"] == "PIT_REVISION_UNVERIFIED"

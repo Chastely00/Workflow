@@ -43,9 +43,9 @@ class SourceCapabilityAuditor:
     def __init__(self, gateway: DataGateway) -> None:
         self.gateway = gateway
 
-    def audit(self) -> pd.DataFrame:
+    def audit(self, *, ix0001: pd.DataFrame | None = None) -> pd.DataFrame:
         evidence_at = pd.Timestamp.now(tz="UTC").isoformat()
-        rows = [self._audit_ix0001(evidence_at)]
+        rows = [self._audit_ix0001(evidence_at, ix0001=ix0001)]
         for feature_id, required_fields, reason in _UNAVAILABLE_REQUIREMENTS:
             rows.append(
                 {
@@ -67,13 +67,22 @@ class SourceCapabilityAuditor:
             )
         return pd.DataFrame(rows)
 
-    def _audit_ix0001(self, evidence_at: str) -> dict[str, object]:
+    def _audit_ix0001(
+        self,
+        evidence_at: str,
+        *,
+        ix0001: pd.DataFrame | None,
+    ) -> dict[str, object]:
         manifest = self.gateway.load_manifest("daily_price_volume")
         required = ("date", "ticker", "close", "traded_value")
-        frame = self.gateway.scan_artifact(
-            "daily_price_volume",
-            columns=required,
-            filters=(("ticker", "==", "IX0001"),),
+        frame = (
+            ix0001.loc[:, required].copy()
+            if ix0001 is not None
+            else self.gateway.scan_artifact(
+                "daily_price_volume",
+                columns=required,
+                filters=(("ticker", "==", "IX0001"),),
+            )
         )
         numeric_valid = (
             np.isfinite(pd.to_numeric(frame["close"], errors="coerce"))
@@ -83,11 +92,17 @@ class SourceCapabilityAuditor:
         )
         availability_field = manifest.get("availability_field")
         revision_policy = manifest.get("revision_policy")
-        revision_verified = bool(availability_field) and revision_policy in {
-            "append_only_vintages",
-            "versioned",
-            "immutable",
-        }
+        declared_columns = {str(value) for value in manifest.get("columns", ())}
+        revision_verified = (
+            bool(availability_field)
+            and str(availability_field) in declared_columns
+            and revision_policy
+            in {
+                "append_only_vintages",
+                "versioned",
+                "immutable",
+            }
+        )
         rows_valid = not frame.empty and bool(numeric_valid.all())
         if rows_valid and revision_verified:
             status = "AVAILABLE_VERIFIED"

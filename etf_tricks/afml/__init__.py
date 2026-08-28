@@ -14,6 +14,12 @@ from .config import (
     validate_run_mode,
 )
 from .capabilities import SourceCapabilityAuditor
+from .pit import (
+    PITContractError,
+    PITDailyInputs,
+    PITSourceAdapter,
+    next_execution_session,
+)
 
 
 __all__ = [
@@ -29,6 +35,10 @@ __all__ = [
     "PITConfig",
     "StructuralConfig",
     "SourceCapabilityAuditor",
+    "PITContractError",
+    "PITDailyInputs",
+    "PITSourceAdapter",
+    "next_execution_session",
     "config_sha256",
     "validate_run_mode",
 ]
