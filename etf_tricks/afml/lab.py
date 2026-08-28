@@ -556,18 +556,14 @@ def _build_readiness(
         limitations.append("PIT_REVISION_UNVERIFIED")
     if not coverage.get("trading_calendar_manifest_coverage_declared", False):
         limitations.append("TRADING_CALENDAR_MANIFEST_COVERAGE_UNDECLARED")
-    if mode == "research_full_history":
-        status = "CORE_DESCRIPTIVE_ONLY" if core_ready else "NOT_READY"
-    elif (
-        core_ready
-        and revision_status == "PIT_REVISION_VERIFIED"
-        and coverage.get("trading_calendar_manifest_coverage_declared", False)
-    ):
-        status = "CORE_READY"
-    elif core_ready:
-        status = "CORE_READY_FOR_BOUNDED_RESEARCH_WITH_LIMITATIONS"
-    else:
-        status = "NOT_READY"
+    status = _resolve_core_readiness_status(
+        core_ready=core_ready,
+        revision_status=revision_status,
+        trading_calendar_manifest_coverage_declared=bool(
+            coverage.get("trading_calendar_manifest_coverage_declared", False)
+        ),
+        mode=mode,
+    )
     return {
         "status": status,
         "core_ready": core_ready,
@@ -577,6 +573,26 @@ def _build_readiness(
         "limitations": limitations,
         "etfs": etf_rows,
     }
+
+
+def _resolve_core_readiness_status(
+    *,
+    core_ready: bool,
+    revision_status: str,
+    trading_calendar_manifest_coverage_declared: bool,
+    mode: str,
+) -> str:
+    if mode == "research_full_history":
+        return "CORE_DESCRIPTIVE_ONLY" if core_ready else "NOT_READY"
+    if (
+        core_ready
+        and revision_status == "PIT_REVISION_VERIFIED"
+        and trading_calendar_manifest_coverage_declared
+    ):
+        return "CORE_READY"
+    if core_ready:
+        return "CORE_READY_FOR_BOUNDED_RESEARCH_WITH_LIMITATIONS"
+    return "NOT_READY"
 
 
 def _build_metadata(
