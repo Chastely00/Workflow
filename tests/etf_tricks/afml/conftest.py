@@ -63,14 +63,21 @@ class PITFixture:
 @pytest.fixture
 def pit_fixture(tmp_path: Path) -> PITFixture:
     dates = pd.to_datetime(
-        ["2024-01-02", "2024-01-03", "2024-01-04", "2024-01-05", "2024-01-08"]
+        [
+            "2023-12-29",
+            "2024-01-02",
+            "2024-01-03",
+            "2024-01-04",
+            "2024-01-05",
+            "2024-01-08",
+        ]
     )
     daily_market = pd.DataFrame(
         {
             "date": dates,
             "ticker": "IX0001",
-            "close": [100.0, 101.0, 100.5, 102.0, 103.0],
-            "traded_value": [1_000.0, 1_100.0, 900.0, 1_200.0, 1_300.0],
+            "close": [99.0, 100.0, 101.0, 100.5, 102.0, 103.0],
+            "traded_value": [950.0, 1_000.0, 1_100.0, 900.0, 1_200.0, 1_300.0],
             "source_available_date": dates,
         }
     )
@@ -105,9 +112,9 @@ def pit_fixture(tmp_path: Path) -> PITFixture:
         {
             "date": dates,
             "etf_id": "momentum",
-            "nav": [100.0, 101.0, 100.5, 102.0, 103.0],
-            "daily_return": [0.0, 0.01, -0.0049505, 0.0149254, 0.0098039],
-            "etf_amount": [100.0, 110.0, 90.0, 120.0, 130.0],
+            "nav": [99.0, 100.0, 101.0, 100.5, 102.0, 103.0],
+            "daily_return": [0.0, 0.010101, 0.01, -0.0049505, 0.0149254, 0.0098039],
+            "etf_amount": [95.0, 100.0, 110.0, 90.0, 120.0, 130.0],
             "missing_traded_value_count": 0,
             "has_data_quality_flag": False,
             "cash_weight": 0.0,

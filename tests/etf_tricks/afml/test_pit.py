@@ -32,6 +32,14 @@ def test_date_only_market_data_is_after_close_and_next_session_executable(
     assert execution > row["date"]
 
 
+def test_bounded_inputs_do_not_load_pre_train_market_or_etf_history(pit_fixture):
+    inputs = pit_fixture.inputs
+    train_start = pd.Timestamp(pit_fixture.boundaries.train_start)
+
+    assert inputs.daily_etf["date"].min() == train_start
+    assert inputs.ix0001["date"].min() == train_start
+
+
 def test_current_manifest_hash_mismatch_fails_closed(pit_fixture):
     stale = copy.deepcopy(pit_fixture.base)
     stale.metadata["manifest_hashes"]["daily_price_volume"] = "stale"
@@ -42,8 +50,11 @@ def test_current_manifest_hash_mismatch_fails_closed(pit_fixture):
 
 def test_flagged_amount_fails_default_quality_policy(pit_fixture):
     flagged = copy.deepcopy(pit_fixture.base)
-    flagged.daily_etf.loc[0, "missing_traded_value_count"] = 1
-    flagged.daily_etf.loc[0, "has_data_quality_flag"] = True
+    in_scope = flagged.daily_etf.index[
+        flagged.daily_etf["date"].ge(pd.Timestamp(pit_fixture.boundaries.train_start))
+    ][0]
+    flagged.daily_etf.loc[in_scope, "missing_traded_value_count"] = 1
+    flagged.daily_etf.loc[in_scope, "has_data_quality_flag"] = True
 
     with pytest.raises(PITContractError, match="quality"):
         pit_fixture.adapter.prepare(flagged, pit_fixture.boundaries, AFMLConfig())

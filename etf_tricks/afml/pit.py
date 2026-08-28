@@ -129,7 +129,12 @@ class PITSourceAdapter:
         daily["date"] = pd.to_datetime(daily["date"], errors="coerce")
         if daily["date"].isna().any():
             raise PITContractError("daily_etf contains invalid dates")
-        daily = daily[daily["date"].le(pd.Timestamp(boundaries.test_end))].copy()
+        daily = daily[
+            daily["date"].between(
+                pd.Timestamp(boundaries.train_start),
+                pd.Timestamp(boundaries.test_end),
+            )
+        ].copy()
         if daily.empty or daily["date"].max() < pd.Timestamp(boundaries.test_end):
             raise PITContractError(
                 "daily_etf does not cover the requested AFML test_end boundary"
@@ -182,7 +187,12 @@ class PITSourceAdapter:
             )
         except DataContractError as exc:
             raise PITContractError(f"cannot prepare IX0001: {exc}") from exc
-        ix = ix[ix["date"].le(pd.Timestamp(boundaries.test_end))].copy()
+        ix = ix[
+            ix["date"].between(
+                pd.Timestamp(boundaries.train_start),
+                pd.Timestamp(boundaries.test_end),
+            )
+        ].copy()
         if ix.empty or ix["date"].max() < pd.Timestamp(boundaries.test_end):
             raise PITContractError("IX0001 does not cover the requested test_end boundary")
         close = pd.to_numeric(ix["close"], errors="coerce")
