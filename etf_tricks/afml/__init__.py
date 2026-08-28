@@ -20,6 +20,13 @@ from .pit import (
     PITSourceAdapter,
     next_execution_session,
 )
+from .dollar_bars import (
+    DollarBarBuilder,
+    DollarBarCalibrator,
+    DollarBarContractError,
+    DollarBarTables,
+    QCalibration,
+)
 
 
 __all__ = [
@@ -39,6 +46,11 @@ __all__ = [
     "PITDailyInputs",
     "PITSourceAdapter",
     "next_execution_session",
+    "DollarBarBuilder",
+    "DollarBarCalibrator",
+    "DollarBarContractError",
+    "DollarBarTables",
+    "QCalibration",
     "config_sha256",
     "validate_run_mode",
 ]
