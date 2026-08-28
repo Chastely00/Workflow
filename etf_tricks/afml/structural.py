@@ -206,6 +206,7 @@ class StructuralFeatureEngine:
         result = group[identity_columns + ["__structural_position"]].reset_index(
             drop=True
         )
+        result["structural_source_value"] = values
         result["feature_available_at"] = availability
         rows: list[dict[str, object]] = []
         structural_hash = config_sha256(self.config)
@@ -266,6 +267,7 @@ class StructuralFeatureEngine:
             if column in frame.columns
         ]
         columns = identity_columns + [
+            "structural_source_value",
             "feature_available_at",
             *_STATISTIC_COLUMNS,
             "adf_window_count",

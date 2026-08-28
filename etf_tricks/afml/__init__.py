@@ -39,6 +39,7 @@ from .structural import (
     adf_start_vector,
     structural_statistics,
 )
+from .features import AFMLFeatureEngine
 
 
 __all__ = [
@@ -71,6 +72,7 @@ __all__ = [
     "StructuralFeatureEngine",
     "adf_start_vector",
     "structural_statistics",
+    "AFMLFeatureEngine",
     "config_sha256",
     "validate_run_mode",
 ]
