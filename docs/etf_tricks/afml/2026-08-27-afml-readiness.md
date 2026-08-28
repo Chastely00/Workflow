@@ -86,7 +86,7 @@ Readiness SHA-256：`d19d7053313fd62edd61dc7bbde4e765223114ac604a029abc0c38e9a6a
 5. `etf_amount` 是依前一期持倉權重加權的合成成交金額 proxy，不是真實上市 ETF 成交額或可執行容量。
 6. Full-history acceptance 已按 gate **只執行一次**，並在 source adapter fail closed：2005–2026 上游結果有 432 個 ETF-day 的 `missing_traded_value_count > 0`／quality flag，範圍為 2005-12-20 至 2018-06-13，因此沒有發布 full-history AFML artifact。
 
-Full-history 缺口經唯讀重播前一期持倉對齊後，確認為 441 個 constituent-day 缺失、343 個唯一 `date × ticker` 缺口，集中於 11 檔股票。441 筆全部是 canonical `daily_price_volume` 整列不存在，不是既有列的 `traded_value` 為 null 或負數。
+Full-history 缺口經唯讀重播前一期持倉對齊後，確認為 441 個 constituent-day 缺失、334 個唯一 `date × ticker` 缺口，集中於 11 檔股票。441 筆全部是 canonical `daily_price_volume` 整列不存在，不是既有列的 `traded_value` 為 null 或負數。受影響範圍為 432 / 65,053 ETF-day（0.6641%）及 441 / 880,761 holding rows（0.0501%）；比例雖小，但會污染 `etf_amount` 與 Dollar-bar 關閉時間，因此對 full-history acceptance 是 Critical、high-confidence blocker。
 
 | ticker | constituent-day | 唯一缺失 session | 缺失區間 | 事後可觀察證據 |
 |---|---:|---:|---|---|
@@ -101,8 +101,15 @@ Full-history 缺口經唯讀重播前一期持倉對齊後，確認為 441 個 c
 | `3474` | 5 | 5 | 2016-11-30–2016-12-06 | 最後 DPV 為 2016-11-29；缺口終點等於 snapshot `delist_date`，之後無 DPV |
 | `3658` | 5 | 5 | 2016-11-16–2016-11-22 | 最後 DPV 為 2016-11-15；缺口終點等於 snapshot `delist_date`，之後無 DPV |
 | `9157` | 3 | 3 | 2010-10-01–2010-10-05 | 2010-09-30 後缺 3 個 session，2010-10-06 恢復 DPV；snapshot `delist_date` 為 2019-11-12 |
+| **合計** | **441** | **334** | 2005-12-20–2018-06-13 | 11 檔 ticker；同一缺失 key 可同時影響多個 ETF |
 
 前 10 檔共 438 個 constituent-day，在事後資料看起來是終止上市前的連續無成交區間；`9157` 的 3 列在事後資料看起來是暫時性缺口。這些只能作為根因線索，不能作為歷史當下可得的交易狀態：目前 `security_master.delist_date` 沒有相應的 historical availability/revision lineage，而利用「之後是否恢復成交」分類更直接使用了未來資料。因此在沒有 PIT-safe tradability/suspension 證據前，不能自行把缺列補成成交金額 0，也不能用 `allow_flagged` 冒充完整驗收通過。
+
+### `daily_tradability` 仍無法解除 blocker
+
+2026-08-28 的第三次 blocker audit 檢查了目前 DataAnalysts 狀態，而非沿用先前推測。正式 `daily_tradability` manifest（SHA-256 `bd4ff2f53ee1b4f1d3079a81dc5579912d63bf2ac8886eb3584f786b26428eb2`）只宣告 `2026-07-08` 單日、2,760 列及 `year=2026/part.parquet`；governed `DataGateway` 對 2005-01-03 至 2018-06-13 的讀取會明確回報 coverage starts at 2026-07-08。磁碟上雖殘留舊年度 partitions，但不在 manifest `artifact_paths`，不得當作正式 artifact。
+
+作為唯讀診斷，即使繞過 manifest 掃描這些未治理 partitions，334 個缺少 DPV 的 `date × ticker` 仍是 0 / 334 命中：沒有 `source_available_date`、`susp_fg` 或 source identity 可供分類。相同 11 檔在其他日期確實存在 3 列 `susp_fg=Y`，顯示該欄位只能在來源有列時提供訊號，不能把「整列不存在」等同於停牌。故目前沒有安全的補零路徑；這也符合已核准的上游契約——本版本不使用 `daily_tradability`，它只保留為未來介面。
 
 ## Gate 結論
 
