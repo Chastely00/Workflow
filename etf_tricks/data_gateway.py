@@ -5,6 +5,8 @@ from pathlib import Path
 from typing import Iterable
 
 import pandas as pd
+import pyarrow as pa
+import pyarrow.dataset as ds
 
 
 class DataContractError(RuntimeError):
@@ -149,6 +151,235 @@ class DataGateway:
             if end is not None:
                 result = result[result[effective_date_column] <= pd.Timestamp(end)]
         return result.loc[:, list(selected_columns)].reset_index(drop=True)
+
+    def scan_artifact(
+        self,
+        artifact_id: str,
+        *,
+        columns: Iterable[str] | None = None,
+        filters: Iterable[tuple[str, str, object]] | None = None,
+        start: str | pd.Timestamp | None = None,
+        end: str | pd.Timestamp | None = None,
+        date_column: str | None = None,
+    ) -> pd.DataFrame:
+        """Read a governed artifact subset with Arrow predicate pushdown."""
+        manifest = self.load_manifest(artifact_id)
+        declared_columns = tuple(str(value) for value in manifest.get("columns", ()))
+        selected_columns = tuple(columns) if columns is not None else declared_columns
+        filter_specs = tuple(filters or ())
+        filter_columns = tuple(spec[0] for spec in filter_specs if len(spec) == 3)
+        malformed_filters = [spec for spec in filter_specs if len(spec) != 3]
+        if malformed_filters:
+            raise DataContractError(
+                f"artifact {artifact_id} has malformed filters: {malformed_filters}"
+            )
+
+        effective_date_column = date_column
+        if effective_date_column is None:
+            if "date" in declared_columns:
+                effective_date_column = "date"
+            elif "source_available_date" in declared_columns:
+                effective_date_column = "source_available_date"
+        if (start is not None or end is not None) and effective_date_column is None:
+            raise DataContractError(
+                f"artifact {artifact_id} has no date column for requested filtering"
+            )
+
+        raw_logical_key = manifest.get("logical_key")
+        logical_key = _LOGICAL_KEYS.get(artifact_id)
+        if logical_key is None and isinstance(raw_logical_key, list):
+            logical_key = tuple(str(value) for value in raw_logical_key if str(value))
+        if not logical_key:
+            raise DataContractError(f"artifact {artifact_id} has no governed logical key")
+
+        required_columns = set(selected_columns) | set(filter_columns) | set(logical_key)
+        if effective_date_column is not None and (start is not None or end is not None):
+            required_columns.add(effective_date_column)
+        missing = sorted(required_columns.difference(declared_columns))
+        if missing:
+            raise DataContractError(
+                f"artifact {artifact_id} manifest missing requested columns: {missing}"
+            )
+        self._validate_requested_coverage(artifact_id, manifest, start, end)
+        read_columns = tuple(
+            dict.fromkeys(
+                (
+                    *selected_columns,
+                    *filter_columns,
+                    *logical_key,
+                    *(
+                        (effective_date_column,)
+                        if effective_date_column is not None
+                        and (start is not None or end is not None)
+                        else ()
+                    ),
+                )
+            )
+        )
+
+        raw_paths = manifest.get("artifact_paths")
+        if not isinstance(raw_paths, list) or not raw_paths:
+            raise DataContractError(f"artifact {artifact_id} has no declared artifact_paths")
+
+        frames: list[pd.DataFrame] = []
+        for raw_path in raw_paths:
+            path = (self.data_store / str(raw_path)).resolve()
+            if not path.is_relative_to(self.data_store):
+                raise DataContractError(
+                    f"artifact {artifact_id} path is outside data_store: {raw_path}"
+                )
+            if not path.is_file():
+                raise DataContractError(f"artifact {artifact_id} declared file is missing: {path}")
+            try:
+                dataset = ds.dataset(path, format="parquet")
+                physical_columns = set(dataset.schema.names)
+                physical_missing = sorted(set(read_columns).difference(physical_columns))
+                if physical_missing:
+                    raise DataContractError(
+                        f"artifact {artifact_id} physical file {path} is missing columns: "
+                        f"{physical_missing}"
+                    )
+                expression = self._build_arrow_filter(
+                    artifact_id=artifact_id,
+                    schema=dataset.schema,
+                    filters=filter_specs,
+                    date_column=effective_date_column,
+                    start=start,
+                    end=end,
+                )
+                table = dataset.to_table(columns=list(read_columns), filter=expression)
+                if table.num_rows:
+                    frames.append(table.to_pandas())
+            except DataContractError:
+                raise
+            except Exception as exc:
+                raise DataContractError(
+                    f"failed scanning artifact {artifact_id} file {path}: {exc}"
+                ) from exc
+
+        result = (
+            pd.concat(frames, ignore_index=True)
+            if frames
+            else pd.DataFrame(columns=read_columns)
+        )
+        if not filter_specs and start is None and end is None:
+            if len(result) != manifest["row_count"]:
+                raise DataContractError(
+                    f"artifact {artifact_id} row_count mismatch: "
+                    f"manifest={manifest['row_count']} physical={len(result)}"
+                )
+
+        for column in read_columns:
+            if column in _DATE_COLUMNS:
+                raw_notna = result[column].notna()
+                result[column] = pd.to_datetime(result[column], errors="coerce")
+                if (raw_notna & result[column].isna()).any():
+                    raise DataContractError(
+                        f"artifact {artifact_id} contains invalid date values in {column}"
+                    )
+        if start is not None:
+            result = result[result[effective_date_column] >= pd.Timestamp(start)]
+        if end is not None:
+            result = result[result[effective_date_column] <= pd.Timestamp(end)]
+        if result.duplicated(list(logical_key)).any():
+            raise DataContractError(
+                f"artifact {artifact_id} filtered result contains duplicate logical key rows: "
+                f"{list(logical_key)}"
+            )
+        if not result.empty:
+            result = result.sort_values(list(logical_key), kind="mergesort")
+        return result.loc[:, list(selected_columns)].reset_index(drop=True)
+
+    @staticmethod
+    def _build_arrow_filter(
+        *,
+        artifact_id: str,
+        schema: pa.Schema,
+        filters: tuple[tuple[str, str, object], ...],
+        date_column: str | None,
+        start: str | pd.Timestamp | None,
+        end: str | pd.Timestamp | None,
+    ) -> ds.Expression | None:
+        expressions: list[ds.Expression] = []
+        supported = {"==", "!=", "<", "<=", ">", ">=", "in", "not in"}
+        for column, operator, raw_value in filters:
+            if operator not in supported:
+                raise DataContractError(
+                    f"artifact {artifact_id} has unsupported filter operator: {operator}"
+                )
+            field_type = schema.field(column).type
+            field = ds.field(column)
+            if operator in {"in", "not in"}:
+                if isinstance(raw_value, (str, bytes)) or not isinstance(raw_value, Iterable):
+                    raise DataContractError(
+                        f"artifact {artifact_id} filter {operator} requires a value collection"
+                    )
+                values = [
+                    DataGateway._coerce_arrow_scalar(field_type, value, column)
+                    for value in raw_value
+                ]
+                expression = field.isin(values)
+                if operator == "not in":
+                    expression = ~expression
+            else:
+                value = DataGateway._coerce_arrow_scalar(field_type, raw_value, column)
+                expression = {
+                    "==": lambda: field == value,
+                    "!=": lambda: field != value,
+                    "<": lambda: field < value,
+                    "<=": lambda: field <= value,
+                    ">": lambda: field > value,
+                    ">=": lambda: field >= value,
+                }[operator]()
+            expressions.append(expression)
+
+        if start is not None or end is not None:
+            if date_column is None:
+                raise DataContractError(
+                    f"artifact {artifact_id} has no date column for requested filtering"
+                )
+            date_type = schema.field(date_column).type
+            field = ds.field(date_column)
+            if start is not None:
+                expressions.append(
+                    field
+                    >= DataGateway._coerce_arrow_scalar(date_type, start, date_column)
+                )
+            if end is not None:
+                expressions.append(
+                    field <= DataGateway._coerce_arrow_scalar(date_type, end, date_column)
+                )
+
+        combined: ds.Expression | None = None
+        for expression in expressions:
+            combined = expression if combined is None else combined & expression
+        return combined
+
+    @staticmethod
+    def _coerce_arrow_scalar(
+        field_type: pa.DataType,
+        value: object,
+        column: str,
+    ) -> object:
+        if column in _DATE_COLUMNS:
+            timestamp = pd.Timestamp(value)
+            if pa.types.is_string(field_type) or pa.types.is_large_string(field_type):
+                return timestamp.date().isoformat()
+            if pa.types.is_date(field_type):
+                return timestamp.date()
+            if pa.types.is_timestamp(field_type):
+                if field_type.tz:
+                    if timestamp.tzinfo is None:
+                        timestamp = timestamp.tz_localize(field_type.tz)
+                    else:
+                        timestamp = timestamp.tz_convert(field_type.tz)
+                elif timestamp.tzinfo is not None:
+                    timestamp = timestamp.tz_convert("UTC").tz_localize(None)
+                return timestamp.to_pydatetime()
+            raise DataContractError(
+                f"date column {column} has unsupported Arrow type {field_type}"
+            )
+        return value
 
     @staticmethod
     def _validate_requested_coverage(

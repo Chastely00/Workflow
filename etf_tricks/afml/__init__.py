@@ -13,6 +13,7 @@ from .config import (
     config_sha256,
     validate_run_mode,
 )
+from .capabilities import SourceCapabilityAuditor
 
 
 __all__ = [
@@ -27,6 +28,7 @@ __all__ = [
     "LabelConfig",
     "PITConfig",
     "StructuralConfig",
+    "SourceCapabilityAuditor",
     "config_sha256",
     "validate_run_mode",
 ]

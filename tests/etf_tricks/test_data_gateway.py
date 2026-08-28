@@ -127,6 +127,52 @@ def test_gateway_rejects_declared_or_physical_duplicate_logical_keys(tmp_path: P
         DataGateway.from_data_analysts(tmp_path).read_artifact("prices")
 
 
+def test_filtered_scan_reads_only_matching_rows_and_normalizes_string_dates(
+    tmp_path: Path,
+) -> None:
+    path = _write_artifact(
+        tmp_path,
+        artifact_id="daily_price_volume",
+        columns=("date", "ticker", "close", "traded_value"),
+        date_range=("2025-01-02", "2025-01-06"),
+        row_count=4,
+    )
+    pd.DataFrame(
+        {
+            "date": ["2025-01-02", "2025-01-03", "2025-01-03", "2025-01-06"],
+            "ticker": ["IX0001", "IX0001", "1101", "IX0001"],
+            "close": [100.0, 101.0, 10.5, 102.0],
+            "traded_value": [1_000.0, 1_100.0, 50.0, 1_200.0],
+        }
+    ).to_parquet(path, index=False)
+
+    frame = DataGateway.from_data_analysts(tmp_path).scan_artifact(
+        "daily_price_volume",
+        columns=["date", "ticker", "close", "traded_value"],
+        filters=[("ticker", "==", "IX0001")],
+        start=pd.Timestamp("2025-01-03"),
+        end=pd.Timestamp("2025-01-06"),
+    )
+
+    assert frame["ticker"].unique().tolist() == ["IX0001"]
+    assert frame["date"].tolist() == [
+        pd.Timestamp("2025-01-03"),
+        pd.Timestamp("2025-01-06"),
+    ]
+    assert pd.api.types.is_datetime64_any_dtype(frame["date"])
+
+
+def test_filtered_scan_rejects_unsupported_filter_operator(tmp_path: Path) -> None:
+    _write_artifact(tmp_path)
+
+    with pytest.raises(DataContractError, match="unsupported filter operator"):
+        DataGateway.from_data_analysts(tmp_path).scan_artifact(
+            "prices",
+            columns=["date", "ticker"],
+            filters=[("ticker", "contains", "11")],
+        )
+
+
 def test_trading_calendar_returns_only_twse_trading_days_by_month() -> None:
     frame = pd.DataFrame(
         {
