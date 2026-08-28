@@ -34,6 +34,11 @@ from .ffd import (
     apply_fixed_width_ffd,
     fixed_width_weights,
 )
+from .structural import (
+    StructuralFeatureEngine,
+    adf_start_vector,
+    structural_statistics,
+)
 
 
 __all__ = [
@@ -63,6 +68,9 @@ __all__ = [
     "FFDSelector",
     "apply_fixed_width_ffd",
     "fixed_width_weights",
+    "StructuralFeatureEngine",
+    "adf_start_vector",
+    "structural_statistics",
     "config_sha256",
     "validate_run_mode",
 ]
