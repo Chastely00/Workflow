@@ -137,7 +137,12 @@ class ETFAFMLLab:
 
         inputs = recorder.run(
             "source_adapter",
-            lambda: PITSourceAdapter(self.gateway).prepare(base, boundaries, config),
+            lambda: PITSourceAdapter(self.gateway).prepare(
+                base,
+                boundaries,
+                config,
+                requested_etf_ids=ids,
+            ),
         )
         calibrator = DollarBarCalibrator(config.dollar_bar)
         if run_mode == "research_full_history":
@@ -159,7 +164,9 @@ class ETFAFMLLab:
         )
         bar_tables = recorder.run(
             "dollar_bars",
-            lambda: _build_bar_tables(inputs, config, calibrations, run_mode),
+            lambda: _build_bar_tables(
+                inputs, config, calibrations, run_mode, boundaries
+            ),
         )
 
         ffd_outputs = recorder.run(
@@ -203,9 +210,11 @@ class ETFAFMLLab:
             ids,
             bar_tables,
             selections,
+            ffd_series,
             features,
             label_tables.labels,
-            inputs.source_identity["source_revision_status"],
+            inputs.source_identity,
+            config,
             run_mode,
         )
         metadata = _build_metadata(
@@ -244,14 +253,20 @@ def _build_bar_tables(
     config: AFMLConfig,
     calibrations: tuple[QCalibration, ...],
     mode: str,
+    boundaries: AFMLBoundaries,
 ) -> DollarBarTables:
     builder = DollarBarBuilder(config.dollar_bar)
+    split_boundaries = (
+        pd.Timestamp(boundaries.train_end),
+        pd.Timestamp(boundaries.validation_end),
+    )
     history = builder.transform(
         inputs.daily_etf,
         inputs.ix0001,
         inputs.trading_calendar,
         calibrations[0],
         "CALIBRATION_HISTORY",
+        split_boundaries=split_boundaries,
     )
     if mode == "research_full_history":
         return history
@@ -261,6 +276,7 @@ def _build_bar_tables(
         inputs.trading_calendar,
         calibrations,
         "LIVE_ELIGIBLE",
+        split_boundaries=split_boundaries,
     )
     live_bars = live.dollar_bars.copy()
     live_members = live.bar_daily_membership.copy()
@@ -459,29 +475,74 @@ def _build_readiness(
     ids: tuple[str, ...],
     bars: DollarBarTables,
     selections: dict[str, list[FFDSelection]],
+    ffd_series: pd.DataFrame,
     features: pd.DataFrame,
     labels: pd.DataFrame,
-    revision_status: str,
+    source_identity: dict[str, Any],
+    config: AFMLConfig,
     mode: str,
 ) -> dict[str, Any]:
+    revision_status = str(source_identity["source_revision_status"])
+    coverage = source_identity.get("coverage", {})
+    coverage_ready = bool(coverage) and all(
+        bool(coverage.get(name))
+        for name in (
+            "daily_etf_complete",
+            "ix0001_complete",
+            "trading_calendar_complete",
+        )
+    )
     etf_rows: dict[str, dict[str, object]] = {}
-    core_ready = True
+    core_ready = coverage_ready
     for etf_id in ids:
-        bar_count = int(bars.dollar_bars["etf_id"].eq(etf_id).sum())
+        etf_bars = bars.dollar_bars[bars.dollar_bars["etf_id"].eq(etf_id)]
+        bar_count = len(etf_bars)
+        calibration_bar_count = int(
+            etf_bars["bar_role"].eq("CALIBRATION_HISTORY").sum()
+        )
         ffd_ready = bool(selections.get(etf_id)) and all(
             item.status == "stationarity_reached" for item in selections[etf_id]
         )
+        ffd_rows = ffd_series[ffd_series["etf_id"].eq(etf_id)]
         feature_rows = features[features["etf_id"].eq(etf_id)]
         resolved = labels[
             labels["etf_id"].eq(etf_id) & labels["label"].notna()
         ]
-        ready = bar_count > 0 and ffd_ready and not feature_rows.empty and not resolved.empty
+        quality_failures = int(
+            etf_bars.get(
+                "source_quality_flag", pd.Series(False, index=etf_bars.index)
+            )
+            .fillna(True)
+            .astype(bool)
+            .sum()
+        )
+        bar_count_ready = calibration_bar_count >= config.dollar_bar.min_completed_bars
+        ffd_coverage_ready = len(ffd_rows) >= config.ffd.min_adf_observations
+        feature_coverage_ready = len(feature_rows) == bar_count
+        ready = (
+            coverage_ready
+            and bar_count_ready
+            and ffd_ready
+            and ffd_coverage_ready
+            and feature_coverage_ready
+            and not resolved.empty
+            and quality_failures == 0
+        )
         core_ready &= ready
         etf_rows[etf_id] = {
             "bar_count": bar_count,
+            "calibration_bar_count": calibration_bar_count,
+            "required_calibration_bar_count": config.dollar_bar.min_completed_bars,
+            "bar_count_ready": bar_count_ready,
             "ffd_ready": ffd_ready,
+            "ffd_series_row_count": len(ffd_rows),
+            "required_ffd_row_count": config.ffd.min_adf_observations,
+            "ffd_coverage_ready": ffd_coverage_ready,
             "feature_row_count": len(feature_rows),
+            "feature_coverage_ready": feature_coverage_ready,
             "resolved_label_count": len(resolved),
+            "source_quality_failure_count": quality_failures,
+            "source_coverage_ready": coverage_ready,
             "core_ready": ready,
         }
     limitations = [
@@ -493,17 +554,21 @@ def _build_readiness(
     ]
     if revision_status != "PIT_REVISION_VERIFIED":
         limitations.append("PIT_REVISION_UNVERIFIED")
+    if not coverage.get("trading_calendar_manifest_coverage_declared", False):
+        limitations.append("TRADING_CALENDAR_MANIFEST_COVERAGE_UNDECLARED")
     if mode == "research_full_history":
-        status = "DESCRIPTIVE_ONLY" if core_ready else "NOT_READY"
+        status = "CORE_DESCRIPTIVE_ONLY" if core_ready else "NOT_READY"
     elif core_ready and revision_status == "PIT_REVISION_VERIFIED":
-        status = "READY"
+        status = "CORE_READY"
     elif core_ready:
-        status = "READY_FOR_BOUNDED_RESEARCH_WITH_LIMITATIONS"
+        status = "CORE_READY_FOR_BOUNDED_RESEARCH_WITH_LIMITATIONS"
     else:
         status = "NOT_READY"
     return {
         "status": status,
         "core_ready": core_ready,
+        "finalized": False,
+        "coverage": coverage,
         "source_revision_status": revision_status,
         "limitations": limitations,
         "etfs": etf_rows,
@@ -531,6 +596,7 @@ def _build_metadata(
             "DESCRIPTIVE_ONLY" if mode == "research_full_history" else "ML_ELIGIBLE"
         ),
         "readiness_status": readiness["status"],
+        "readiness_finalized": False,
         "etf_ids": list(ids),
         "train_start": boundaries.train_start.isoformat(),
         "train_end": boundaries.train_end.isoformat(),

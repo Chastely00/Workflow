@@ -51,16 +51,36 @@ class PITSourceAdapter:
         base: ETFTrickResult,
         boundaries: AFMLBoundaries,
         config: AFMLConfig,
+        *,
+        requested_etf_ids: tuple[str, ...] | None = None,
     ) -> PITDailyInputs:
         expected_hashes, current_manifests = self._verify_source_identity(base)
         revision_status = self._revision_status(current_manifests)
+        calendar, calendar_coverage_declared = self._prepare_calendar(
+            boundaries, current_manifests["trading_calendar"]
+        )
+        expected_sessions = _requested_sessions(calendar, boundaries)
+        requested_ids = tuple(
+            dict.fromkeys(
+                requested_etf_ids
+                if requested_etf_ids is not None
+                else base.daily_etf["etf_id"].dropna().astype(str)
+            )
+        )
+        if not requested_ids:
+            raise PITContractError("no requested ETF IDs for AFML source preparation")
         daily = self._prepare_daily_etf(
-            base, boundaries, config, expected_hashes, revision_status
+            base,
+            boundaries,
+            config,
+            expected_hashes,
+            revision_status,
+            requested_ids,
+            expected_sessions,
         )
         ix0001 = self._prepare_ix0001(
-            boundaries, expected_hashes, revision_status
+            boundaries, expected_hashes, revision_status, expected_sessions
         )
-        calendar = self._prepare_calendar()
         capabilities = SourceCapabilityAuditor(self.gateway).audit(ix0001=ix0001)
         source_identity = {
             "upstream_spec_hash": base.metadata.get("spec_hash"),
@@ -68,6 +88,18 @@ class PITSourceAdapter:
             "manifest_hashes": dict(sorted(expected_hashes.items())),
             "daily_etf_sha256": _hash_frame(daily.loc[:, self._DAILY_REQUIRED]),
             "source_revision_status": revision_status,
+            "coverage": {
+                "requested_etf_ids": list(requested_ids),
+                "expected_session_count": len(expected_sessions),
+                "first_session": expected_sessions.min().date().isoformat(),
+                "last_session": expected_sessions.max().date().isoformat(),
+                "daily_etf_complete": True,
+                "ix0001_complete": True,
+                "trading_calendar_complete": True,
+                "trading_calendar_manifest_coverage_declared": (
+                    calendar_coverage_declared
+                ),
+            },
         }
         return PITDailyInputs(
             daily_etf=daily,
@@ -121,6 +153,8 @@ class PITSourceAdapter:
         config: AFMLConfig,
         manifest_hashes: dict[str, str],
         revision_status: str,
+        requested_etf_ids: tuple[str, ...],
+        expected_sessions: pd.DatetimeIndex,
     ) -> pd.DataFrame:
         missing = sorted(set(self._DAILY_REQUIRED).difference(base.daily_etf.columns))
         if missing:
@@ -135,12 +169,15 @@ class PITSourceAdapter:
                 pd.Timestamp(boundaries.test_end),
             )
         ].copy()
-        if daily.empty or daily["date"].max() < pd.Timestamp(boundaries.test_end):
-            raise PITContractError(
-                "daily_etf does not cover the requested AFML test_end boundary"
-            )
+        daily["etf_id"] = daily["etf_id"].astype(str)
+        daily = daily[daily["etf_id"].isin(requested_etf_ids)].copy()
         if daily.duplicated(["date", "etf_id"]).any():
             raise PITContractError("daily_etf contains duplicate date-etf_id keys")
+        _validate_panel_session_coverage(
+            daily,
+            expected_sessions,
+            requested_etf_ids,
+        )
 
         nav = pd.to_numeric(daily["nav"], errors="coerce")
         amount = pd.to_numeric(daily["etf_amount"], errors="coerce")
@@ -178,12 +215,15 @@ class PITSourceAdapter:
         boundaries: AFMLBoundaries,
         manifest_hashes: dict[str, str],
         revision_status: str,
+        expected_sessions: pd.DatetimeIndex,
     ) -> pd.DataFrame:
         try:
             ix = self.gateway.scan_artifact(
                 "daily_price_volume",
                 columns=("date", "ticker", "close", "traded_value"),
                 filters=(("ticker", "==", "IX0001"),),
+                start=boundaries.train_start,
+                end=boundaries.test_end,
             )
         except DataContractError as exc:
             raise PITContractError(f"cannot prepare IX0001: {exc}") from exc
@@ -193,8 +233,10 @@ class PITSourceAdapter:
                 pd.Timestamp(boundaries.test_end),
             )
         ].copy()
-        if ix.empty or ix["date"].max() < pd.Timestamp(boundaries.test_end):
-            raise PITContractError("IX0001 does not cover the requested test_end boundary")
+        ix["date"] = pd.to_datetime(ix["date"], errors="coerce")
+        if ix["date"].isna().any() or ix.duplicated("date").any():
+            raise PITContractError("IX0001 contains invalid or duplicate dates")
+        _validate_series_session_coverage(ix, expected_sessions, "IX0001")
         close = pd.to_numeric(ix["close"], errors="coerce")
         amount = pd.to_numeric(ix["traded_value"], errors="coerce")
         if (~np.isfinite(close) | close.le(0)).any():
@@ -212,12 +254,30 @@ class PITSourceAdapter:
         ix["source_revision_status"] = revision_status
         return ix.sort_values("date", kind="mergesort").reset_index(drop=True)
 
-    def _prepare_calendar(self) -> pd.DataFrame:
+    def _prepare_calendar(
+        self,
+        boundaries: AFMLBoundaries,
+        manifest: dict[str, object],
+    ) -> tuple[pd.DataFrame, bool]:
+        raw_range = manifest.get("date_range") or manifest.get(
+            "availability_date_range"
+        )
+        coverage_declared = isinstance(raw_range, list) and len(raw_range) == 2
+        scan_end = pd.Timestamp(boundaries.test_end) + pd.Timedelta(days=31)
+        scan_bounds = (
+            {
+                "start": boundaries.train_start,
+                "end": min(pd.Timestamp(raw_range[1]), scan_end),
+            }
+            if coverage_declared
+            else {}
+        )
         try:
             calendar = self.gateway.scan_artifact(
                 "trading_calendar",
                 columns=("date", "market", "is_trading_day"),
                 filters=(("market", "==", "TWSE"), ("is_trading_day", "==", True)),
+                **scan_bounds,
             )
         except DataContractError as exc:
             raise PITContractError(f"cannot prepare trading_calendar: {exc}") from exc
@@ -225,7 +285,24 @@ class PITSourceAdapter:
             raise PITContractError("trading_calendar has no TWSE trading sessions")
         if calendar["date"].isna().any() or calendar.duplicated("date").any():
             raise PITContractError("trading_calendar contains invalid or duplicate TWSE dates")
-        return calendar.sort_values("date", kind="mergesort").reset_index(drop=True)
+        calendar["date"] = pd.to_datetime(calendar["date"], errors="coerce")
+        calendar = calendar[
+            calendar["date"].between(
+                pd.Timestamp(boundaries.train_start), scan_end
+            )
+        ].copy()
+        requested = calendar[calendar["date"].le(pd.Timestamp(boundaries.test_end))]
+        if (
+            requested.empty
+            or requested["date"].max() < pd.Timestamp(boundaries.test_end)
+        ):
+            raise PITContractError(
+                "trading_calendar does not cover the requested test_end boundary"
+            )
+        return (
+            calendar.sort_values("date", kind="mergesort").reset_index(drop=True),
+            coverage_declared,
+        )
 
     @staticmethod
     def _revision_status(manifests: dict[str, dict[str, object]]) -> str:
@@ -291,3 +368,51 @@ def _hash_frame(frame: pd.DataFrame) -> str:
         orient="records", date_format="iso", date_unit="ns", double_precision=15
     ).encode("utf-8")
     return hashlib.sha256(payload).hexdigest()
+
+
+def _requested_sessions(
+    calendar: pd.DataFrame, boundaries: AFMLBoundaries
+) -> pd.DatetimeIndex:
+    dates = pd.DatetimeIndex(pd.to_datetime(calendar["date"], errors="coerce"))
+    requested = dates[
+        (dates >= pd.Timestamp(boundaries.train_start))
+        & (dates <= pd.Timestamp(boundaries.test_end))
+    ].sort_values()
+    if requested.empty:
+        raise PITContractError("trading_calendar has no sessions in requested AFML window")
+    return requested
+
+
+def _validate_panel_session_coverage(
+    frame: pd.DataFrame,
+    expected_sessions: pd.DatetimeIndex,
+    requested_etf_ids: tuple[str, ...],
+) -> None:
+    expected = set(expected_sessions)
+    for etf_id in requested_etf_ids:
+        observed = set(
+            pd.DatetimeIndex(frame.loc[frame["etf_id"].eq(etf_id), "date"])
+        )
+        missing = sorted(expected.difference(observed))
+        extra = sorted(observed.difference(expected))
+        if missing or extra:
+            details = ",".join(value.date().isoformat() for value in missing[:5])
+            raise PITContractError(
+                f"daily_etf coverage failed for {etf_id}; "
+                f"missing_sessions={len(missing)} [{details}] extra_sessions={len(extra)}"
+            )
+
+
+def _validate_series_session_coverage(
+    frame: pd.DataFrame, expected_sessions: pd.DatetimeIndex, source_name: str
+) -> None:
+    expected = set(expected_sessions)
+    observed = set(pd.DatetimeIndex(frame["date"]))
+    missing = sorted(expected.difference(observed))
+    extra = sorted(observed.difference(expected))
+    if missing or extra:
+        details = ",".join(value.date().isoformat() for value in missing[:5])
+        raise PITContractError(
+            f"{source_name} coverage failed; missing_sessions={len(missing)} "
+            f"[{details}] extra_sessions={len(extra)}"
+        )

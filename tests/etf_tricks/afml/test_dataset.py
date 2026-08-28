@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -78,7 +79,7 @@ def dataset_fixture() -> AFMLDataset:
     )
     sessions = pd.bdate_range("2025-01-02", "2025-02-10").strftime("%Y-%m-%d").tolist()
     metadata = {
-        "schema_version": "etf-afml-dataset-v1",
+        "schema_version": "etf-afml-dataset-v2",
         "config_sha256": "fixture-config-sha",
         "etf_ids": ["momentum"],
         "train_start": "2025-01-01",
@@ -104,7 +105,17 @@ def dataset_fixture() -> AFMLDataset:
                 "etf_id": "momentum",
                 "bar_id": [1, 2, 3],
                 "date": dates,
+                "observation_date": dates,
                 "nav": [100.0, 101.0, 102.0],
+                "source_available_at": available,
+                "ix0001_source_available_at": available,
+                "member_available_at": available,
+                "ingested_at": pd.NaT,
+                "source_revision_id": pd.NA,
+                "source_manifest_hash": "fixture-source-hash",
+                "ix0001_ingested_at": pd.NaT,
+                "ix0001_source_revision_id": pd.NA,
+                "ix0001_source_manifest_hash": "fixture-source-hash",
             }
         ),
         ffd_weights=pd.DataFrame(
@@ -138,7 +149,11 @@ def dataset_fixture() -> AFMLDataset:
             {"stage": ["fixture"], "code": ["OK"], "severity": ["INFO"]}
         ),
         metadata=metadata,
-        readiness={"status": "READY_FOR_BOUNDED_RESEARCH"},
+        readiness={
+            "status": "CORE_READY_FOR_BOUNDED_RESEARCH",
+            "core_ready": True,
+            "finalized": False,
+        },
     )
 
 
@@ -153,6 +168,10 @@ def test_afml_dataset_round_trip_verifies_all_table_hashes(
     assert restored.metadata["config_sha256"] == dataset_fixture.metadata[
         "config_sha256"
     ]
+    assert restored.readiness["status"] == "READY_FOR_BOUNDED_RESEARCH"
+    assert restored.readiness["finalized"] is True
+    assert restored.readiness["finalization"]["round_trip_validated"] is True
+    assert restored.metadata["readiness_finalized"] is True
 
 
 def test_for_trading_cannot_expose_labels_or_future_rows(dataset_fixture):
@@ -167,6 +186,55 @@ def test_for_trading_cannot_expose_labels_or_future_rows(dataset_fixture):
     assert snapshot.iloc[0]["earliest_execution_session"] == pd.Timestamp(
         "2025-02-03"
     )
+    assert snapshot.iloc[0]["decision_cutoff"] == "after_close"
+    assert snapshot.iloc[0]["source_bar_id"] == snapshot.iloc[0]["bar_id"]
+    assert snapshot.iloc[0]["snapshot_status"] == "AVAILABLE"
+
+
+def test_dataset_rejects_bar_member_availability_mismatch(dataset_fixture):
+    bars = dataset_fixture.dollar_bars.copy()
+    bars["bar_available_at"] = bars["bar_available_at"] + pd.Timedelta(hours=1)
+    bars["feature_available_at"] = bars["bar_available_at"]
+    features = dataset_fixture.features.copy()
+    features["feature_available_at"] = bars["bar_available_at"]
+
+    with pytest.raises(ValueError, match="member availability"):
+        replace(dataset_fixture, dollar_bars=bars, features=features)
+
+
+def test_dataset_rejects_member_clock_before_underlying_source(dataset_fixture):
+    members = dataset_fixture.bar_daily_membership.copy()
+    members.loc[members["bar_id"].eq(3), "ix0001_source_available_at"] = (
+        members.loc[members["bar_id"].eq(3), "member_available_at"]
+        + pd.Timedelta(hours=1)
+    )
+
+    with pytest.raises(ValueError, match="member_available_at"):
+        replace(dataset_fixture, bar_daily_membership=members)
+
+
+def test_dataset_rejects_calibration_after_first_member(dataset_fixture):
+    bars = dataset_fixture.dollar_bars.copy()
+    bars["calibration_effective_at"] = (
+        bars["bar_available_at"] + pd.Timedelta(nanoseconds=1)
+    )
+
+    with pytest.raises(ValueError, match="calibration_effective_at"):
+        replace(dataset_fixture, dollar_bars=bars)
+
+
+def test_for_trading_explicitly_gates_bar_availability(dataset_fixture):
+    bars = dataset_fixture.dollar_bars.copy()
+    bars.loc[bars["bar_id"].eq(3), "bar_available_at"] = pd.Timestamp(
+        "2025-02-01 23:00:00", tz="Asia/Taipei"
+    )
+    object.__setattr__(dataset_fixture, "dollar_bars", bars)
+
+    snapshot = dataset_fixture.for_trading(
+        as_of="2025-01-31", decision_cutoff="after_close"
+    )
+
+    assert snapshot.iloc[0]["bar_id"] == 2
 
 
 def test_split_views_use_feature_and_label_availability(dataset_fixture):
@@ -229,3 +297,25 @@ def test_manifest_contains_schema_keys_rows_and_metadata_identity(
         evidence = manifest["tables"][table]
         assert {"sha256", "row_count", "columns", "key", "path"}.issubset(evidence)
     json.dumps(manifest)
+
+
+def test_read_rejects_manifest_dtype_mismatch(tmp_path: Path, dataset_fixture):
+    output = tmp_path / "afml-run"
+    dataset_fixture.write(output)
+    manifest_path = output / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["tables"]["features"]["dtypes"]["bar_id"] = "float64"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="dtype schema mismatch"):
+        AFMLDataset.read(output)
+
+
+def test_write_refuses_unfinalized_direct_ready_claim(tmp_path: Path, dataset_fixture):
+    premature = replace(
+        dataset_fixture,
+        readiness={"status": "READY", "core_ready": True, "finalized": False},
+    )
+
+    with pytest.raises(ValueError, match="core readiness status"):
+        premature.write(tmp_path / "afml-run")

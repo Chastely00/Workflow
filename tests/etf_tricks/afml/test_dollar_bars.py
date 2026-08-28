@@ -33,9 +33,12 @@ def _daily_frame(dates: list[str], amounts: list[float], etf_id: str = "momentum
             "missing_traded_value_count": 0,
             "source_revision_status": "PIT_REVISION_UNVERIFIED",
             "source_manifest_hash": "daily-hash",
+            "source_revision_id": "daily-r1",
+            "ingested_at": pd.Timestamp("2024-02-01", tz="Asia/Taipei"),
         }
     )
     frame["source_available_at"] = _available_at(frame["date"])
+    frame["observation_date"] = frame["date"]
     return frame
 
 
@@ -48,9 +51,12 @@ def _ix_frame(dates: list[str], amounts: list[float]):
             "traded_value": amounts,
             "source_revision_status": "PIT_REVISION_UNVERIFIED",
             "source_manifest_hash": "ix-hash",
+            "source_revision_id": "ix-r1",
+            "ingested_at": pd.Timestamp("2024-02-01", tz="Asia/Taipei"),
         }
     )
     frame["source_available_at"] = _available_at(frame["date"])
+    frame["observation_date"] = frame["date"]
     return frame
 
 
@@ -120,6 +126,38 @@ def test_threshold_freezes_and_bar_amount_reconciles():
     assert bars.iloc[0]["threshold_asof_date"] < bars.iloc[0]["bar_start_date"]
     assert bars.iloc[0]["threshold_amount"] == bars.iloc[0]["frozen_threshold_amount"]
     assert tables.open_bar_checkpoints.empty
+
+
+def test_membership_preserves_replay_lineage_and_marks_split_crossing():
+    daily, ix, calendar, calibration = three_bar_fixture()
+    config = replace(
+        AFMLConfig().dollar_bar,
+        market_amount_lookback_days=2,
+        min_market_amount_observations=1,
+        min_completed_bars=1,
+    )
+    tables = DollarBarBuilder(config).transform(
+        daily,
+        ix,
+        calendar,
+        calibration,
+        role="CALIBRATION_HISTORY",
+        split_boundaries=(pd.Timestamp("2024-01-02"),),
+    )
+
+    required = {
+        "observation_date",
+        "ingested_at",
+        "source_revision_id",
+        "source_manifest_hash",
+        "ix0001_ingested_at",
+        "ix0001_source_revision_id",
+    }
+    assert required.issubset(tables.bar_daily_membership.columns)
+    assert tables.bar_daily_membership["source_revision_id"].eq("daily-r1").all()
+    assert tables.bar_daily_membership["ix0001_source_revision_id"].eq("ix-r1").all()
+    assert bool(tables.dollar_bars.iloc[0]["crosses_split_boundary"])
+    assert not bool(tables.dollar_bars.iloc[1]["crosses_split_boundary"])
 
 
 def test_one_day_can_close_at_most_one_bar_and_overshoot_is_not_carried():

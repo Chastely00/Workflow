@@ -54,6 +54,22 @@ _DEFAULT_KEYS: dict[str, tuple[str, ...]] = {
     "diagnostics": (),
 }
 
+_MEMBERSHIP_LINEAGE_COLUMNS = {
+    "etf_id",
+    "bar_id",
+    "date",
+    "observation_date",
+    "source_available_at",
+    "ix0001_source_available_at",
+    "member_available_at",
+    "ingested_at",
+    "source_revision_id",
+    "source_manifest_hash",
+    "ix0001_ingested_at",
+    "ix0001_source_revision_id",
+    "ix0001_source_manifest_hash",
+}
+
 
 @dataclass(frozen=True)
 class AFMLDataset:
@@ -72,7 +88,7 @@ class AFMLDataset:
     metadata: dict[str, Any]
     readiness: dict[str, Any]
 
-    SCHEMA_VERSION: ClassVar[str] = "etf-afml-dataset-v1"
+    SCHEMA_VERSION: ClassVar[str] = "etf-afml-dataset-v2"
 
     def __post_init__(self) -> None:
         for name in AFML_TABLE_NAMES:
@@ -93,6 +109,161 @@ class AFMLDataset:
             )
         if self.metadata.get("config_sha256") in (None, ""):
             raise AFMLContractError("metadata config_sha256 is required")
+        self._validate_pit_relationships()
+
+    def _validate_pit_relationships(self) -> None:
+        if self.dollar_bars.empty:
+            return
+        missing_membership = sorted(
+            _MEMBERSHIP_LINEAGE_COLUMNS.difference(
+                self.bar_daily_membership.columns
+            )
+        )
+        if missing_membership:
+            raise AFMLContractError(
+                "bar_daily_membership missing PIT lineage columns: "
+                f"{missing_membership}"
+            )
+        required_bars = {
+            "etf_id",
+            "bar_id",
+            "bar_available_at",
+            "feature_available_at",
+            "calibration_effective_at",
+        }
+        missing_bars = sorted(required_bars.difference(self.dollar_bars.columns))
+        if missing_bars:
+            raise AFMLContractError(
+                f"dollar_bars missing PIT columns: {missing_bars}"
+            )
+        if not {"etf_id", "bar_id", "feature_available_at"}.issubset(
+            self.features.columns
+        ):
+            raise AFMLContractError("features missing PIT availability columns")
+
+        bars = self.dollar_bars.copy()
+        members = self.bar_daily_membership.copy()
+        bar_keys = bars[["etf_id", "bar_id"]]
+        member_keys = members[["etf_id", "bar_id"]].drop_duplicates()
+        missing_member_keys = bar_keys.merge(
+            member_keys,
+            on=["etf_id", "bar_id"],
+            how="left",
+            indicator=True,
+        ).query("_merge == 'left_only'")
+        if not missing_member_keys.empty:
+            raise AFMLContractError(
+                "finalized dollar bars lack daily membership rows"
+            )
+        extra_member_keys = member_keys.merge(
+            bar_keys,
+            on=["etf_id", "bar_id"],
+            how="left",
+            indicator=True,
+        ).query("_merge == 'left_only'")
+        if not extra_member_keys.empty:
+            raise AFMLContractError(
+                "daily membership rows reference unknown finalized bars"
+            )
+
+        member_available = pd.to_datetime(
+            members["member_available_at"], errors="coerce", utc=True
+        )
+        if member_available.isna().any():
+            raise AFMLContractError("membership availability contains invalid values")
+        source_available = pd.to_datetime(
+            members["source_available_at"], errors="coerce", utc=True
+        )
+        ix_available = pd.to_datetime(
+            members["ix0001_source_available_at"], errors="coerce", utc=True
+        )
+        expected_member_available = pd.concat(
+            [source_available, ix_available], axis=1
+        ).max(axis=1)
+        if (
+            source_available.isna().any()
+            or ix_available.isna().any()
+            or not member_available.eq(expected_member_available).all()
+        ):
+            raise AFMLContractError(
+                "member_available_at does not equal underlying source availability"
+            )
+        observation = pd.to_datetime(
+            members["observation_date"], errors="coerce"
+        ).dt.normalize()
+        dates = pd.to_datetime(members["date"], errors="coerce").dt.normalize()
+        if observation.isna().any() or not observation.eq(dates).all():
+            raise AFMLContractError(
+                "membership observation_date does not match source date"
+            )
+        members = members.assign(_member_available_at=member_available)
+        availability = members.groupby(["etf_id", "bar_id"], sort=False)[
+            "_member_available_at"
+        ].agg(["min", "max"])
+        reconciled = bars.merge(
+            availability,
+            on=["etf_id", "bar_id"],
+            how="left",
+            validate="one_to_one",
+        )
+        bar_available = pd.to_datetime(
+            reconciled["bar_available_at"], errors="coerce", utc=True
+        )
+        feature_available = pd.to_datetime(
+            reconciled["feature_available_at"], errors="coerce", utc=True
+        )
+        if bar_available.isna().any() or feature_available.isna().any():
+            raise AFMLContractError("bar or feature availability contains invalid values")
+        if not bar_available.eq(reconciled["max"]).all():
+            raise AFMLContractError(
+                "bar_available_at does not equal maximum member availability"
+            )
+        if feature_available.lt(bar_available).any():
+            raise AFMLContractError("feature_available_at precedes bar_available_at")
+        calibration = pd.to_datetime(
+            reconciled["calibration_effective_at"], errors="coerce", utc=True
+        )
+        live = reconciled.get(
+            "live_eligible", pd.Series(False, index=reconciled.index)
+        ).fillna(False)
+        invalid_calibration = (
+            live.astype(bool)
+            & calibration.notna()
+            & calibration.gt(reconciled["min"])
+        )
+        if invalid_calibration.any():
+            raise AFMLContractError(
+                "calibration_effective_at is after first member availability"
+            )
+
+        feature_clock = self.features[["etf_id", "bar_id", "feature_available_at"]]
+        feature_keys = feature_clock[["etf_id", "bar_id"]]
+        if len(feature_keys) != len(bar_keys) or not feature_keys.merge(
+            bar_keys,
+            on=["etf_id", "bar_id"],
+            how="outer",
+            indicator=True,
+        )["_merge"].eq("both").all():
+            raise AFMLContractError(
+                "feature table keys do not exactly cover finalized dollar bars"
+            )
+        feature_clock = feature_clock.rename(
+            columns={"feature_available_at": "feature_table_available_at"}
+        )
+        cross = bars[["etf_id", "bar_id", "bar_available_at"]].merge(
+            feature_clock,
+            on=["etf_id", "bar_id"],
+            how="inner",
+            validate="one_to_one",
+        )
+        if pd.to_datetime(
+            cross["feature_table_available_at"], errors="coerce", utc=True
+        ).lt(
+            pd.to_datetime(cross["bar_available_at"], errors="coerce", utc=True)
+        ).any():
+            raise AFMLContractError(
+                "feature table availability precedes source bar availability"
+            )
 
     @property
     def train(self) -> pd.DataFrame:
@@ -160,7 +331,13 @@ class AFMLDataset:
             candidates["calibration_effective_at"] = pd.to_datetime(
                 candidates["calibration_effective_at"], errors="coerce"
             )
+        if "bar_available_at" in candidates:
+            candidates["bar_available_at"] = pd.to_datetime(
+                candidates["bar_available_at"], errors="coerce"
+            )
         candidates = candidates[candidates["feature_available_at"].le(decision_time)]
+        if "bar_available_at" in candidates:
+            candidates = candidates[candidates["bar_available_at"].le(decision_time)]
 
         rows: list[dict[str, object]] = []
         for etf_id in expected_ids:
@@ -171,7 +348,7 @@ class AFMLDataset:
             if not effective.empty and decision_time < effective.min():
                 rows.append(
                     _unavailable_trading_row(
-                        etf_id, decision_time, "PRE_CALIBRATION"
+                        etf_id, decision_time, decision_cutoff, "PRE_CALIBRATION"
                     )
                 )
                 continue
@@ -200,7 +377,11 @@ class AFMLDataset:
                     if not provisional.empty
                     else "NO_FEATURE_READY_BAR"
                 )
-                rows.append(_unavailable_trading_row(etf_id, decision_time, status))
+                rows.append(
+                    _unavailable_trading_row(
+                        etf_id, decision_time, decision_cutoff, status
+                    )
+                )
                 continue
             selected = available.sort_values(
                 ["feature_available_at", "bar_id"], kind="stable"
@@ -212,19 +393,27 @@ class AFMLDataset:
             if quality_failed:
                 rows.append(
                     _unavailable_trading_row(
-                        etf_id, decision_time, "SOURCE_QUALITY_FAILED"
+                        etf_id,
+                        decision_time,
+                        decision_cutoff,
+                        "SOURCE_QUALITY_FAILED",
                     )
                 )
                 continue
             if pd.notna(alignment_reason):
                 rows.append(
                     _unavailable_trading_row(
-                        etf_id, decision_time, str(alignment_reason)
+                        etf_id,
+                        decision_time,
+                        decision_cutoff,
+                        str(alignment_reason),
                     )
                 )
                 continue
             row = selected.to_dict()
             row["decision_time"] = decision_time
+            row["decision_cutoff"] = decision_cutoff
+            row["source_bar_id"] = row["bar_id"]
             execution = _next_session(
                 self.metadata.get("trading_sessions", ()), decision_time
             )
@@ -232,6 +421,7 @@ class AFMLDataset:
             row["availability_status"] = (
                 "AVAILABLE" if pd.notna(execution) else "NO_FUTURE_EXECUTION_SESSION"
             )
+            row["snapshot_status"] = row["availability_status"]
             rows.append(row)
         result = pd.DataFrame(rows)
         forbidden = _FORBIDDEN_FEATURE_COLUMNS.intersection(result.columns)
@@ -258,18 +448,28 @@ class AFMLDataset:
                 relative = Path("tables") / f"{name}.parquet"
                 path = temporary / relative
                 frame.to_parquet(path, index=False)
+                physical = pd.read_parquet(path)
                 table_evidence[name] = {
                     "path": relative.as_posix(),
                     "sha256": _file_sha256(path),
                     "row_count": len(frame),
                     "columns": frame.columns.tolist(),
-                    "dtypes": {column: str(dtype) for column, dtype in frame.dtypes.items()},
+                    "dtypes": {
+                        column: str(dtype)
+                        for column, dtype in physical.dtypes.items()
+                    },
                     "key": list(_table_key(name, frame)),
                 }
             metadata_path = temporary / "metadata.json"
             readiness_path = temporary / "readiness.json"
-            _write_json(metadata_path, self.metadata)
-            _write_json(readiness_path, self.readiness)
+            finalized_readiness = _finalized_readiness(
+                self.readiness, table_evidence
+            )
+            finalized_metadata = dict(self.metadata)
+            finalized_metadata["readiness_status"] = finalized_readiness["status"]
+            finalized_metadata["readiness_finalized"] = True
+            _write_json(metadata_path, finalized_metadata)
+            _write_json(readiness_path, finalized_readiness)
             manifest: dict[str, Any] = {
                 "schema_version": self.SCHEMA_VERSION,
                 "tables": table_evidence,
@@ -279,6 +479,11 @@ class AFMLDataset:
                 "readiness_sha256": _file_sha256(readiness_path),
             }
             _write_json(temporary / "manifest.json", manifest)
+            restored = type(self).read(temporary)
+            if not restored.readiness.get("finalized"):
+                raise AFMLContractError(
+                    "AFML round-trip did not produce finalized readiness"
+                )
             os.replace(temporary, destination)
             return manifest
         except Exception:
@@ -311,6 +516,13 @@ class AFMLDataset:
                 raise AFMLContractError(f"row count mismatch for table {name}")
             if frame.columns.tolist() != evidence["columns"]:
                 raise AFMLContractError(f"column schema mismatch for table {name}")
+            actual_dtypes = {
+                column: str(dtype) for column, dtype in frame.dtypes.items()
+            }
+            if actual_dtypes != evidence.get("dtypes"):
+                raise AFMLContractError(f"dtype schema mismatch for table {name}")
+            if list(_table_key(name, frame)) != evidence.get("key"):
+                raise AFMLContractError(f"canonical key mismatch for table {name}")
             tables[name] = frame
         metadata_path = root / manifest["metadata_path"]
         readiness_path = root / manifest["readiness_path"]
@@ -318,10 +530,18 @@ class AFMLDataset:
             raise AFMLContractError("SHA-256 mismatch for metadata")
         if _file_sha256(readiness_path) != manifest["readiness_sha256"]:
             raise AFMLContractError("SHA-256 mismatch for readiness")
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        readiness = json.loads(readiness_path.read_text(encoding="utf-8"))
+        if not readiness.get("finalized") or not metadata.get(
+            "readiness_finalized"
+        ):
+            raise AFMLContractError("AFML artifact readiness is not finalized")
+        if metadata.get("readiness_status") != readiness.get("status"):
+            raise AFMLContractError("metadata/readiness status mismatch")
         return cls(
             **tables,
-            metadata=json.loads(metadata_path.read_text(encoding="utf-8")),
-            readiness=json.loads(readiness_path.read_text(encoding="utf-8")),
+            metadata=metadata,
+            readiness=readiness,
         )
 
     def _split_view(self, split: str) -> pd.DataFrame:
@@ -475,16 +695,22 @@ def _next_session(values: object, decision_time: pd.Timestamp) -> pd.Timestamp |
 
 
 def _unavailable_trading_row(
-    etf_id: str, decision_time: pd.Timestamp, status: str
+    etf_id: str,
+    decision_time: pd.Timestamp,
+    decision_cutoff: str,
+    status: str,
 ) -> dict[str, object]:
     return {
         "etf_id": etf_id,
         "bar_id": np.nan,
+        "source_bar_id": np.nan,
         "feature_available_at": pd.NaT,
         "decision_time": decision_time,
+        "decision_cutoff": decision_cutoff,
         "earliest_execution_session": pd.NaT,
         "live_eligible": False,
         "availability_status": status,
+        "snapshot_status": status,
     }
 
 
@@ -506,6 +732,43 @@ def _write_json(path: Path, payload: object) -> None:
         ),
         encoding="utf-8",
     )
+
+
+def _finalized_readiness(
+    readiness: dict[str, Any],
+    table_evidence: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    result = dict(readiness)
+    core_status = str(result.get("status", "NOT_READY"))
+    status_map = {
+        "CORE_READY": "READY",
+        "CORE_READY_FOR_BOUNDED_RESEARCH": "READY_FOR_BOUNDED_RESEARCH",
+        "CORE_READY_FOR_BOUNDED_RESEARCH_WITH_LIMITATIONS": (
+            "READY_FOR_BOUNDED_RESEARCH_WITH_LIMITATIONS"
+        ),
+        "CORE_DESCRIPTIVE_ONLY": "DESCRIPTIVE_ONLY",
+        "NOT_READY": "NOT_READY",
+    }
+    if core_status not in status_map or result.get("finalized") is not False:
+        raise AFMLContractError(
+            "write requires an explicit unfinalized core readiness status"
+        )
+    final_status = status_map[core_status]
+    result["core_status"] = core_status
+    result["status"] = final_status
+    result["finalized"] = True
+    result["finalization"] = {
+        "schema_version": AFMLDataset.SCHEMA_VERSION,
+        "canonical_table_count": len(table_evidence),
+        "table_sha256": {
+            name: evidence["sha256"]
+            for name, evidence in sorted(table_evidence.items())
+        },
+        "schema_validated": True,
+        "hashes_validated": True,
+        "round_trip_validated": True,
+    }
+    return result
 
 
 def _jsonable(value: object) -> object:

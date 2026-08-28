@@ -104,7 +104,6 @@ class FFDConfig:
     maxlag: int = 1
     autolag: None = None
     min_adf_observations: int = 120
-    strict_dual_gate: bool = False
 
     def __post_init__(self) -> None:
         for name in (

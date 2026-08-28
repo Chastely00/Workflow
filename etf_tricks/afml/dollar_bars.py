@@ -91,12 +91,17 @@ _MEMBERSHIP_COLUMNS = (
     "etf_id",
     "bar_id",
     "date",
+    "observation_date",
     "nav",
     "etf_amount",
     "ix0001_traded_value",
     "source_available_at",
     "ix0001_source_available_at",
     "member_available_at",
+    "ingested_at",
+    "source_revision_id",
+    "ix0001_ingested_at",
+    "ix0001_source_revision_id",
     "source_manifest_hash",
     "ix0001_source_manifest_hash",
     "source_revision_status",
@@ -276,6 +281,8 @@ class DollarBarBuilder:
         calendar: pd.DataFrame,
         calibration: QCalibration | tuple[QCalibration, ...],
         role: BarRole,
+        *,
+        split_boundaries: tuple[pd.Timestamp, ...] = (),
     ) -> DollarBarTables:
         if role not in {"CALIBRATION_HISTORY", "LIVE_ELIGIBLE"}:
             raise DollarBarContractError(f"unsupported bar role: {role}")
@@ -358,6 +365,9 @@ class DollarBarBuilder:
                         "etf_id": etf_id,
                         "bar_id": bar_id,
                         "date": pd.Timestamp(row["date"]),
+                        "observation_date": pd.Timestamp(
+                            row.get("observation_date", row["date"])
+                        ),
                         "nav": float(row["nav"]),
                         "etf_amount": float(row["etf_amount"]),
                         "ix0001_traded_value": float(row["ix0001_traded_value"]),
@@ -366,6 +376,16 @@ class DollarBarBuilder:
                             "ix0001_source_available_at"
                         ],
                         "member_available_at": member_available_at,
+                        "ingested_at": row.get("ingested_at", pd.NaT),
+                        "source_revision_id": row.get(
+                            "source_revision_id", pd.NA
+                        ),
+                        "ix0001_ingested_at": row.get(
+                            "ix0001_ingested_at", pd.NaT
+                        ),
+                        "ix0001_source_revision_id": row.get(
+                            "ix0001_source_revision_id", pd.NA
+                        ),
                         "source_manifest_hash": row.get("source_manifest_hash", pd.NA),
                         "ix0001_source_manifest_hash": row.get(
                             "ix0001_source_manifest_hash", pd.NA
@@ -438,7 +458,10 @@ class DollarBarBuilder:
                         "bar_available_at": bar_available_at,
                         "feature_available_at": bar_available_at,
                         "live_eligible": role == "LIVE_ELIGIBLE",
-                        "crosses_split_boundary": False,
+                        "crosses_split_boundary": any(
+                            start_date <= pd.Timestamp(boundary).normalize() < end_date
+                            for boundary in split_boundaries
+                        ),
                         "source_quality_flag": any(
                             bool(value["source_quality_flag"]) for value in current
                         ),
@@ -585,6 +608,8 @@ def _prepare_daily_market(
         columns={
             "traded_value": "ix0001_traded_value",
             "source_available_at": "ix0001_source_available_at",
+            "ingested_at": "ix0001_ingested_at",
+            "source_revision_id": "ix0001_source_revision_id",
             "source_manifest_hash": "ix0001_source_manifest_hash",
             "source_revision_status": "ix0001_source_revision_status",
         }
@@ -593,6 +618,10 @@ def _prepare_daily_market(
         ix["ix0001_source_available_at"] = _date_end_series(ix["date"])
     if "ix0001_source_manifest_hash" not in ix:
         ix["ix0001_source_manifest_hash"] = pd.NA
+    if "ix0001_ingested_at" not in ix:
+        ix["ix0001_ingested_at"] = pd.NaT
+    if "ix0001_source_revision_id" not in ix:
+        ix["ix0001_source_revision_id"] = pd.NA
     if "ix0001_source_revision_status" not in ix:
         ix["ix0001_source_revision_status"] = "PIT_REVISION_UNVERIFIED"
     if "source_available_at" not in daily:
@@ -606,6 +635,8 @@ def _prepare_daily_market(
                 "market_amount_baseline",
                 "threshold_asof_date",
                 "ix0001_source_available_at",
+                "ix0001_ingested_at",
+                "ix0001_source_revision_id",
                 "ix0001_source_manifest_hash",
                 "ix0001_source_revision_status",
             ],

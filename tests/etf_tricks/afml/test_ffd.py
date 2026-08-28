@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from fracdiff import fdiff
 import numpy as np
 import pandas as pd
 import pytest
@@ -54,11 +53,18 @@ def test_valid_transform_uses_only_current_and_past():
     assert extended[: len(result)].tolist() == pytest.approx(result)
 
 
-def test_recursive_convolution_matches_fracdiff_modern():
+@pytest.mark.filterwarnings(
+    "ignore:numpy\\.core is deprecated.*:DeprecationWarning"
+)
+def test_recursive_convolution_matches_optional_fracdiff_modern():
+    fracdiff = pytest.importorskip(
+        "fracdiff",
+        reason="optional fracdiff-modern parity oracle is not a runtime dependency",
+    )
     values = np.log(np.linspace(100.0, 120.0, 40))
     weights = fixed_width_weights(0.5, 0.01)
 
-    expected = fdiff(values, n=0.5, window=len(weights), mode="valid")
+    expected = fracdiff.fdiff(values, n=0.5, window=len(weights), mode="valid")
     actual = apply_fixed_width_ffd(values, weights)
 
     assert actual.tolist() == pytest.approx(expected.tolist(), rel=1e-12, abs=1e-12)

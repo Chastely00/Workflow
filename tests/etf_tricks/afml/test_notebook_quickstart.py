@@ -41,7 +41,21 @@ def _runtime_dataset() -> AFMLDataset:
                 columns=["etf_id", "bar_id", "bar_status"]
             ),
             "bar_daily_membership": pd.DataFrame(
-                {"etf_id": ["momentum"], "bar_id": [1], "date": [date]}
+                {
+                    "etf_id": ["momentum"],
+                    "bar_id": [1],
+                    "date": [date],
+                    "observation_date": [date],
+                    "source_available_at": [available],
+                    "ix0001_source_available_at": [available],
+                    "member_available_at": [available],
+                    "ingested_at": [pd.NaT],
+                    "source_revision_id": [pd.NA],
+                    "source_manifest_hash": ["fixture-hash"],
+                    "ix0001_ingested_at": [pd.NaT],
+                    "ix0001_source_revision_id": [pd.NA],
+                    "ix0001_source_manifest_hash": ["fixture-hash"],
+                }
             ),
             "ffd_weights": pd.DataFrame(
                 {
@@ -101,7 +115,7 @@ def _runtime_dataset() -> AFMLDataset:
     return AFMLDataset(
         **tables,
         metadata={
-            "schema_version": "etf-afml-dataset-v1",
+            "schema_version": "etf-afml-dataset-v2",
             "config_sha256": "notebook-fixture",
             "etf_ids": ["momentum"],
             "train_decision_cutoff": "2025-01-15T23:59:59+08:00",
@@ -109,7 +123,11 @@ def _runtime_dataset() -> AFMLDataset:
             "test_decision_cutoff": "2025-01-31T23:59:59+08:00",
             "trading_sessions": ["2025-01-10", "2025-01-13"],
         },
-        readiness={"status": "READY_FOR_BOUNDED_RESEARCH"},
+        readiness={
+            "status": "CORE_READY_FOR_BOUNDED_RESEARCH",
+            "core_ready": True,
+            "finalized": False,
+        },
     )
 
 

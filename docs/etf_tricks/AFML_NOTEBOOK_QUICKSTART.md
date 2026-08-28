@@ -15,6 +15,8 @@ Notebook 應建立／保留在 repository root：
 3. 確認第一個 code cell 的 `RESULT_DIR`、`AFML_DATASET_DIR`、`DATA_ANALYSTS_ROOT` 與研究邊界。
 4. 逐格執行。若 AFML manifest 已存在會驗證 hash 後讀取；否則才執行 bounded build。
 
+目前 canonical schema 為 `etf-afml-dataset-v2`。新建資料會先完成記憶體內 core checks，再原子寫入並讀回驗證 table hash、schema、dtype、key 與 PIT cross-table clocks；只有讀回成功的 artifact 才會標示 finalized READY。舊版 v1 artifact 必須重建，不會被靜默升級。
+
 預設上游結果路徑：
 
 `.artifacts/etf_tricks/performance/optimized-final-20240101-20260707`
