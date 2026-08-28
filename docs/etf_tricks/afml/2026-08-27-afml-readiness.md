@@ -54,7 +54,7 @@ Readiness：`READY_FOR_BOUNDED_RESEARCH_WITH_LIMITATIONS`
 | sharpe_60d | 418 | reached | 418 | 338 |
 | sortino_60d | 425 | reached | 425 | 345 |
 
-驗證包含 5,172 根 `bar_amount == sum(member etf_amount)` 對帳、所有 canonical key 唯一、13 個 ETF IDs 完整、逐 requested session coverage、membership replay lineage、3 根 split-crossing bar 且其 ML eligibility 全為 false、artifact finalized round-trip、source capability evidence 與 trading-label schema 隔離。
+驗證包含 5,172 根 `bar_amount == sum(member etf_amount)` 對帳、所有 canonical key 唯一、13 個 ETF IDs 完整、逐 requested session coverage、membership replay lineage、3 根 split-crossing bar 且其 ML eligibility 全為 false、artifact finalized round-trip、source capability evidence、trading-label schema 隔離，以及「revision 已驗證但 calendar manifest coverage 未宣告時仍只能是 bounded readiness」的直接回歸測試。
 
 ## Canonical artifact identities
 
@@ -86,7 +86,23 @@ Readiness SHA-256：`d19d7053313fd62edd61dc7bbde4e765223114ac604a029abc0c38e9a6a
 5. `etf_amount` 是依前一期持倉權重加權的合成成交金額 proxy，不是真實上市 ETF 成交額或可執行容量。
 6. Full-history acceptance 已按 gate **只執行一次**，並在 source adapter fail closed：2005–2026 上游結果有 432 個 ETF-day 的 `missing_traded_value_count > 0`／quality flag，範圍為 2005-12-20 至 2018-06-13，因此沒有發布 full-history AFML artifact。
 
-Full-history 缺口來自 441 個 constituent-day 缺失，集中於 11 檔股票；主要為 `3662` 227 列、`5505` 88 列、`2325` 36 列、`3009` 27 列、`2422` 27 列，其餘為 `2311,5854,3658,3474,3068,9157`。在沒有 PIT-safe tradability/suspension 證據前，不能自行把缺列補成成交金額 0，也不能用 `allow_flagged` 冒充完整驗收通過。
+Full-history 缺口經唯讀重播前一期持倉對齊後，確認為 441 個 constituent-day 缺失、343 個唯一 `date × ticker` 缺口，集中於 11 檔股票。441 筆全部是 canonical `daily_price_volume` 整列不存在，不是既有列的 `traded_value` 為 null 或負數。
+
+| ticker | constituent-day | 唯一缺失 session | 缺失區間 | 事後可觀察證據 |
+|---|---:|---:|---|---|
+| `3662` | 227 | 227 | 2016-11-17–2017-10-19 | 最後 DPV 為 2016-11-16；缺口終點等於 snapshot `delist_date`，之後無 DPV |
+| `5505` | 88 | 44 | 2015-05-14–2015-07-16 | 最後 DPV 為 2015-05-13；缺口終點等於 snapshot `delist_date`，之後無 DPV |
+| `2325` | 36 | 9 | 2018-04-18–2018-04-30 | 最後 DPV 為 2018-04-17；缺口終點等於 snapshot `delist_date`，之後無 DPV |
+| `3009` | 27 | 9 | 2010-03-08–2010-03-18 | 最後 DPV 為 2010-03-05；缺口終點等於 snapshot `delist_date`，之後無 DPV |
+| `2422` | 27 | 9 | 2005-12-20–2005-12-30 | 最後 DPV 為 2005-12-19；缺口終點等於 snapshot `delist_date`，之後無 DPV |
+| `2311` | 9 | 9 | 2018-04-18–2018-04-30 | 最後 DPV 為 2018-04-17；缺口終點等於 snapshot `delist_date`，之後無 DPV |
+| `5854` | 9 | 9 | 2011-11-21–2011-12-01 | 最後 DPV 為 2011-11-18；缺口終點等於 snapshot `delist_date`，之後無 DPV |
+| `3068` | 5 | 5 | 2018-06-07–2018-06-13 | 最後 DPV 為 2018-06-06；缺口終點等於 snapshot `delist_date`，之後無 DPV |
+| `3474` | 5 | 5 | 2016-11-30–2016-12-06 | 最後 DPV 為 2016-11-29；缺口終點等於 snapshot `delist_date`，之後無 DPV |
+| `3658` | 5 | 5 | 2016-11-16–2016-11-22 | 最後 DPV 為 2016-11-15；缺口終點等於 snapshot `delist_date`，之後無 DPV |
+| `9157` | 3 | 3 | 2010-10-01–2010-10-05 | 2010-09-30 後缺 3 個 session，2010-10-06 恢復 DPV；snapshot `delist_date` 為 2019-11-12 |
+
+前 10 檔共 438 個 constituent-day，在事後資料看起來是終止上市前的連續無成交區間；`9157` 的 3 列在事後資料看起來是暫時性缺口。這些只能作為根因線索，不能作為歷史當下可得的交易狀態：目前 `security_master.delist_date` 沒有相應的 historical availability/revision lineage，而利用「之後是否恢復成交」分類更直接使用了未來資料。因此在沒有 PIT-safe tradability/suspension 證據前，不能自行把缺列補成成交金額 0，也不能用 `allow_flagged` 冒充完整驗收通過。
 
 ## Gate 結論
 
@@ -100,4 +116,4 @@ Full-history 缺口來自 441 個 constituent-day 缺失，集中於 11 檔股�
 | 13 ETF full history | **FAIL — upstream traded-value quality, 432 ETF-days** |
 | Goal complete / production ready | **NO** |
 
-下一個正確動作不是放寬 alpha、FFD `d_max` 或 amount quality gate；應先在 DataAnalysts／上游 ETF result 層，對上述 11 檔股票的缺列建立可驗證的「停牌且成交金額為 0」或「資料缺失」分類，再重建 full-history ETF result。只有 classification 與 source lineage 通過後，才能授權新的 full-history acceptance run。
+下一個正確動作不是放寬 alpha、FFD `d_max` 或 amount quality gate；應先在 DataAnalysts／上游 ETF result 層，對上述 11 檔股票的缺列建立逐 `date × ticker`、PIT-safe 的 `TRADING | HALTED | DELISTED | MISSING` 分類，至少保存 observation date、source available-at、revision/source identity 與分類依據。只有官方且當時已可得的 `HALTED/DELISTED` 才能把成交金額定義為 0；`MISSING` 必須繼續 fail closed。完成 classification、source lineage 與前綴不變性驗證後，才可重建 full-history ETF result 並授權下一次 full-history acceptance run。
