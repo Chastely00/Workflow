@@ -27,6 +27,13 @@ from .dollar_bars import (
     DollarBarTables,
     QCalibration,
 )
+from .ffd import (
+    FFDContractError,
+    FFDSelection,
+    FFDSelector,
+    apply_fixed_width_ffd,
+    fixed_width_weights,
+)
 
 
 __all__ = [
@@ -51,6 +58,11 @@ __all__ = [
     "DollarBarContractError",
     "DollarBarTables",
     "QCalibration",
+    "FFDContractError",
+    "FFDSelection",
+    "FFDSelector",
+    "apply_fixed_width_ffd",
+    "fixed_width_weights",
     "config_sha256",
     "validate_run_mode",
 ]
