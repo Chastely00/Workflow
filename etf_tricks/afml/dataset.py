@@ -226,6 +226,11 @@ class AFMLDataset:
         live = reconciled.get(
             "live_eligible", pd.Series(False, index=reconciled.index)
         ).fillna(False)
+        missing_live_calibration = live.astype(bool) & calibration.isna()
+        if missing_live_calibration.any():
+            raise AFMLContractError(
+                "live bar is missing calibration_effective_at"
+            )
         invalid_calibration = (
             live.astype(bool)
             & calibration.notna()
@@ -247,6 +252,7 @@ class AFMLDataset:
             raise AFMLContractError(
                 "feature table keys do not exactly cover finalized dollar bars"
             )
+        _validate_feature_bar_gate_consistency(bars, self.features)
         feature_clock = feature_clock.rename(
             columns={"feature_available_at": "feature_table_available_at"}
         )
@@ -321,7 +327,17 @@ class AFMLDataset:
         bars = self.dollar_bars[gate_columns].rename(
             columns={"source_quality_flag": "bar_source_quality_flag"}
         )
-        candidates = self.features.merge(
+        feature_gate_columns = set(gate_columns).difference(
+            {"etf_id", "bar_id", "source_quality_flag"}
+        )
+        feature_values = self.features.drop(
+            columns=[
+                column
+                for column in feature_gate_columns
+                if column in self.features.columns
+            ]
+        )
+        candidates = feature_values.merge(
             bars, on=["etf_id", "bar_id"], how="left", validate="one_to_one"
         )
         candidates["feature_available_at"] = pd.to_datetime(
@@ -355,12 +371,14 @@ class AFMLDataset:
             available = candidates[candidates["etf_id"].eq(etf_id)].copy()
             if "bar_status" in available:
                 available = available[available["bar_status"].eq("FINALIZED")]
+            if "bar_role" in available:
+                available = available[available["bar_role"].eq("LIVE_ELIGIBLE")]
             if "live_eligible" in available:
                 available = available[available["live_eligible"].eq(True)]
             if "calibration_effective_at" in available:
                 available = available[
-                    available["calibration_effective_at"].isna()
-                    | available["calibration_effective_at"].le(decision_time)
+                    available["calibration_effective_at"].notna()
+                    & available["calibration_effective_at"].le(decision_time)
                 ]
             if "ffd_missing" in available:
                 available = available[~available["ffd_missing"].fillna(True)]
@@ -568,6 +586,10 @@ class AFMLDataset:
         if lower is not None:
             mask &= available.gt(lower)
         frame = frame[mask].copy()
+        if "crosses_split_boundary" in frame.columns:
+            frame = frame[
+                ~frame["crosses_split_boundary"].fillna(True).astype(bool)
+            ].copy()
 
         event_columns = [
             column
@@ -637,6 +659,48 @@ class AFMLDataset:
         return frame.sort_values(["etf_id", "bar_id"], kind="stable").reset_index(
             drop=True
         )
+
+
+def _validate_feature_bar_gate_consistency(
+    bars: pd.DataFrame, features: pd.DataFrame
+) -> None:
+    candidates = (
+        "bar_status",
+        "bar_role",
+        "live_eligible",
+        "calibration_effective_at",
+        "bar_available_at",
+        "calibration_version",
+        "source_revision_status",
+        "source_quality_flag",
+        "crosses_split_boundary",
+    )
+    common = [
+        column
+        for column in candidates
+        if column in bars.columns and column in features.columns
+    ]
+    if not common:
+        return
+    joined = bars[["etf_id", "bar_id", *common]].merge(
+        features[["etf_id", "bar_id", *common]],
+        on=["etf_id", "bar_id"],
+        how="inner",
+        validate="one_to_one",
+        suffixes=("_bar", "_feature"),
+    )
+    clock_columns = {"calibration_effective_at", "bar_available_at"}
+    for column in common:
+        left = joined[f"{column}_bar"]
+        right = joined[f"{column}_feature"]
+        if column in clock_columns:
+            left = pd.to_datetime(left, errors="coerce", utc=True)
+            right = pd.to_datetime(right, errors="coerce", utc=True)
+        equal = left.eq(right) | (left.isna() & right.isna())
+        if not equal.all():
+            raise AFMLContractError(
+                f"feature/bar gate mismatch for {column}"
+            )
 
 
 def _table_key(name: str, frame: pd.DataFrame) -> tuple[str, ...]:

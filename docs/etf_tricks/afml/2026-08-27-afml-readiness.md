@@ -15,6 +15,7 @@
 - ETF raw Dollar-bar log NAV 與 IX0001 daily log close 均保存 rolling SADF、QADF、QADF dispersion、Conditional ADF、conditional dispersion 與 `SADF_CADF_z`；IX0001 只做 backward as-of join。
 - Triple-barrier 使用截至 `t0` 的 EWMA bar volatility、每日收盤 first-touch path 與恰好 60 根完成 bars 的 vertical horizon；terminal tail 不縮短。
 - `for_trading()` 明確同時套用 `bar_available_at`、`feature_available_at`、calibration 與 live gates；13 檔 bounded snapshot 全部為 `AVAILABLE`，保存 `decision_cutoff/source_bar_id/snapshot_status`，且 schema 不含 `label`、`t1`、`label_available_at` 或 future touch path。
+- 在 calibration effective 日 2025-07-01 的 production-schema regression 中，只有 5 檔已有完成的 live bar 而回傳 `AVAILABLE`；其餘 8 檔明確 unavailable，沒有任何 `CALIBRATION_HISTORY` row 被選入 snapshot，且輸出不含 `_x/_y` merge suffix。
 - Requested-session coverage 會逐 ETF 與 IX0001 對 TWSE calendar fail closed；membership 保存 observation/availability/ingestion/revision/manifest lineage，且實際有 3 根 bar 被正確標記為跨 split boundary。
 - Notebook 位於 repository root，使用 repository `.venv`，所有 code cells 已用 synthetic artifact 逐格執行且沒有提交 outputs。
 
@@ -25,17 +26,17 @@ Artifact：`.artifacts/etf_tricks/afml/optimized-final-20240101-20260707`（work
 Schema：`etf-afml-dataset-v2`
 
 Readiness：`READY_FOR_BOUNDED_RESEARCH_WITH_LIMITATIONS`  
-總受量測 stage time：26.299 秒。RSS 是各 stage 邊界的 process RSS 觀測值，不冒充持續取樣的真正峰值。
+總受量測 stage time：25.617 秒。RSS 是各 stage 邊界的 process RSS 觀測值，不冒充持續取樣的真正峰值。
 
 | Stage | 秒 | stage 邊界最高 RSS | rows |
 |---|---:|---:|---:|
-| source_adapter | 0.134 | 1,196,224,512 | 7,878 |
-| dollar_bar_calibration | 7.390 | 1,196,224,512 | 0 |
-| dollar_bars | 0.486 | 800,538,624 | 5,172 |
-| ffd | 0.115 | 801,792,000 | 5,418 |
-| structural | 3.840 | 801,792,000 | 11,556 |
-| features | 3.689 | 810,127,360 | 5,172 |
-| labels | 10.644 | 819,269,632 | 5,172 |
+| source_adapter | 0.139 | 1,212,108,800 | 7,878 |
+| dollar_bar_calibration | 7.654 | 1,212,108,800 | 0 |
+| dollar_bars | 0.602 | 790,253,568 | 5,172 |
+| ffd | 0.109 | 791,896,064 | 5,418 |
+| structural | 3.991 | 791,896,064 | 11,556 |
+| features | 3.488 | 800,722,944 | 5,172 |
+| labels | 9.633 | 806,952,960 | 5,172 |
 
 | ETF | bars | FFD | feature rows | resolved labels |
 |---|---:|---|---:|---:|
@@ -53,13 +54,13 @@ Readiness：`READY_FOR_BOUNDED_RESEARCH_WITH_LIMITATIONS`
 | sharpe_60d | 418 | reached | 418 | 338 |
 | sortino_60d | 425 | reached | 425 | 345 |
 
-驗證包含 5,172 根 `bar_amount == sum(member etf_amount)` 對帳、所有 canonical key 唯一、13 個 ETF IDs 完整、逐 requested session coverage、membership replay lineage、3 根 split-crossing bar、artifact finalized round-trip、source capability evidence 與 trading-label schema 隔離。
+驗證包含 5,172 根 `bar_amount == sum(member etf_amount)` 對帳、所有 canonical key 唯一、13 個 ETF IDs 完整、逐 requested session coverage、membership replay lineage、3 根 split-crossing bar 且其 ML eligibility 全為 false、artifact finalized round-trip、source capability evidence 與 trading-label schema 隔離。
 
 ## Canonical artifact identities
 
 | Table | rows | SHA-256 |
 |---|---:|---|
-| source_capabilities | 6 | `8f5824dc13fa43885cc27656273ca3e5452e708aa1c8532608457e8a95557672` |
+| source_capabilities | 6 | `9d7948d5569ae8e4e5b274698b349991da7f32bea2e6fed6b8b2d0e0ddf9562d` |
 | dollar_bars | 5,172 | `056284b2916ec4155994cfc1f672afd2e6e3d09f9a0360e87bf7b56897776cf3` |
 | open_bar_checkpoints | 3 | `56326beed589c2ff07808484e4935292cbbebf6d60e1e2d5139fb262f00aa3bd` |
 | bar_daily_membership | 7,608 | `8021af3117f579b1fadeb261e72a8ca0dc1896a51d085e5ad8a6ad4f93c574d9` |
@@ -68,13 +69,13 @@ Readiness：`READY_FOR_BOUNDED_RESEARCH_WITH_LIMITATIONS`
 | ffd_series | 4,382 | `5ef70d9b21f0a92d102ef46edebd1d3429008d0847429b579251436667e86bf8` |
 | structural_features | 5,778 | `4b446c674b5d19add3a31a27611afda0c53a7c0154777aa02dff75170ca9cdf4` |
 | features | 5,172 | `f2cfec964b2924fafa7b96be7e4be84cd31eed3db4047404c740caf0dd165537` |
-| events | 5,172 | `5ea4a9d92e6170097ba2711b97d618f9fadc79d557a632b8750bde9fc61b24a9` |
-| labels | 5,172 | `9d825cbe978a4ae31b99612b6f462f616c34ae1e510941e4a67f640769952dc3` |
-| diagnostics | 20 | `b590b586984e581616db31a540c5bc690a993e9551ea161571ac713074e8bf50` |
+| events | 5,172 | `ebc96a811266425e07f6c8a5723baa6ac9b7baf706698500e1c68c338b3b4306` |
+| labels | 5,172 | `511be99f2e6a2aa4bc062441ecdb562e243d462e27cff4e291c9aca38536379e` |
+| diagnostics | 20 | `91f743c2546e97d0c10e11dd1a4d38da9af4ebb70a3592af4398f1bcaaff741f` |
 
 Metadata SHA-256：`7128243d7b458768e073b3a22be144e4b840c5e49561e8a5031595624c24633d`
 
-Readiness SHA-256：`d5080d9536520ac8f7fcccb7a96ccac67781e278c7b9538f8ec6d4801d28cb6f`
+Readiness SHA-256：`d19d7053313fd62edd61dc7bbde4e765223114ac604a029abc0c38e9a6a3cb2e`
 
 ## 目前缺失／限制
 

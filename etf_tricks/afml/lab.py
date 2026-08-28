@@ -558,7 +558,11 @@ def _build_readiness(
         limitations.append("TRADING_CALENDAR_MANIFEST_COVERAGE_UNDECLARED")
     if mode == "research_full_history":
         status = "CORE_DESCRIPTIVE_ONLY" if core_ready else "NOT_READY"
-    elif core_ready and revision_status == "PIT_REVISION_VERIFIED":
+    elif (
+        core_ready
+        and revision_status == "PIT_REVISION_VERIFIED"
+        and coverage.get("trading_calendar_manifest_coverage_declared", False)
+    ):
         status = "CORE_READY"
     elif core_ready:
         status = "CORE_READY_FOR_BOUNDED_RESEARCH_WITH_LIMITATIONS"

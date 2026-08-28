@@ -266,3 +266,24 @@ def test_walk_forward_versions_do_not_recut_open_bars(bounded_inputs):
     assert bars["calibration_version"].nunique() >= 2
     assert bars.groupby(["etf_id", "bar_id"])["calibration_version"].nunique().max() == 1
     assert not bars.duplicated(["etf_id", "bar_id"]).any()
+
+
+def test_production_feature_schema_applies_live_gates_on_effective_date(
+    bounded_inputs,
+):
+    root, base, config = bounded_inputs
+    dataset = _build(ETFAFMLLab.from_data_analysts(root), base, config)
+    effective = pd.Timestamp(
+        dataset.metadata["calibrations"][0]["calibration_effective_at"]
+    )
+
+    snapshot = dataset.for_trading(
+        as_of=effective.tz_localize(None), decision_cutoff="after_close"
+    )
+
+    assert not any(column.endswith(("_x", "_y")) for column in snapshot.columns)
+    selected = snapshot[snapshot["snapshot_status"].eq("AVAILABLE")]
+    if not selected.empty:
+        assert selected["bar_role"].eq("LIVE_ELIGIBLE").all()
+        assert selected["live_eligible"].eq(True).all()
+        assert selected["calibration_effective_at"].notna().all()

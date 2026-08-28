@@ -23,6 +23,17 @@ def dataset_fixture() -> AFMLDataset:
         {
             "etf_id": "momentum",
             "bar_id": [1, 2, 3],
+            "bar_status": "FINALIZED",
+            "bar_role": [
+                "CALIBRATION_HISTORY",
+                "CALIBRATION_HISTORY",
+                "LIVE_ELIGIBLE",
+            ],
+            "live_eligible": [False, False, True],
+            "calibration_effective_at": pd.Timestamp(
+                "2025-01-05 23:59:59", tz="Asia/Taipei"
+            ),
+            "bar_available_at": available,
             "bar_end_date": dates,
             "feature_available_at": available,
             "bar_amount": [100.0, 120.0, 140.0],
@@ -40,11 +51,15 @@ def dataset_fixture() -> AFMLDataset:
             "etf_id": "momentum",
             "bar_id": [1, 2, 3],
             "bar_status": "FINALIZED",
-            "bar_role": "LIVE_ELIGIBLE",
+            "bar_role": [
+                "CALIBRATION_HISTORY",
+                "CALIBRATION_HISTORY",
+                "LIVE_ELIGIBLE",
+            ],
             "bar_end_date": dates,
             "feature_available_at": available,
             "bar_available_at": available,
-            "live_eligible": True,
+            "live_eligible": [False, False, True],
             "calibration_effective_at": pd.Timestamp(
                 "2025-01-05 23:59:59", tz="Asia/Taipei"
             ),
@@ -223,6 +238,26 @@ def test_dataset_rejects_calibration_after_first_member(dataset_fixture):
         replace(dataset_fixture, dollar_bars=bars)
 
 
+def test_dataset_rejects_live_bar_without_calibration_effective_at(dataset_fixture):
+    bars = dataset_fixture.dollar_bars.copy()
+    features = dataset_fixture.features.copy()
+    bars.loc[bars["live_eligible"], "calibration_effective_at"] = pd.NaT
+    features.loc[
+        features["live_eligible"], "calibration_effective_at"
+    ] = pd.NaT
+
+    with pytest.raises(ValueError, match="live bar.*calibration_effective_at"):
+        replace(dataset_fixture, dollar_bars=bars, features=features)
+
+
+def test_dataset_rejects_feature_bar_gate_disagreement(dataset_fixture):
+    features = dataset_fixture.features.copy()
+    features.loc[features["bar_id"].eq(3), "bar_role"] = "CALIBRATION_HISTORY"
+
+    with pytest.raises(ValueError, match="feature/bar gate mismatch"):
+        replace(dataset_fixture, features=features)
+
+
 def test_for_trading_explicitly_gates_bar_availability(dataset_fixture):
     bars = dataset_fixture.dollar_bars.copy()
     bars.loc[bars["bar_id"].eq(3), "bar_available_at"] = pd.Timestamp(
@@ -234,7 +269,19 @@ def test_for_trading_explicitly_gates_bar_availability(dataset_fixture):
         as_of="2025-01-31", decision_cutoff="after_close"
     )
 
-    assert snapshot.iloc[0]["bar_id"] == 2
+    assert pd.isna(snapshot.iloc[0]["bar_id"])
+    assert snapshot.iloc[0]["snapshot_status"] == "NO_FEATURE_READY_BAR"
+
+
+def test_for_trading_never_selects_calibration_history_feature_rows(
+    dataset_fixture,
+):
+    snapshot = dataset_fixture.for_trading(
+        as_of="2025-01-20", decision_cutoff="after_close"
+    )
+
+    assert pd.isna(snapshot.iloc[0]["bar_id"])
+    assert snapshot.iloc[0]["snapshot_status"] == "NO_FEATURE_READY_BAR"
 
 
 def test_split_views_use_feature_and_label_availability(dataset_fixture):
@@ -246,6 +293,19 @@ def test_split_views_use_feature_and_label_availability(dataset_fixture):
         pd.Timestamp(dataset_fixture.metadata["train_decision_cutoff"])
     ).all()
     assert len(dataset_fixture.for_ml("momentum", split="validation")) == 1
+
+
+def test_cross_split_bar_is_retained_for_audit_but_excluded_from_ml(
+    dataset_fixture,
+):
+    bars = dataset_fixture.dollar_bars.copy()
+    features = dataset_fixture.features.copy()
+    bars["crosses_split_boundary"] = bars["bar_id"].eq(3)
+    features["crosses_split_boundary"] = features["bar_id"].eq(3)
+    guarded = replace(dataset_fixture, dollar_bars=bars, features=features)
+
+    assert bool(guarded.features.loc[guarded.features["bar_id"].eq(3), "crosses_split_boundary"].iloc[0])
+    assert guarded.for_ml("momentum", split="test").empty
 
 
 def test_corrupt_parquet_fails_hash_verification(tmp_path: Path, dataset_fixture):

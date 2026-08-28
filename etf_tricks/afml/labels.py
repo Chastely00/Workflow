@@ -151,6 +151,9 @@ class TripleBarrierLabeler:
         vertical_date = (
             pd.Timestamp(vertical_bar["bar_end_date"]) if has_full_horizon else pd.NaT
         )
+        crosses_split_boundary = bool(
+            bar.get("crosses_split_boundary", False)
+        )
 
         event = {
             "etf_id": etf_id,
@@ -158,6 +161,7 @@ class TripleBarrierLabeler:
             "t0_bar_id": bar["bar_id"],
             "t0_observation_date": t0_date,
             "event_available_at": event_available_at,
+            "crosses_split_boundary": crosses_split_boundary,
             "entry_reference_price": entry_price,
             "target_volatility": sigma if sigma_valid else np.nan,
             "upper_barrier_log": upper_log,
@@ -181,6 +185,7 @@ class TripleBarrierLabeler:
             "t0_bar_id": bar["bar_id"],
             "t0_observation_date": t0_date,
             "event_available_at": event_available_at,
+            "crosses_split_boundary": crosses_split_boundary,
             "entry_reference_price": entry_price,
             "target_volatility": sigma if sigma_valid else np.nan,
             "upper_barrier_price": upper_price,
@@ -356,6 +361,7 @@ def _add_split_eligibility(
         decision_cutoff = cutoff["decision_cutoff"]
         eligible = (
             complete
+            and not bool(row.get("crosses_split_boundary", False))
             and pd.notna(t1)
             and pd.notna(available)
             and observation_start <= t0 <= observation_end

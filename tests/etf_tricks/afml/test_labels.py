@@ -138,6 +138,22 @@ def test_training_label_requires_t1_and_availability_before_cutoff(label_fixture
     assert not bool(row["eligible_for_train"])
 
 
+def test_cross_split_event_is_never_ml_eligible(label_fixture):
+    features = label_fixture.features[label_fixture.features["bar_id"].eq(1)]
+    bars = label_fixture.bars.copy()
+    bars["crosses_split_boundary"] = bars["bar_id"].eq(1)
+
+    row = TripleBarrierLabeler(label_fixture.config).build(
+        features,
+        bars,
+        label_fixture.memberships,
+        label_fixture.split_cutoffs,
+    ).labels.iloc[0]
+
+    assert bool(row["crosses_split_boundary"])
+    assert not bool(row["eligible_for_train"])
+
+
 def test_vertical_zero_return_respects_drop_policy(label_fixture):
     features = label_fixture.features[label_fixture.features["bar_id"].eq(3)]
     bars = label_fixture.bars.copy()
