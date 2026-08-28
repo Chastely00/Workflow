@@ -40,6 +40,7 @@ from .structural import (
     structural_statistics,
 )
 from .features import AFMLFeatureEngine
+from .labels import LabelTables, TripleBarrierLabeler
 
 
 __all__ = [
@@ -73,6 +74,8 @@ __all__ = [
     "adf_start_vector",
     "structural_statistics",
     "AFMLFeatureEngine",
+    "LabelTables",
+    "TripleBarrierLabeler",
     "config_sha256",
     "validate_run_mode",
 ]
