@@ -140,6 +140,8 @@ class DollarBarCalibrator:
         ix0001: pd.DataFrame,
         boundaries: AFMLBoundaries,
         etf_ids: tuple[str, ...],
+        *,
+        calibration_end: pd.Timestamp | str | None = None,
     ) -> QCalibration:
         ids = tuple(dict.fromkeys(str(value) for value in etf_ids))
         if not ids:
@@ -150,9 +152,20 @@ class DollarBarCalibrator:
             self.config,
             etf_ids=ids,
         )
+        fit_end = (
+            pd.Timestamp(calibration_end).normalize()
+            if calibration_end is not None
+            else pd.Timestamp(boundaries.train_end)
+        )
+        if fit_end < pd.Timestamp(boundaries.train_start) or fit_end > pd.Timestamp(
+            boundaries.test_end
+        ):
+            raise DollarBarContractError(
+                "calibration_end must be within train_start and test_end"
+            )
         train = prepared[
             prepared["date"].between(
-                pd.Timestamp(boundaries.train_start), pd.Timestamp(boundaries.train_end)
+                pd.Timestamp(boundaries.train_start), fit_end
             )
         ].copy()
         ratios = train["etf_amount"] / train["market_amount_baseline"]
@@ -214,7 +227,6 @@ class DollarBarCalibrator:
             )
         q_star = float(passing_q.max())
         fit_start = pd.Timestamp(boundaries.train_start)
-        fit_end = pd.Timestamp(boundaries.train_end)
         parameters_frozen_at = _date_end(fit_end)
         future_dates = prepared.loc[prepared["date"].gt(fit_end), "date"].sort_values()
         calibration_effective_at: pd.Timestamp | pd.NaT
@@ -262,36 +274,55 @@ class DollarBarBuilder:
         daily_etf: pd.DataFrame,
         ix0001: pd.DataFrame,
         calendar: pd.DataFrame,
-        calibration: QCalibration,
+        calibration: QCalibration | tuple[QCalibration, ...],
         role: BarRole,
     ) -> DollarBarTables:
         if role not in {"CALIBRATION_HISTORY", "LIVE_ELIGIBLE"}:
             raise DollarBarContractError(f"unsupported bar role: {role}")
+        calibrations = (
+            (calibration,) if isinstance(calibration, QCalibration) else calibration
+        )
+        if not calibrations:
+            raise DollarBarContractError("at least one calibration is required")
+        if role == "CALIBRATION_HISTORY" and len(calibrations) != 1:
+            raise DollarBarContractError(
+                "calibration history requires exactly one calibration"
+            )
+        etf_ids = calibrations[0].etf_ids
+        if any(item.etf_ids != etf_ids for item in calibrations):
+            raise DollarBarContractError("all calibration versions must share ETF IDs")
+        calibrations = tuple(
+            sorted(calibrations, key=lambda item: item.fit_end)
+        )
         valid_dates = _validated_calendar_dates(calendar)
         prepared = _prepare_daily_market(
             daily_etf,
             ix0001,
             self.config,
-            etf_ids=calibration.etf_ids,
+            etf_ids=etf_ids,
         )
         if not prepared["date"].isin(valid_dates).all():
             raise DollarBarContractError("daily ETF rows include non-TWSE trading dates")
         if role == "CALIBRATION_HISTORY":
-            prepared = prepared[prepared["date"].le(calibration.fit_end)].copy()
+            prepared = prepared[prepared["date"].le(calibrations[0].fit_end)].copy()
         else:
-            if pd.isna(calibration.calibration_effective_at):
+            effective_values = [
+                _naive_date(item.calibration_effective_at)
+                for item in calibrations
+                if pd.notna(item.calibration_effective_at)
+            ]
+            if not effective_values:
                 prepared = prepared.iloc[0:0].copy()
             else:
-                effective_date = pd.Timestamp(calibration.calibration_effective_at)
-                if effective_date.tzinfo is not None:
-                    effective_date = effective_date.tz_localize(None)
-                prepared = prepared[prepared["date"].ge(effective_date.normalize())].copy()
+                prepared = prepared[
+                    prepared["date"].ge(min(effective_values))
+                ].copy()
 
         bars: list[dict[str, object]] = []
         memberships: list[dict[str, object]] = []
         checkpoints: list[dict[str, object]] = []
         config_version = config_sha256(self.config)
-        for etf_id in calibration.etf_ids:
+        for etf_id in etf_ids:
             rows = prepared[prepared["etf_id"].eq(etf_id)].sort_values(
                 "date", kind="mergesort"
             )
@@ -301,15 +332,21 @@ class DollarBarBuilder:
             baseline = np.nan
             threshold_asof_date = pd.NaT
             previous_close = np.nan
+            active_calibration: QCalibration | None = None
             for row in rows.to_dict("records"):
                 if not current:
+                    active_calibration = _active_calibration(
+                        calibrations, pd.Timestamp(row["date"]), role
+                    )
+                    if active_calibration is None:
+                        continue
                     baseline = float(row["market_amount_baseline"])
                     if not np.isfinite(baseline) or baseline <= 0:
                         continue
                     threshold = (
                         float(self.config.fixed_nominal_threshold)
                         if self.config.threshold_mode == "fixed_nominal"
-                        else calibration.q_star * baseline
+                        else active_calibration.q_star * baseline
                     )
                     threshold_asof_date = pd.Timestamp(row["threshold_asof_date"])
                 member_available_at = max(
@@ -341,7 +378,7 @@ class DollarBarBuilder:
                             row.get("has_data_quality_flag", False)
                             or row.get("missing_traded_value_count", 0)
                         ),
-                        "calibration_version": calibration.calibration_version,
+                        "calibration_version": active_calibration.calibration_version,
                     }
                 )
                 accumulated = float(sum(float(value["etf_amount"]) for value in current))
@@ -375,7 +412,7 @@ class DollarBarBuilder:
                         "threshold_asof_date": threshold_asof_date,
                         "threshold_mode": self.config.threshold_mode,
                         "market_amount_baseline": baseline,
-                        "market_fraction_q": calibration.q_star,
+                        "market_fraction_q": active_calibration.q_star,
                         "threshold_amount": threshold,
                         "frozen_threshold_amount": threshold,
                         "bar_amount": accumulated,
@@ -395,9 +432,9 @@ class DollarBarBuilder:
                         "ix0001_amount_sum": ix_sum,
                         "etf_market_share": accumulated / ix_sum if ix_sum > 0 else np.nan,
                         "source_observation_max_date": end_date,
-                        "calibration_fit_end": calibration.fit_end,
-                        "parameters_frozen_at": calibration.parameters_frozen_at,
-                        "calibration_effective_at": calibration.calibration_effective_at,
+                        "calibration_fit_end": active_calibration.fit_end,
+                        "parameters_frozen_at": active_calibration.parameters_frozen_at,
+                        "calibration_effective_at": active_calibration.calibration_effective_at,
                         "bar_available_at": bar_available_at,
                         "feature_available_at": bar_available_at,
                         "live_eligible": role == "LIVE_ELIGIBLE",
@@ -406,15 +443,18 @@ class DollarBarBuilder:
                             bool(value["source_quality_flag"]) for value in current
                         ),
                         "source_revision_status": source_revision_status,
-                        "calibration_version": calibration.calibration_version,
+                        "calibration_version": active_calibration.calibration_version,
                         "config_version": config_version,
                     }
                 )
                 memberships.extend(current)
                 previous_close = close_nav
                 current = []
+                active_calibration = None
                 bar_id += 1
             if current:
+                if active_calibration is None:
+                    raise DollarBarContractError("open bar lacks an active calibration")
                 navs = np.asarray([float(value["nav"]) for value in current], dtype=float)
                 checkpoints.append(
                     {
@@ -426,7 +466,7 @@ class DollarBarBuilder:
                         "last_observation_date": current[-1]["date"],
                         "threshold_asof_date": threshold_asof_date,
                         "market_amount_baseline": baseline,
-                        "market_fraction_q": calibration.q_star,
+                        "market_fraction_q": active_calibration.q_star,
                         "threshold_amount": threshold,
                         "accumulated_amount": sum(
                             float(value["etf_amount"]) for value in current
@@ -442,7 +482,7 @@ class DollarBarBuilder:
                         "member_dates": tuple(value["date"] for value in current),
                         "member_amounts": tuple(value["etf_amount"] for value in current),
                         "member_navs": tuple(value["nav"] for value in current),
-                        "calibration_version": calibration.calibration_version,
+                        "calibration_version": active_calibration.calibration_version,
                         "config_version": config_version,
                     }
                 )
@@ -466,8 +506,33 @@ class DollarBarBuilder:
             dollar_bars=bar_frame,
             bar_daily_membership=member_frame,
             open_bar_checkpoints=checkpoint_frame,
-            calibration_evidence=calibration.candidate_evidence.copy(),
+            calibration_evidence=pd.concat(
+                [item.candidate_evidence for item in calibrations], ignore_index=True
+            ),
         )
+
+
+def _naive_date(value: pd.Timestamp | pd.NaT) -> pd.Timestamp:
+    timestamp = pd.Timestamp(value)
+    if timestamp.tzinfo is not None:
+        timestamp = timestamp.tz_localize(None)
+    return timestamp.normalize()
+
+
+def _active_calibration(
+    calibrations: tuple[QCalibration, ...],
+    observation_date: pd.Timestamp,
+    role: BarRole,
+) -> QCalibration | None:
+    if role == "CALIBRATION_HISTORY":
+        return calibrations[0]
+    eligible = [
+        item
+        for item in calibrations
+        if pd.notna(item.calibration_effective_at)
+        and _naive_date(item.calibration_effective_at) <= observation_date.normalize()
+    ]
+    return eligible[-1] if eligible else None
 
 
 def _prepare_daily_market(

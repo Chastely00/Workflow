@@ -42,6 +42,7 @@ from .structural import (
 from .features import AFMLFeatureEngine
 from .labels import LabelTables, TripleBarrierLabeler
 from .dataset import AFMLDataset, AFML_TABLE_NAMES
+from .lab import ETFAFMLLab
 
 
 __all__ = [
@@ -79,6 +80,7 @@ __all__ = [
     "TripleBarrierLabeler",
     "AFMLDataset",
     "AFML_TABLE_NAMES",
+    "ETFAFMLLab",
     "config_sha256",
     "validate_run_mode",
 ]

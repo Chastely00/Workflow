@@ -4,7 +4,13 @@ from .lab import ETFTrickLab
 from .result import ETFTrickResult
 from .allocation import AllocationPlan
 from .validation import ReadinessReport, validate_result
-from .afml import AFMLBoundaries, AFMLConfig, AFMLContractError, AFMLScopeError
+from .afml import (
+    AFMLBoundaries,
+    AFMLConfig,
+    AFMLContractError,
+    AFMLScopeError,
+    ETFAFMLLab,
+)
 
 __all__ = [
     "CostPolicy",
@@ -20,6 +26,7 @@ __all__ = [
     "AFMLConfig",
     "AFMLContractError",
     "AFMLScopeError",
+    "ETFAFMLLab",
     "get_etf_spec",
     "validate_result",
 ]

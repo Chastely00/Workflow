@@ -12,7 +12,7 @@ from typing import Any, ClassVar
 import numpy as np
 import pandas as pd
 
-from .config import AFMLContractError
+from .config import AFMLContractError, AFMLScopeError
 
 
 AFML_TABLE_NAMES = (
@@ -107,6 +107,10 @@ class AFMLDataset:
         return self._split_view("test")
 
     def for_ml(self, etf_id: str, split: str = "train") -> pd.DataFrame:
+        if self.metadata.get("readiness_scope") == "DESCRIPTIVE_ONLY":
+            raise AFMLScopeError(
+                "research_full_history dataset is DESCRIPTIVE_ONLY and cannot feed ML"
+            )
         if split not in {"train", "validation", "test"}:
             raise AFMLContractError(
                 "split must be one of 'train', 'validation', or 'test'"
@@ -416,8 +420,17 @@ class AFMLDataset:
 
 
 def _table_key(name: str, frame: pd.DataFrame) -> tuple[str, ...]:
-    if name == "ffd_search" and "search_order" not in frame.columns:
-        candidates = ("etf_id", "calibration_version", "phase", "d")
+    if name == "ffd_search":
+        if "search_order" in frame.columns:
+            candidates = ("etf_id", "q_calibration_version", "search_order")
+        else:
+            candidates = (
+                "etf_id",
+                "q_calibration_version",
+                "calibration_version",
+                "phase",
+                "d",
+            )
         return tuple(column for column in candidates if column in frame.columns)
     if name == "structural_features" and not {
         "entity_id",
