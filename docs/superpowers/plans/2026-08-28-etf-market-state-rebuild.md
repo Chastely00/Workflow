@@ -1,5 +1,9 @@
 # ETF Tricks Market State Rebuild Implementation Plan
 
+> **Superseded:** 2026-08-31 起不得再執行本文件。本文件依賴已取消的
+> `official_market_status` 與可發布的 `DELISTED` row；新的 TEJ-only 權威計畫為
+> `docs/superpowers/plans/2026-08-31-tej-only-etf-market-state-rebuild.md`。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Consume certified DataAnalysts `daily_market_state`, rebuild all 13 ETF Tricks with authoritative Daily ETF amount and halt-safe execution, then run one explicitly authorized full-history AFML acceptance.
