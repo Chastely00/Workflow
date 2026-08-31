@@ -88,7 +88,7 @@ def _market_state_rows() -> list[dict[str, object]]:
             "security_master_market": "TWSE",
             "lifecycle_list_date": "2000-01-01",
             "lifecycle_delist_date": None,
-            "lifecycle_interval_start": "2000-01-01",
+            "lifecycle_interval_start": "2025-01-01",
             "lifecycle_interval_end_exclusive": "2025-01-07",
             "lifecycle_active": True,
             "lifecycle_conflict": False,
@@ -132,7 +132,7 @@ def _market_state_rows() -> list[dict[str, object]]:
             "security_master_market": "TWSE",
             "lifecycle_list_date": "2000-01-01",
             "lifecycle_delist_date": None,
-            "lifecycle_interval_start": "2000-01-01",
+            "lifecycle_interval_start": "2025-01-01",
             "lifecycle_interval_end_exclusive": "2025-01-07",
             "lifecycle_active": True,
             "lifecycle_conflict": False,
@@ -550,6 +550,89 @@ def test_scan_market_state_rejects_declared_schema_fingerprint_mismatch(
         )
 
 
+def test_scan_market_state_rejects_extra_physical_official_field(
+    tmp_path: Path,
+) -> None:
+    path = _write_market_state_artifact(tmp_path)
+    table = pq.read_table(path).append_column(
+        "official_market_status", pa.array([None, None], type=pa.string())
+    )
+    pq.write_table(table, path)
+    _refresh_market_state_inventory(tmp_path, path)
+    manifest_path = tmp_path / "data_store" / "manifests" / "daily_market_state.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["columns"] = list(_MARKET_STATE_COLUMNS)
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(DataContractError, match="physical schema.*governed columns"):
+        DataGateway.from_data_analysts(tmp_path).scan_market_state(
+            "2025-01-02", "2025-01-03"
+        )
+
+
+@pytest.mark.parametrize(
+    ("manifest_overrides", "row", "error"),
+    [
+        (
+            {"classification_policy_version": "daily_market_state_v2"},
+            None,
+            "classification_policy_version",
+        ),
+        (
+            None,
+            {**_market_state_rows()[0], "classification_policy_version": "daily_market_state_v2"},
+            "classification_policy_version",
+        ),
+    ],
+)
+def test_scan_market_state_requires_governed_manifest_and_row_policy_version(
+    tmp_path: Path,
+    manifest_overrides: dict[str, object] | None,
+    row: dict[str, object] | None,
+    error: str,
+) -> None:
+    _write_market_state_artifact(
+        tmp_path,
+        rows=[row] if row is not None else None,
+        manifest_overrides=manifest_overrides,
+    )
+
+    with pytest.raises(DataContractError, match=error):
+        DataGateway.from_data_analysts(tmp_path).scan_market_state(
+            "2025-01-02", "2025-01-02"
+        )
+
+
+@pytest.mark.parametrize(
+    ("mutate_manifest", "error"),
+    [
+        (
+            lambda manifest: manifest["partition_inventory"][0].__setitem__("row_count", 99),
+            "partition_inventory.*row_count",
+        ),
+        (
+            lambda manifest: manifest.__setitem__("row_count", 99),
+            "row_count",
+        ),
+    ],
+)
+def test_scan_market_state_checks_partition_and_top_level_row_counts_for_filtered_scan(
+    tmp_path: Path,
+    mutate_manifest: object,
+    error: str,
+) -> None:
+    _write_market_state_artifact(tmp_path)
+    manifest_path = tmp_path / "data_store" / "manifests" / "daily_market_state.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    mutate_manifest(manifest)
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(DataContractError, match=error):
+        DataGateway.from_data_analysts(tmp_path).scan_market_state(
+            "2025-01-02", "2025-01-02", ["1101"]
+        )
+
+
 def test_scan_market_state_rejects_manifest_drift_after_scan(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -636,6 +719,74 @@ def test_scan_market_state_rejects_classifier_matrix_mismatch(
     with pytest.raises(DataContractError, match=error):
         DataGateway.from_data_analysts(tmp_path).scan_market_state(
             "2025-01-02", "2025-01-02"
+        )
+
+
+def test_scan_market_state_accepts_suspended_price_row_with_observed_zero_amount(
+    tmp_path: Path,
+) -> None:
+    row = {
+        **_market_state_rows()[0],
+        "market_state": "HALTED",
+        "state_reason": "APISTKATTR_SUSPENSION_WITH_OBSERVED_AMOUNT",
+        "authoritative_traded_value": 0.0,
+        "susp_fg": "Y",
+        "exchange_tradable": False,
+    }
+    _write_market_state_artifact(tmp_path, rows=[row])
+
+    result = DataGateway.from_data_analysts(tmp_path).scan_market_state(
+        "2025-01-02", "2025-01-02"
+    )
+
+    assert result.loc[0, "amount_state"] == "OBSERVED"
+    assert result.loc[0, "authoritative_traded_value"] == 0.0
+
+
+@pytest.mark.parametrize(
+    ("row", "error"),
+    [
+        (
+            {
+                **_market_state_rows()[1],
+                "amount_state": "OBSERVED",
+                "authoritative_traded_value": 0.0,
+                "amount_zero_authorized": False,
+            },
+            "APISTKATTR_SUSPENSION_NO_PRICE.*authority tuple",
+        ),
+        (
+            {
+                **_market_state_rows()[1],
+                "attr_row_present": False,
+                "atten_fg": None,
+                "disp_fg": None,
+                "full_fg": None,
+                "limit_fg": None,
+                "limo_fg": None,
+                "sbadt_fg": None,
+                "ssadt_fg": None,
+                "susp_fg": None,
+                "full_delivery": None,
+                "state_reason": "ACTIVE_LIFECYCLE_DUAL_SOURCE_ABSENCE",
+                "amount_state": "OBSERVED",
+                "authoritative_traded_value": 0.0,
+                "amount_zero_authorized": False,
+            },
+            "ACTIVE_LIFECYCLE_DUAL_SOURCE_ABSENCE.*authority tuple",
+        ),
+    ],
+)
+def test_scan_market_state_rejects_no_price_authority_tuple_mismatch(
+    tmp_path: Path,
+    row: dict[str, object],
+    error: str,
+) -> None:
+    _write_market_state_artifact(tmp_path, rows=[row])
+
+    with pytest.raises(DataContractError, match=error):
+        DataGateway.from_data_analysts(tmp_path).scan_market_state(
+            "2025-01-02", "2025-01-03"
         )
 
 
@@ -746,6 +897,48 @@ def test_scan_market_state_accepts_index_price_row_only_contract(tmp_path: Path)
     ],
 )
 def test_scan_market_state_rejects_invalid_lifecycle_contract(
+    tmp_path: Path,
+    row: dict[str, object],
+    error: str,
+) -> None:
+    _write_market_state_artifact(tmp_path, rows=[row])
+
+    with pytest.raises(DataContractError, match=error):
+        DataGateway.from_data_analysts(tmp_path).scan_market_state(
+            "2025-01-02", "2025-01-02"
+        )
+
+
+@pytest.mark.parametrize(
+    ("row", "error"),
+    [
+        (
+            {**_market_state_rows()[0], "lifecycle_interval_start": "2000-01-01"},
+            "interval_start",
+        ),
+        (
+            {**_market_state_rows()[0], "lifecycle_interval_end_exclusive": "2025-01-06"},
+            "interval_end",
+        ),
+        (
+            {
+                **_market_state_rows()[0],
+                "ticker": "IX0001",
+                "market": "NASDAQ",
+                "instrument_kind": "INDEX",
+                "identity_source": "APIPRCD_PRICE_ROW",
+                "security_master_market": None,
+                "lifecycle_list_date": None,
+                "lifecycle_delist_date": None,
+                "lifecycle_interval_start": None,
+                "lifecycle_interval_end_exclusive": None,
+                "lifecycle_active": False,
+            },
+            "index market",
+        ),
+    ],
+)
+def test_scan_market_state_binds_lifecycle_interval_and_index_market_to_manifest_bounds(
     tmp_path: Path,
     row: dict[str, object],
     error: str,

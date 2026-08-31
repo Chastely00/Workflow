@@ -230,6 +230,10 @@ class DataGateway:
             value = manifest.get(field)
             if not isinstance(value, str) or not value.strip():
                 raise DataContractError(f"daily_market_state manifest {field} is missing")
+        if manifest["classification_policy_version"] != _CLASSIFICATION_POLICY_VERSION:
+            raise DataContractError(
+                "daily_market_state manifest classification_policy_version is invalid"
+            )
 
     def _validate_market_state_inventory(self, manifest: dict[str, object]) -> None:
         raw_paths = manifest.get("artifact_paths")
@@ -256,6 +260,7 @@ class DataGateway:
             or _SHA256.fullmatch(declared_schema_fingerprint) is None
         ):
             raise DataContractError("daily_market_state manifest schema_fingerprint is invalid")
+        total_partition_rows = 0
         for raw_path in raw_paths:
             if not isinstance(raw_path, str) or not raw_path:
                 raise DataContractError("daily_market_state manifest artifact_paths are invalid")
@@ -281,6 +286,26 @@ class DataGateway:
                     "daily_market_state partition_inventory content_sha256 mismatch"
                 )
             schema_fingerprint = item.get("schema_fingerprint")
+            partition_row_count = item.get("row_count")
+            if (
+                not isinstance(partition_row_count, int)
+                or isinstance(partition_row_count, bool)
+                or partition_row_count < 0
+            ):
+                raise DataContractError(
+                    "daily_market_state partition_inventory row_count is invalid"
+                )
+            try:
+                physical_row_count = pq.ParquetFile(path).metadata.num_rows
+            except (OSError, pa.ArrowException) as exc:
+                raise DataContractError(
+                    f"daily_market_state partition_inventory row_count is unreadable: {raw_path}"
+                ) from exc
+            if partition_row_count != physical_row_count:
+                raise DataContractError(
+                    "daily_market_state partition_inventory row_count mismatch"
+                )
+            total_partition_rows += partition_row_count
             actual_schema_fingerprint = hashlib.sha256(
                 pq.read_schema(path).serialize().to_pybytes()
             ).hexdigest()
@@ -293,6 +318,10 @@ class DataGateway:
                 raise DataContractError(
                     "daily_market_state partition_inventory schema_fingerprint mismatch"
                 )
+        if total_partition_rows != manifest["row_count"]:
+            raise DataContractError(
+                "daily_market_state partition_inventory row_count does not match manifest row_count"
+            )
 
     @staticmethod
     def _validate_market_state_coverage(
@@ -415,10 +444,18 @@ class DataGateway:
                 )
 
         for row in frame.itertuples(index=False):
-            DataGateway._validate_market_state_row(row)
+            DataGateway._validate_market_state_row(row, manifest)
 
     @staticmethod
     def _validate_market_state_physical_schema(schema: pa.Schema) -> None:
+        physical_names = tuple(schema.names)
+        if (
+            len(physical_names) != len(set(physical_names))
+            or set(physical_names) != set(_MARKET_STATE_COLUMNS)
+        ):
+            raise DataContractError(
+                "daily_market_state physical schema does not match the governed columns"
+            )
         date_columns = {
             "date",
             "lifecycle_list_date",
@@ -475,7 +512,7 @@ class DataGateway:
                 )
 
     @staticmethod
-    def _validate_market_state_row(row: object) -> None:
+    def _validate_market_state_row(row: object, manifest: dict[str, object]) -> None:
         market_state = getattr(row, "market_state")
         amount_state = getattr(row, "amount_state")
         amount = getattr(row, "authoritative_traded_value")
@@ -558,27 +595,66 @@ class DataGateway:
         if market_state == "MISSING" and amount_state != "MISSING":
             raise DataContractError("daily_market_state MISSING requires amount_state=MISSING")
 
-        DataGateway._validate_market_state_lifecycle(row)
-        DataGateway._validate_market_state_availability(row)
+        DataGateway._validate_market_state_lifecycle(row, manifest)
+        DataGateway._validate_market_state_availability(row, manifest)
 
         suspended = DataGateway._active_flag(getattr(row, "susp_fg"))
         if price_row_present and market_state == "MISSING":
-            expected = ("APIPRCD_INVALID_AMOUNT", "MISSING")
+            expected = ("APIPRCD_INVALID_AMOUNT", "MISSING", "MISSING", False, None)
         elif price_row_present and suspended:
-            expected = ("APISTKATTR_SUSPENSION_WITH_OBSERVED_AMOUNT", "HALTED")
+            expected = (
+                "APISTKATTR_SUSPENSION_WITH_OBSERVED_AMOUNT",
+                "HALTED",
+                "OBSERVED",
+                False,
+                False,
+            )
         elif price_row_present:
-            expected = ("APIPRCD_OBSERVED_AMOUNT", "TRADING")
+            expected = ("APIPRCD_OBSERVED_AMOUNT", "TRADING", "OBSERVED", False, True)
         elif suspended:
-            expected = ("APISTKATTR_SUSPENSION_NO_PRICE", "HALTED")
+            expected = (
+                "APISTKATTR_SUSPENSION_NO_PRICE",
+                "HALTED",
+                "ZERO_AUTHORIZED",
+                True,
+                False,
+            )
         elif attr_row_present:
-            expected = ("APISTKATTR_NON_SUSPENSION_WITHOUT_PRICE", "MISSING")
+            expected = (
+                "APISTKATTR_NON_SUSPENSION_WITHOUT_PRICE",
+                "MISSING",
+                "MISSING",
+                False,
+                None,
+            )
         elif getattr(row, "instrument_kind") == "EQUITY" and getattr(row, "lifecycle_active"):
-            expected = ("ACTIVE_LIFECYCLE_DUAL_SOURCE_ABSENCE", "HALTED")
+            expected = (
+                "ACTIVE_LIFECYCLE_DUAL_SOURCE_ABSENCE",
+                "HALTED",
+                "ZERO_AUTHORIZED",
+                True,
+                False,
+            )
         else:
-            expected = ("NO_AUTHORIZED_STATE_KEY", "MISSING")
-        if getattr(row, "state_reason") != expected[0] or market_state != expected[1]:
+            expected = ("NO_AUTHORIZED_STATE_KEY", "MISSING", "MISSING", False, None)
+        actual_tuple = (
+            getattr(row, "state_reason"),
+            market_state,
+            amount_state,
+            zero_authorized,
+            exchange_tradable,
+        )
+        expected_tuple = expected[:5]
+        if actual_tuple != expected_tuple:
             raise DataContractError(
-                "daily_market_state state_reason does not match the TEJ classifier matrix"
+                f"daily_market_state state_reason {expected[0]} authority tuple does not match "
+                "the TEJ classifier matrix"
+            )
+        if expected[2] == "ZERO_AUTHORIZED" and (
+            not DataGateway._is_nonnegative_finite_number(amount) or float(amount) != 0.0
+        ):
+            raise DataContractError(
+                f"daily_market_state {expected[0]} authority tuple requires amount=0.0"
             )
 
     @staticmethod
@@ -586,7 +662,10 @@ class DataGateway:
         return isinstance(value, str) and value.strip().upper() == "Y"
 
     @staticmethod
-    def _validate_market_state_lifecycle(row: object) -> None:
+    def _validate_market_state_lifecycle(
+        row: object,
+        manifest: dict[str, object],
+    ) -> None:
         instrument_kind = getattr(row, "instrument_kind")
         identity_source = getattr(row, "identity_source")
         lifecycle_active = getattr(row, "lifecycle_active")
@@ -628,15 +707,33 @@ class DataGateway:
             list_date = pd.Timestamp(getattr(row, "lifecycle_list_date"))
             interval_start = pd.Timestamp(getattr(row, "lifecycle_interval_start"))
             interval_end = pd.Timestamp(getattr(row, "lifecycle_interval_end_exclusive"))
-            if not list_date <= interval_start <= row_date < interval_end:
+            build_start = pd.Timestamp(manifest["build_start"])
+            build_end = pd.Timestamp(manifest["build_end"])
+            certified_source_start = pd.Timestamp(manifest["certified_source_start"])
+            build_end_exclusive = build_end + pd.Timedelta(days=1)
+            if not list_date <= row_date < interval_end:
                 raise DataContractError("daily_market_state equity lifecycle interval is invalid")
             delist_date = getattr(row, "lifecycle_delist_date")
             if not pd.isna(delist_date):
                 delist = pd.Timestamp(delist_date)
-                if row_date >= delist or interval_end > delist:
+                if delist <= list_date or row_date >= delist:
                     raise DataContractError(
                         "daily_market_state equity delist boundary is not exclusive"
                     )
+                expected_end = min(delist, build_end_exclusive)
+            else:
+                expected_end = build_end_exclusive
+            expected_start = max(list_date, build_start, certified_source_start)
+            if interval_start != expected_start:
+                raise DataContractError(
+                    "daily_market_state equity lifecycle_interval_start is not manifest-bound"
+                )
+            if interval_end != expected_end:
+                raise DataContractError(
+                    "daily_market_state equity lifecycle_interval_end_exclusive is not manifest-bound"
+                )
+            if not interval_start <= row_date < interval_end:
+                raise DataContractError("daily_market_state equity lifecycle interval is invalid")
         else:
             index_null_fields = (
                 "security_master_market",
@@ -651,9 +748,14 @@ class DataGateway:
                 raise DataContractError("daily_market_state has invalid index lifecycle identity")
             if not getattr(row, "price_row_present"):
                 raise DataContractError("daily_market_state index requires a price-row-only key")
+            if getattr(row, "market") not in {"TWSE", "TPEX", "INDEX"}:
+                raise DataContractError("daily_market_state index market identity is invalid")
 
     @staticmethod
-    def _validate_market_state_availability(row: object) -> None:
+    def _validate_market_state_availability(
+        row: object,
+        manifest: dict[str, object],
+    ) -> None:
         date_value = pd.Timestamp(getattr(row, "date"))
         observation_date = pd.Timestamp(getattr(row, "observation_date"))
         source_available_date = pd.Timestamp(getattr(row, "source_available_date"))
@@ -672,7 +774,11 @@ class DataGateway:
             )
         if getattr(row, "availability_precision") != _AVAILABILITY_PRECISION:
             raise DataContractError("daily_market_state has invalid availability_precision")
-        if getattr(row, "classification_policy_version") != _CLASSIFICATION_POLICY_VERSION:
+        if (
+            getattr(row, "classification_policy_version")
+            != manifest["classification_policy_version"]
+            or manifest["classification_policy_version"] != _CLASSIFICATION_POLICY_VERSION
+        ):
             raise DataContractError(
                 "daily_market_state has invalid classification_policy_version"
             )
