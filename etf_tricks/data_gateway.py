@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
+import re
 from typing import Iterable
 
 import pandas as pd
@@ -24,16 +26,84 @@ _DATE_COLUMNS = {
     "delist_date",
     "event_date",
     "ex_date",
+    "observation_date",
+    "earliest_execution_session",
+    "lifecycle_list_date",
+    "lifecycle_delist_date",
+    "lifecycle_interval_start",
+    "lifecycle_interval_end_exclusive",
 }
 
 _LOGICAL_KEYS = {
     "trading_calendar": ("date", "market"),
     "daily_price_volume": ("date", "ticker"),
+    "daily_market_state": ("date", "ticker"),
     "daily_chip": ("date", "ticker"),
     "monthly_sales": ("source_row_id",),
     "financial_statement_raw": ("source_row_id",),
     "security_master": ("ticker",),
 }
+
+_MARKET_STATE_COLUMNS = (
+    "date",
+    "ticker",
+    "market",
+    "market_state",
+    "state_reason",
+    "amount_state",
+    "authoritative_traded_value",
+    "amount_zero_authorized",
+    "price_row_present",
+    "attr_row_present",
+    "atten_fg",
+    "disp_fg",
+    "full_fg",
+    "limit_fg",
+    "limo_fg",
+    "sbadt_fg",
+    "ssadt_fg",
+    "susp_fg",
+    "exchange_tradable",
+    "full_delivery",
+    "instrument_kind",
+    "identity_source",
+    "security_master_market",
+    "lifecycle_list_date",
+    "lifecycle_delist_date",
+    "lifecycle_interval_start",
+    "lifecycle_interval_end_exclusive",
+    "lifecycle_active",
+    "lifecycle_conflict",
+    "identity_conflict",
+    "lifecycle_pit_status",
+    "revision_pit_status",
+    "observation_date",
+    "source_available_date",
+    "availability_precision",
+    "earliest_execution_session",
+    "security_master_manifest_sha256",
+    "calendar_manifest_sha256",
+    "price_manifest_sha256",
+    "tradability_manifest_sha256",
+    "classification_policy_version",
+    "data_cutoff_at",
+)
+_MARKET_STATE_HASH_COLUMNS = {
+    "security_master_manifest_sha256": "security_master",
+    "calendar_manifest_sha256": "trading_calendar",
+    "price_manifest_sha256": "daily_price_volume",
+    "tradability_manifest_sha256": "daily_tradability",
+}
+_MARKET_STATE_REQUIRED_LIFECYCLE_COLUMNS = (
+    "instrument_kind",
+    "identity_source",
+    "lifecycle_active",
+    "lifecycle_conflict",
+    "identity_conflict",
+    "lifecycle_pit_status",
+    "revision_pit_status",
+)
+_SHA256 = re.compile(r"[0-9a-f]{64}")
 
 
 class DataGateway:
@@ -45,6 +115,243 @@ class DataGateway:
     @classmethod
     def from_data_analysts(cls, root: str | Path) -> "DataGateway":
         return cls(Path(root))
+
+    def scan_market_state(
+        self,
+        start: str | pd.Timestamp,
+        end: str | pd.Timestamp,
+        tickers: Iterable[str] | None = None,
+    ) -> pd.DataFrame:
+        """Read the certified TEJ-only daily market-state artifact."""
+        manifest = self.load_manifest("daily_market_state")
+        self._validate_market_state_manifest(manifest)
+
+        filters: tuple[tuple[str, str, object], ...] = ()
+        if tickers is not None:
+            if isinstance(tickers, (str, bytes)):
+                raise DataContractError("daily_market_state tickers must be an iterable of ticker ids")
+            selected_tickers = tuple(dict.fromkeys(tickers))
+            if any(not isinstance(ticker, str) or not ticker for ticker in selected_tickers):
+                raise DataContractError("daily_market_state tickers must contain non-empty strings")
+            if not selected_tickers:
+                return self._empty_market_state_frame()
+            filters = (("ticker", "in", selected_tickers),)
+
+        result = self.scan_artifact(
+            "daily_market_state",
+            columns=_MARKET_STATE_COLUMNS,
+            filters=filters,
+            start=start,
+            end=end,
+            date_column="date",
+        )
+        self._validate_market_state_rows(result, manifest)
+        return result.loc[:, list(_MARKET_STATE_COLUMNS)].reset_index(drop=True)
+
+    @staticmethod
+    def _empty_market_state_frame() -> pd.DataFrame:
+        frame = pd.DataFrame(columns=_MARKET_STATE_COLUMNS)
+        for column in _DATE_COLUMNS.intersection(_MARKET_STATE_COLUMNS):
+            frame[column] = pd.to_datetime(frame[column])
+        return frame
+
+    @staticmethod
+    def _validate_market_state_manifest(manifest: dict[str, object]) -> None:
+        declared_columns = tuple(str(value) for value in manifest.get("columns", ()))
+        if declared_columns != _MARKET_STATE_COLUMNS:
+            raise DataContractError(
+                "daily_market_state manifest schema does not match the governed columns"
+            )
+        if manifest.get("logical_key") != ["date", "ticker"]:
+            raise DataContractError("daily_market_state manifest logical_key must be ['date', 'ticker']")
+
+        hashes = manifest.get("dependency_manifest_sha256_by_contract")
+        expected_contracts = set(_MARKET_STATE_HASH_COLUMNS.values())
+        if not isinstance(hashes, dict) or set(hashes) != expected_contracts:
+            raise DataContractError(
+                "daily_market_state dependency_manifest_sha256_by_contract is incomplete"
+            )
+        for contract, value in hashes.items():
+            if not isinstance(value, str) or _SHA256.fullmatch(value) is None:
+                raise DataContractError(
+                    "daily_market_state dependency_manifest_sha256_by_contract "
+                    f"has invalid hash for {contract}"
+                )
+
+    @staticmethod
+    def _validate_market_state_rows(
+        frame: pd.DataFrame,
+        manifest: dict[str, object],
+    ) -> None:
+        if frame.duplicated(["date", "ticker"]).any():
+            raise DataContractError("daily_market_state contains duplicate (date, ticker) rows")
+
+        for column in _MARKET_STATE_REQUIRED_LIFECYCLE_COLUMNS:
+            if frame[column].isna().any():
+                raise DataContractError(
+                    f"daily_market_state contains missing required lifecycle field {column}"
+                )
+        for column in (
+            "observation_date",
+            "source_available_date",
+            "availability_precision",
+            "earliest_execution_session",
+            "classification_policy_version",
+            "data_cutoff_at",
+        ):
+            if frame[column].isna().any():
+                raise DataContractError(
+                    f"daily_market_state contains missing required availability field {column}"
+                )
+
+        invalid_states = set(frame["market_state"].dropna()).difference(
+            {"TRADING", "HALTED", "MISSING"}
+        )
+        if frame["market_state"].isna().any() or invalid_states:
+            raise DataContractError(
+                f"daily_market_state has invalid market_state values: {sorted(invalid_states)}"
+            )
+        invalid_amount_states = set(frame["amount_state"].dropna()).difference(
+            {"OBSERVED", "ZERO_AUTHORIZED", "MISSING"}
+        )
+        if frame["amount_state"].isna().any() or invalid_amount_states:
+            raise DataContractError(
+                "daily_market_state has invalid amount_state values: "
+                f"{sorted(invalid_amount_states)}"
+            )
+
+        hashes = manifest["dependency_manifest_sha256_by_contract"]
+        if not isinstance(hashes, dict):
+            raise DataContractError(
+                "daily_market_state dependency_manifest_sha256_by_contract is incomplete"
+            )
+        for column, contract in _MARKET_STATE_HASH_COLUMNS.items():
+            values = frame[column]
+            if values.isna().any() or any(
+                not isinstance(value, str) or _SHA256.fullmatch(value) is None
+                for value in values
+            ):
+                raise DataContractError(
+                    f"daily_market_state contains invalid required manifest hash {column}"
+                )
+            if not values.eq(hashes[contract]).all():
+                raise DataContractError(
+                    f"daily_market_state {column} does not match manifest hash for {contract}"
+                )
+
+        for row in frame.itertuples(index=False):
+            DataGateway._validate_market_state_row(row)
+
+    @staticmethod
+    def _validate_market_state_row(row: object) -> None:
+        market_state = getattr(row, "market_state")
+        amount_state = getattr(row, "amount_state")
+        amount = getattr(row, "authoritative_traded_value")
+        zero_authorized = getattr(row, "amount_zero_authorized")
+        exchange_tradable = getattr(row, "exchange_tradable")
+
+        if type(zero_authorized) is not bool:
+            raise DataContractError("daily_market_state amount_zero_authorized must be boolean")
+        if type(getattr(row, "full_delivery")) is not bool:
+            raise DataContractError("daily_market_state full_delivery must be boolean")
+        if amount_state == "OBSERVED":
+            if not DataGateway._is_nonnegative_finite_number(amount) or zero_authorized:
+                raise DataContractError(
+                    "daily_market_state OBSERVED amount requires a finite nonnegative "
+                    "authoritative_traded_value and amount_zero_authorized=False"
+                )
+        elif amount_state == "ZERO_AUTHORIZED":
+            if amount != 0 or not zero_authorized:
+                raise DataContractError(
+                    "daily_market_state ZERO_AUTHORIZED requires amount=0 and "
+                    "amount_zero_authorized=True"
+                )
+        elif amount_state == "MISSING":
+            if not pd.isna(amount) or zero_authorized:
+                raise DataContractError(
+                    "daily_market_state MISSING amount requires null authoritative_traded_value "
+                    "and amount_zero_authorized=False"
+                )
+
+        expected_exchange_tradable = {
+            "TRADING": True,
+            "HALTED": False,
+            "MISSING": None,
+        }[market_state]
+        if expected_exchange_tradable is None:
+            if not pd.isna(exchange_tradable):
+                raise DataContractError(
+                    "daily_market_state MISSING market_state requires null exchange_tradable"
+                )
+        elif type(exchange_tradable) is not bool or exchange_tradable != expected_exchange_tradable:
+            raise DataContractError(
+                f"daily_market_state {market_state} requires exchange_tradable="
+                f"{expected_exchange_tradable}"
+            )
+
+        if market_state == "TRADING" and amount_state != "OBSERVED":
+            raise DataContractError("daily_market_state TRADING requires amount_state=OBSERVED")
+        if market_state == "HALTED" and amount_state not in {"OBSERVED", "ZERO_AUTHORIZED"}:
+            raise DataContractError(
+                "daily_market_state HALTED requires OBSERVED or ZERO_AUTHORIZED amount_state"
+            )
+        if market_state == "MISSING" and amount_state != "MISSING":
+            raise DataContractError("daily_market_state MISSING requires amount_state=MISSING")
+
+        DataGateway._validate_market_state_lifecycle(row)
+
+    @staticmethod
+    def _validate_market_state_lifecycle(row: object) -> None:
+        instrument_kind = getattr(row, "instrument_kind")
+        identity_source = getattr(row, "identity_source")
+        lifecycle_active = getattr(row, "lifecycle_active")
+        if instrument_kind not in {"EQUITY", "INDEX"}:
+            raise DataContractError("daily_market_state has invalid instrument_kind")
+        if type(lifecycle_active) is not bool:
+            raise DataContractError("daily_market_state lifecycle_active must be boolean")
+        if type(getattr(row, "lifecycle_conflict")) is not bool or getattr(
+            row, "lifecycle_conflict"
+        ):
+            raise DataContractError("daily_market_state lifecycle_conflict must be false")
+        if type(getattr(row, "identity_conflict")) is not bool or getattr(
+            row, "identity_conflict"
+        ):
+            raise DataContractError("daily_market_state identity_conflict must be false")
+        if getattr(row, "lifecycle_pit_status") != "SNAPSHOT_EFFECTIVE_DATE_USER_AUTHORIZED":
+            raise DataContractError("daily_market_state has invalid lifecycle_pit_status")
+        if getattr(row, "revision_pit_status") != "PIT_REVISION_UNVERIFIED":
+            raise DataContractError("daily_market_state has invalid revision_pit_status")
+
+        lifecycle_dates = (
+            "lifecycle_list_date",
+            "lifecycle_interval_start",
+            "lifecycle_interval_end_exclusive",
+        )
+        if instrument_kind == "EQUITY":
+            if identity_source != "SECURITY_MASTER_SNAPSHOT" or not lifecycle_active:
+                raise DataContractError("daily_market_state has invalid equity lifecycle identity")
+            if pd.isna(getattr(row, "security_master_market")) or any(
+                pd.isna(getattr(row, column)) for column in lifecycle_dates
+            ):
+                raise DataContractError("daily_market_state equity lifecycle fields are incomplete")
+        else:
+            index_null_fields = (
+                "security_master_market",
+                "lifecycle_list_date",
+                "lifecycle_delist_date",
+                "lifecycle_interval_start",
+                "lifecycle_interval_end_exclusive",
+            )
+            if identity_source != "APIPRCD_PRICE_ROW" or lifecycle_active or any(
+                not pd.isna(getattr(row, column)) for column in index_null_fields
+            ):
+                raise DataContractError("daily_market_state has invalid index lifecycle identity")
+
+    @staticmethod
+    def _is_nonnegative_finite_number(value: object) -> bool:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return False
+        return math.isfinite(float(value)) and value >= 0
 
     def load_manifest(self, artifact_id: str) -> dict[str, object]:
         path = self.manifest_dir / f"{artifact_id}.json"
