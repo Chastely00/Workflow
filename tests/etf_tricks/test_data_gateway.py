@@ -9,6 +9,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
+import etf_tricks.data_gateway as data_gateway_module
 from etf_tricks.calendar import CalendarContractError, TradingCalendar
 from etf_tricks.data_gateway import DataContractError, DataGateway
 
@@ -690,6 +691,92 @@ def test_scan_market_state_rejects_partition_replacement_after_preflight(
         DataGateway.from_data_analysts(tmp_path).scan_market_state(
             "2025-01-02", "2025-01-03"
         )
+
+
+def test_scan_market_state_reads_private_snapshot_during_transient_partition_swap(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = _write_market_state_artifact(tmp_path)
+    original = DataGateway.scan_artifact
+
+    def transient_swap_then_scan(
+        self: DataGateway,
+        artifact_id: str,
+        **kwargs: object,
+    ) -> pd.DataFrame:
+        original_path = path.with_name("original.parquet")
+        polluted_path = path.with_name("polluted.parquet")
+        path.replace(original_path)
+        polluted = pq.read_table(original_path)
+        amount_index = polluted.schema.get_field_index("authoritative_traded_value")
+        polluted = polluted.set_column(
+            amount_index,
+            polluted.schema.field(amount_index),
+            pa.array([999.0, 0.0], type=pa.float64()),
+        )
+        pq.write_table(polluted, polluted_path)
+        polluted_path.replace(path)
+        try:
+            return original(self, artifact_id, **kwargs)
+        finally:
+            path.unlink(missing_ok=True)
+            original_path.replace(path)
+
+    monkeypatch.setattr(DataGateway, "scan_artifact", transient_swap_then_scan)
+
+    result = DataGateway.from_data_analysts(tmp_path).scan_market_state(
+        "2025-01-02", "2025-01-03"
+    )
+
+    assert result["authoritative_traded_value"].tolist() == [1_000.0, 0.0]
+
+
+def test_market_state_snapshot_copy_reads_source_in_configured_bounded_chunks(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = _write_market_state_artifact(tmp_path)
+    gateway = DataGateway.from_data_analysts(tmp_path)
+    manifest = gateway.load_manifest("daily_market_state")
+    chunk_bytes = 7
+    monkeypatch.setattr(data_gateway_module, "_MARKET_STATE_SNAPSHOT_CHUNK_BYTES", chunk_bytes)
+    original_open = Path.open
+    read_sizes: list[int] = []
+
+    class TrackingReader:
+        def __init__(self, handle: object) -> None:
+            self._handle = handle
+
+        def __enter__(self) -> "TrackingReader":
+            return self
+
+        def __exit__(self, *args: object) -> object:
+            return self._handle.__exit__(*args)
+
+        def read(self, size: int = -1) -> bytes:
+            read_sizes.append(size)
+            if size < 0 or size > chunk_bytes:
+                raise AssertionError("snapshot copy read was not bounded")
+            return self._handle.read(size)
+
+        def __getattr__(self, name: str) -> object:
+            return getattr(self._handle, name)
+
+    def tracking_open(self: Path, *args: object, **kwargs: object) -> object:
+        handle = original_open(self, *args, **kwargs)
+        if self == path and args and args[0] == "rb":
+            return TrackingReader(handle)
+        return handle
+
+    monkeypatch.setattr(Path, "open", tracking_open)
+    snapshot_root = tmp_path / "private-snapshot"
+    snapshot_root.mkdir()
+
+    gateway._copy_market_state_snapshot(manifest, snapshot_root)
+
+    assert read_sizes
+    assert max(read_sizes) == chunk_bytes
 
 
 def test_scan_market_state_accepts_null_full_delivery_when_attribute_row_is_absent(

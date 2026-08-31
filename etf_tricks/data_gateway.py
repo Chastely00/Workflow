@@ -6,6 +6,7 @@ import json
 import math
 from pathlib import Path
 import re
+import tempfile
 from typing import Callable, Iterable
 
 import pandas as pd
@@ -117,6 +118,7 @@ _AVAILABILITY_PRECISION = "AFTER_CLOSE_DATE_ONLY"
 _CLASSIFICATION_POLICY_VERSION = "daily_market_state_v3"
 _LIFECYCLE_PIT_STATUS = "SNAPSHOT_EFFECTIVE_DATE_USER_AUTHORIZED"
 _REVISION_PIT_STATUS = "PIT_REVISION_UNVERIFIED"
+_MARKET_STATE_SNAPSHOT_CHUNK_BYTES = 1 << 20
 
 
 class DataGateway:
@@ -154,22 +156,26 @@ class DataGateway:
                 return self._empty_market_state_frame()
             filters = (("ticker", "in", selected_tickers),)
 
-        result = self.scan_artifact(
-            "daily_market_state",
-            columns=_MARKET_STATE_COLUMNS,
-            filters=filters,
-            start=start,
-            end=end,
-            date_column="date",
-            manifest=manifest,
-            validate_coverage=False,
-            schema_validator=self._validate_market_state_physical_schema,
-            table_validator=self._validate_market_state_arrow_table,
-        )
-        self._validate_market_state_inventory(manifest)
-        self._validate_market_state_rows(result, manifest)
-        if self._read_manifest_bytes("daily_market_state") != manifest_bytes:
-            raise DataContractError("daily_market_state manifest drifted during scan")
+        with tempfile.TemporaryDirectory(prefix="daily-market-state-") as snapshot_dir:
+            snapshot_root = Path(snapshot_dir).resolve()
+            self._copy_market_state_snapshot(manifest, snapshot_root)
+            result = self.scan_artifact(
+                "daily_market_state",
+                columns=_MARKET_STATE_COLUMNS,
+                filters=filters,
+                start=start,
+                end=end,
+                date_column="date",
+                manifest=manifest,
+                validate_coverage=False,
+                schema_validator=self._validate_market_state_physical_schema,
+                table_validator=self._validate_market_state_arrow_table,
+                scan_root=snapshot_root,
+            )
+            self._validate_market_state_inventory(manifest)
+            self._validate_market_state_rows(result, manifest)
+            if self._read_manifest_bytes("daily_market_state") != manifest_bytes:
+                raise DataContractError("daily_market_state manifest drifted during scan")
         return result.loc[:, list(_MARKET_STATE_COLUMNS)].reset_index(drop=True)
 
     @staticmethod
@@ -237,7 +243,13 @@ class DataGateway:
                 "daily_market_state manifest classification_policy_version is invalid"
             )
 
-    def _validate_market_state_inventory(self, manifest: dict[str, object]) -> None:
+    def _validate_market_state_inventory(
+        self,
+        manifest: dict[str, object],
+        *,
+        data_root: Path | None = None,
+    ) -> None:
+        inventory_root = self.data_store if data_root is None else data_root.resolve()
         raw_paths = manifest.get("artifact_paths")
         raw_inventory = manifest.get("partition_inventory")
         if not isinstance(raw_paths, list) or not raw_paths:
@@ -266,8 +278,8 @@ class DataGateway:
         for raw_path in raw_paths:
             if not isinstance(raw_path, str) or not raw_path:
                 raise DataContractError("daily_market_state manifest artifact_paths are invalid")
-            path = (self.data_store / raw_path).resolve()
-            if not path.is_relative_to(self.data_store) or not path.is_file():
+            path = (inventory_root / raw_path).resolve()
+            if not path.is_relative_to(inventory_root) or not path.is_file():
                 raise DataContractError(
                     f"daily_market_state declared parquet is unavailable: {raw_path}"
                 )
@@ -324,6 +336,57 @@ class DataGateway:
             raise DataContractError(
                 "daily_market_state partition_inventory row_count does not match manifest row_count"
             )
+
+    def _copy_market_state_snapshot(
+        self,
+        manifest: dict[str, object],
+        snapshot_root: Path,
+    ) -> None:
+        raw_paths = manifest.get("artifact_paths")
+        raw_inventory = manifest.get("partition_inventory")
+        if not isinstance(raw_paths, list) or not isinstance(raw_inventory, list):
+            raise DataContractError("daily_market_state manifest snapshot inventory is invalid")
+        inventory = {
+            item["path"]: item
+            for item in raw_inventory
+            if isinstance(item, dict) and isinstance(item.get("path"), str)
+        }
+        if len(inventory) != len(raw_inventory) or set(raw_paths) != set(inventory):
+            raise DataContractError("daily_market_state manifest snapshot inventory is invalid")
+        for raw_path in raw_paths:
+            if not isinstance(raw_path, str):
+                raise DataContractError("daily_market_state manifest artifact_paths are invalid")
+            source_path = (self.data_store / raw_path).resolve()
+            destination_path = (snapshot_root / raw_path).resolve()
+            if (
+                not source_path.is_relative_to(self.data_store)
+                or not source_path.is_file()
+                or not destination_path.is_relative_to(snapshot_root)
+            ):
+                raise DataContractError(
+                    f"daily_market_state declared parquet is unavailable: {raw_path}"
+                )
+            destination_path.parent.mkdir(parents=True, exist_ok=True)
+            digest = hashlib.sha256()
+            copied_size = 0
+            try:
+                with source_path.open("rb") as source, destination_path.open("xb") as destination:
+                    while chunk := source.read(_MARKET_STATE_SNAPSHOT_CHUNK_BYTES):
+                        destination.write(chunk)
+                        digest.update(chunk)
+                        copied_size += len(chunk)
+            except OSError as exc:
+                raise DataContractError(
+                    f"daily_market_state snapshot copy failed for {raw_path}: {exc}"
+                ) from exc
+            item = inventory[raw_path]
+            if copied_size != item.get("size") or digest.hexdigest() != item.get(
+                "content_sha256"
+            ):
+                raise DataContractError(
+                    "daily_market_state snapshot copy does not match certified bytes"
+                )
+        self._validate_market_state_inventory(manifest, data_root=snapshot_root)
 
     @staticmethod
     def _validate_market_state_coverage(
@@ -934,6 +997,7 @@ class DataGateway:
         validate_coverage: bool = True,
         schema_validator: Callable[[pa.Schema], None] | None = None,
         table_validator: Callable[[pa.Table], None] | None = None,
+        scan_root: Path | None = None,
     ) -> pd.DataFrame:
         """Read a governed artifact subset with Arrow predicate pushdown."""
         if manifest is None:
@@ -997,13 +1061,15 @@ class DataGateway:
         raw_paths = manifest.get("artifact_paths")
         if not isinstance(raw_paths, list) or not raw_paths:
             raise DataContractError(f"artifact {artifact_id} has no declared artifact_paths")
+        scan_data_root = self.data_store if scan_root is None else scan_root.resolve()
+        scan_root_label = "data_store" if scan_root is None else "scan root"
 
         frames: list[pd.DataFrame] = []
         for raw_path in raw_paths:
-            path = (self.data_store / str(raw_path)).resolve()
-            if not path.is_relative_to(self.data_store):
+            path = (scan_data_root / str(raw_path)).resolve()
+            if not path.is_relative_to(scan_data_root):
                 raise DataContractError(
-                    f"artifact {artifact_id} path is outside data_store: {raw_path}"
+                    f"artifact {artifact_id} path is outside {scan_root_label}: {raw_path}"
                 )
             if not path.is_file():
                 raise DataContractError(f"artifact {artifact_id} declared file is missing: {path}")
