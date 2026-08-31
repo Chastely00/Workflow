@@ -1,14 +1,16 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 from pathlib import Path
 import re
-from typing import Iterable
+from typing import Callable, Iterable
 
 import pandas as pd
 import pyarrow as pa
 import pyarrow.dataset as ds
+import pyarrow.parquet as pq
 
 
 class DataContractError(RuntimeError):
@@ -104,6 +106,16 @@ _MARKET_STATE_REQUIRED_LIFECYCLE_COLUMNS = (
     "revision_pit_status",
 )
 _SHA256 = re.compile(r"[0-9a-f]{64}")
+_MARKET_STATE_SOURCE_FAMILIES = (
+    "security_master",
+    "trading_calendar",
+    "daily_price_volume",
+    "daily_tradability",
+)
+_AVAILABILITY_PRECISION = "AFTER_CLOSE_DATE_ONLY"
+_CLASSIFICATION_POLICY_VERSION = "daily_market_state_v3"
+_LIFECYCLE_PIT_STATUS = "SNAPSHOT_EFFECTIVE_DATE_USER_AUTHORIZED"
+_REVISION_PIT_STATUS = "PIT_REVISION_UNVERIFIED"
 
 
 class DataGateway:
@@ -123,8 +135,10 @@ class DataGateway:
         tickers: Iterable[str] | None = None,
     ) -> pd.DataFrame:
         """Read the certified TEJ-only daily market-state artifact."""
-        manifest = self.load_manifest("daily_market_state")
+        manifest_bytes, manifest = self._load_manifest_snapshot("daily_market_state")
         self._validate_market_state_manifest(manifest)
+        self._validate_market_state_inventory(manifest)
+        self._validate_market_state_coverage(manifest, start, end)
 
         filters: tuple[tuple[str, str, object], ...] = ()
         if tickers is not None:
@@ -134,6 +148,8 @@ class DataGateway:
             if any(not isinstance(ticker, str) or not ticker for ticker in selected_tickers):
                 raise DataContractError("daily_market_state tickers must contain non-empty strings")
             if not selected_tickers:
+                if self._read_manifest_bytes("daily_market_state") != manifest_bytes:
+                    raise DataContractError("daily_market_state manifest drifted during scan")
                 return self._empty_market_state_frame()
             filters = (("ticker", "in", selected_tickers),)
 
@@ -144,8 +160,14 @@ class DataGateway:
             start=start,
             end=end,
             date_column="date",
+            manifest=manifest,
+            validate_coverage=False,
+            schema_validator=self._validate_market_state_physical_schema,
+            table_validator=self._validate_market_state_arrow_table,
         )
         self._validate_market_state_rows(result, manifest)
+        if self._read_manifest_bytes("daily_market_state") != manifest_bytes:
+            raise DataContractError("daily_market_state manifest drifted during scan")
         return result.loc[:, list(_MARKET_STATE_COLUMNS)].reset_index(drop=True)
 
     @staticmethod
@@ -158,7 +180,9 @@ class DataGateway:
     @staticmethod
     def _validate_market_state_manifest(manifest: dict[str, object]) -> None:
         declared_columns = tuple(str(value) for value in manifest.get("columns", ()))
-        if declared_columns != _MARKET_STATE_COLUMNS:
+        if len(declared_columns) != len(set(declared_columns)) or set(declared_columns) != set(
+            _MARKET_STATE_COLUMNS
+        ):
             raise DataContractError(
                 "daily_market_state manifest schema does not match the governed columns"
             )
@@ -177,6 +201,157 @@ class DataGateway:
                     "daily_market_state dependency_manifest_sha256_by_contract "
                     f"has invalid hash for {contract}"
                 )
+        if tuple(manifest.get("source_families", ())) != _MARKET_STATE_SOURCE_FAMILIES:
+            raise DataContractError("daily_market_state manifest source_families are invalid")
+        versions = manifest.get("dependency_versions")
+        if (
+            not isinstance(versions, dict)
+            or set(versions) != expected_contracts
+            or any(not isinstance(value, str) or not value.strip() for value in versions.values())
+        ):
+            raise DataContractError("daily_market_state dependency_versions are incomplete")
+        fingerprint = manifest.get("dependency_certification_fingerprint")
+        if not isinstance(fingerprint, str) or not fingerprint.strip():
+            raise DataContractError(
+                "daily_market_state dependency certification fingerprint is missing"
+            )
+        build_start = DataGateway._canonical_manifest_date(manifest, "build_start")
+        build_end = DataGateway._canonical_manifest_date(manifest, "build_end")
+        certified_source_start = DataGateway._canonical_manifest_date(
+            manifest, "certified_source_start"
+        )
+        if certified_source_start > build_start or build_start > build_end:
+            raise DataContractError("daily_market_state manifest build bounds are invalid")
+        for field in (
+            "classification_policy_version",
+            "state_lattice_policy_version",
+            "market_identity_policy_version",
+        ):
+            value = manifest.get(field)
+            if not isinstance(value, str) or not value.strip():
+                raise DataContractError(f"daily_market_state manifest {field} is missing")
+
+    def _validate_market_state_inventory(self, manifest: dict[str, object]) -> None:
+        raw_paths = manifest.get("artifact_paths")
+        raw_inventory = manifest.get("partition_inventory")
+        if not isinstance(raw_paths, list) or not raw_paths:
+            raise DataContractError("daily_market_state manifest has no artifact_paths")
+        if not isinstance(raw_inventory, list):
+            raise DataContractError("daily_market_state manifest partition_inventory is missing")
+        inventory: dict[str, dict[str, object]] = {}
+        for item in raw_inventory:
+            if not isinstance(item, dict) or not isinstance(item.get("path"), str):
+                raise DataContractError("daily_market_state partition_inventory is invalid")
+            path_key = item["path"]
+            if path_key in inventory:
+                raise DataContractError("daily_market_state partition_inventory has duplicate paths")
+            inventory[path_key] = item
+        if set(raw_paths) != set(inventory):
+            raise DataContractError(
+                "daily_market_state partition_inventory does not match artifact_paths"
+            )
+        declared_schema_fingerprint = manifest.get("schema_fingerprint")
+        if (
+            not isinstance(declared_schema_fingerprint, str)
+            or _SHA256.fullmatch(declared_schema_fingerprint) is None
+        ):
+            raise DataContractError("daily_market_state manifest schema_fingerprint is invalid")
+        for raw_path in raw_paths:
+            if not isinstance(raw_path, str) or not raw_path:
+                raise DataContractError("daily_market_state manifest artifact_paths are invalid")
+            path = (self.data_store / raw_path).resolve()
+            if not path.is_relative_to(self.data_store) or not path.is_file():
+                raise DataContractError(
+                    f"daily_market_state declared parquet is unavailable: {raw_path}"
+                )
+            item = inventory[raw_path]
+            digest = item.get("content_sha256")
+            if (
+                not isinstance(digest, str)
+                or _SHA256.fullmatch(digest) is None
+                or not isinstance(item.get("size"), int)
+                or isinstance(item["size"], bool)
+                or item["size"] != path.stat().st_size
+            ):
+                raise DataContractError(
+                    "daily_market_state partition_inventory content_sha256 or size is invalid"
+                )
+            if self._sha256_file(path) != digest:
+                raise DataContractError(
+                    "daily_market_state partition_inventory content_sha256 mismatch"
+                )
+            schema_fingerprint = item.get("schema_fingerprint")
+            actual_schema_fingerprint = hashlib.sha256(
+                pq.read_schema(path).serialize().to_pybytes()
+            ).hexdigest()
+            if (
+                not isinstance(schema_fingerprint, str)
+                or _SHA256.fullmatch(schema_fingerprint) is None
+                or schema_fingerprint != actual_schema_fingerprint
+                or schema_fingerprint != declared_schema_fingerprint
+            ):
+                raise DataContractError(
+                    "daily_market_state partition_inventory schema_fingerprint mismatch"
+                )
+
+    @staticmethod
+    def _validate_market_state_coverage(
+        manifest: dict[str, object],
+        start: str | pd.Timestamp,
+        end: str | pd.Timestamp,
+    ) -> None:
+        start_value = pd.Timestamp(start)
+        end_value = pd.Timestamp(end)
+        if start_value > end_value:
+            raise DataContractError("daily_market_state requested start must not be after end")
+        build_start = pd.Timestamp(manifest["build_start"])
+        build_end = pd.Timestamp(manifest["build_end"])
+        if start_value < build_start or end_value > build_end:
+            raise DataContractError(
+                "daily_market_state requested bounds are outside governed build coverage"
+            )
+
+    @staticmethod
+    def _canonical_manifest_date(manifest: dict[str, object], field: str) -> pd.Timestamp:
+        value = manifest.get(field)
+        if not isinstance(value, str):
+            raise DataContractError(f"daily_market_state manifest {field} is invalid")
+        try:
+            parsed = pd.Timestamp(value)
+        except (TypeError, ValueError) as exc:
+            raise DataContractError(f"daily_market_state manifest {field} is invalid") from exc
+        if parsed.strftime("%Y-%m-%d") != value:
+            raise DataContractError(f"daily_market_state manifest {field} is invalid")
+        return parsed
+
+    def _load_manifest_snapshot(self, artifact_id: str) -> tuple[bytes, dict[str, object]]:
+        raw = self._read_manifest_bytes(artifact_id)
+        try:
+            manifest = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise DataContractError(f"invalid manifest for artifact {artifact_id}: {exc}") from exc
+        if not isinstance(manifest, dict):
+            raise DataContractError(f"invalid manifest for artifact {artifact_id}: expected object")
+        self._validate_loaded_manifest(artifact_id, manifest)
+        return raw, manifest
+
+    def _read_manifest_bytes(self, artifact_id: str) -> bytes:
+        path = self.manifest_dir / f"{artifact_id}.json"
+        try:
+            return path.read_bytes()
+        except OSError as exc:
+            raise DataContractError(f"missing manifest for artifact {artifact_id}: {path}") from exc
+
+    @staticmethod
+    def _sha256_file(path: Path) -> str:
+        digest = hashlib.sha256()
+        try:
+            with path.open("rb") as handle:
+                for chunk in iter(lambda: handle.read(1 << 20), b""):
+                    digest.update(chunk)
+        except OSError as exc:
+            raise DataContractError(f"cannot hash declared parquet {path}: {exc}") from exc
+        return digest.hexdigest()
 
     @staticmethod
     def _validate_market_state_rows(
@@ -243,6 +418,63 @@ class DataGateway:
             DataGateway._validate_market_state_row(row)
 
     @staticmethod
+    def _validate_market_state_physical_schema(schema: pa.Schema) -> None:
+        date_columns = {
+            "date",
+            "lifecycle_list_date",
+            "lifecycle_delist_date",
+            "lifecycle_interval_start",
+            "lifecycle_interval_end_exclusive",
+            "observation_date",
+            "source_available_date",
+            "earliest_execution_session",
+        }
+        boolean_columns = {
+            "amount_zero_authorized",
+            "price_row_present",
+            "attr_row_present",
+            "exchange_tradable",
+            "full_delivery",
+            "lifecycle_active",
+            "lifecycle_conflict",
+            "identity_conflict",
+        }
+        for name in _MARKET_STATE_COLUMNS:
+            field_type = schema.field(name).type
+            if name in date_columns:
+                valid = (
+                    pa.types.is_string(field_type)
+                    or pa.types.is_large_string(field_type)
+                    or pa.types.is_date(field_type)
+                    or pa.types.is_timestamp(field_type)
+                    or pa.types.is_null(field_type)
+                )
+            elif name == "authoritative_traded_value":
+                valid = (
+                    pa.types.is_integer(field_type)
+                    or pa.types.is_floating(field_type)
+                    or pa.types.is_null(field_type)
+                )
+            elif name in boolean_columns:
+                valid = pa.types.is_boolean(field_type) or pa.types.is_null(field_type)
+            else:
+                valid = pa.types.is_string(field_type) or pa.types.is_large_string(field_type) or pa.types.is_null(field_type)
+            if not valid:
+                raise DataContractError(
+                    f"daily_market_state physical schema has invalid type for {name}: {field_type}"
+                )
+
+    @staticmethod
+    def _validate_market_state_arrow_table(table: pa.Table) -> None:
+        amount_states = table.column("amount_state").to_pylist()
+        amounts = table.column("authoritative_traded_value").to_pylist()
+        for amount_state, amount in zip(amount_states, amounts, strict=True):
+            if amount_state == "MISSING" and amount is not None:
+                raise DataContractError(
+                    "daily_market_state MISSING amount requires a true null, not NaN"
+                )
+
+    @staticmethod
     def _validate_market_state_row(row: object) -> None:
         market_state = getattr(row, "market_state")
         amount_state = getattr(row, "amount_state")
@@ -252,8 +484,36 @@ class DataGateway:
 
         if type(zero_authorized) is not bool:
             raise DataContractError("daily_market_state amount_zero_authorized must be boolean")
-        if type(getattr(row, "full_delivery")) is not bool:
-            raise DataContractError("daily_market_state full_delivery must be boolean")
+        price_row_present = getattr(row, "price_row_present")
+        attr_row_present = getattr(row, "attr_row_present")
+        if type(price_row_present) is not bool or type(attr_row_present) is not bool:
+            raise DataContractError(
+                "daily_market_state price_row_present and attr_row_present must be boolean"
+            )
+        full_delivery = getattr(row, "full_delivery")
+        raw_flags = (
+            "atten_fg",
+            "disp_fg",
+            "full_fg",
+            "limit_fg",
+            "limo_fg",
+            "sbadt_fg",
+            "ssadt_fg",
+            "susp_fg",
+        )
+        if not attr_row_present:
+            if not pd.isna(full_delivery) or any(
+                not pd.isna(getattr(row, flag)) for flag in raw_flags
+            ):
+                raise DataContractError(
+                    "daily_market_state attr_row_present=False requires null raw flags and full_delivery"
+                )
+        elif type(full_delivery) is not bool or full_delivery != DataGateway._active_flag(
+            getattr(row, "full_fg")
+        ):
+            raise DataContractError(
+                "daily_market_state full_delivery must exactly map full_fg"
+            )
         if amount_state == "OBSERVED":
             if not DataGateway._is_nonnegative_finite_number(amount) or zero_authorized:
                 raise DataContractError(
@@ -299,6 +559,31 @@ class DataGateway:
             raise DataContractError("daily_market_state MISSING requires amount_state=MISSING")
 
         DataGateway._validate_market_state_lifecycle(row)
+        DataGateway._validate_market_state_availability(row)
+
+        suspended = DataGateway._active_flag(getattr(row, "susp_fg"))
+        if price_row_present and market_state == "MISSING":
+            expected = ("APIPRCD_INVALID_AMOUNT", "MISSING")
+        elif price_row_present and suspended:
+            expected = ("APISTKATTR_SUSPENSION_WITH_OBSERVED_AMOUNT", "HALTED")
+        elif price_row_present:
+            expected = ("APIPRCD_OBSERVED_AMOUNT", "TRADING")
+        elif suspended:
+            expected = ("APISTKATTR_SUSPENSION_NO_PRICE", "HALTED")
+        elif attr_row_present:
+            expected = ("APISTKATTR_NON_SUSPENSION_WITHOUT_PRICE", "MISSING")
+        elif getattr(row, "instrument_kind") == "EQUITY" and getattr(row, "lifecycle_active"):
+            expected = ("ACTIVE_LIFECYCLE_DUAL_SOURCE_ABSENCE", "HALTED")
+        else:
+            expected = ("NO_AUTHORIZED_STATE_KEY", "MISSING")
+        if getattr(row, "state_reason") != expected[0] or market_state != expected[1]:
+            raise DataContractError(
+                "daily_market_state state_reason does not match the TEJ classifier matrix"
+            )
+
+    @staticmethod
+    def _active_flag(value: object) -> bool:
+        return isinstance(value, str) and value.strip().upper() == "Y"
 
     @staticmethod
     def _validate_market_state_lifecycle(row: object) -> None:
@@ -317,9 +602,9 @@ class DataGateway:
             row, "identity_conflict"
         ):
             raise DataContractError("daily_market_state identity_conflict must be false")
-        if getattr(row, "lifecycle_pit_status") != "SNAPSHOT_EFFECTIVE_DATE_USER_AUTHORIZED":
+        if getattr(row, "lifecycle_pit_status") != _LIFECYCLE_PIT_STATUS:
             raise DataContractError("daily_market_state has invalid lifecycle_pit_status")
-        if getattr(row, "revision_pit_status") != "PIT_REVISION_UNVERIFIED":
+        if getattr(row, "revision_pit_status") != _REVISION_PIT_STATUS:
             raise DataContractError("daily_market_state has invalid revision_pit_status")
 
         lifecycle_dates = (
@@ -334,6 +619,24 @@ class DataGateway:
                 pd.isna(getattr(row, column)) for column in lifecycle_dates
             ):
                 raise DataContractError("daily_market_state equity lifecycle fields are incomplete")
+            if (
+                getattr(row, "market") not in {"TWSE", "TPEX"}
+                or getattr(row, "security_master_market") != getattr(row, "market")
+            ):
+                raise DataContractError("daily_market_state equity market identity is invalid")
+            row_date = pd.Timestamp(getattr(row, "date"))
+            list_date = pd.Timestamp(getattr(row, "lifecycle_list_date"))
+            interval_start = pd.Timestamp(getattr(row, "lifecycle_interval_start"))
+            interval_end = pd.Timestamp(getattr(row, "lifecycle_interval_end_exclusive"))
+            if not list_date <= interval_start <= row_date < interval_end:
+                raise DataContractError("daily_market_state equity lifecycle interval is invalid")
+            delist_date = getattr(row, "lifecycle_delist_date")
+            if not pd.isna(delist_date):
+                delist = pd.Timestamp(delist_date)
+                if row_date >= delist or interval_end > delist:
+                    raise DataContractError(
+                        "daily_market_state equity delist boundary is not exclusive"
+                    )
         else:
             index_null_fields = (
                 "security_master_market",
@@ -346,6 +649,33 @@ class DataGateway:
                 not pd.isna(getattr(row, column)) for column in index_null_fields
             ):
                 raise DataContractError("daily_market_state has invalid index lifecycle identity")
+            if not getattr(row, "price_row_present"):
+                raise DataContractError("daily_market_state index requires a price-row-only key")
+
+    @staticmethod
+    def _validate_market_state_availability(row: object) -> None:
+        date_value = pd.Timestamp(getattr(row, "date"))
+        observation_date = pd.Timestamp(getattr(row, "observation_date"))
+        source_available_date = pd.Timestamp(getattr(row, "source_available_date"))
+        earliest_execution_session = pd.Timestamp(
+            getattr(row, "earliest_execution_session")
+        )
+        if observation_date != date_value:
+            raise DataContractError("daily_market_state observation_date must equal date")
+        if source_available_date != date_value:
+            raise DataContractError(
+                "daily_market_state source_available_date must equal date"
+            )
+        if earliest_execution_session <= source_available_date:
+            raise DataContractError(
+                "daily_market_state earliest_execution_session must be after source availability"
+            )
+        if getattr(row, "availability_precision") != _AVAILABILITY_PRECISION:
+            raise DataContractError("daily_market_state has invalid availability_precision")
+        if getattr(row, "classification_policy_version") != _CLASSIFICATION_POLICY_VERSION:
+            raise DataContractError(
+                "daily_market_state has invalid classification_policy_version"
+            )
 
     @staticmethod
     def _is_nonnegative_finite_number(value: object) -> bool:
@@ -354,13 +684,11 @@ class DataGateway:
         return math.isfinite(float(value)) and value >= 0
 
     def load_manifest(self, artifact_id: str) -> dict[str, object]:
-        path = self.manifest_dir / f"{artifact_id}.json"
-        if not path.is_file():
-            raise DataContractError(f"missing manifest for artifact {artifact_id}: {path}")
-        try:
-            manifest = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
-            raise DataContractError(f"invalid manifest for artifact {artifact_id}: {exc}") from exc
+        _, manifest = self._load_manifest_snapshot(artifact_id)
+        return manifest
+
+    @staticmethod
+    def _validate_loaded_manifest(artifact_id: str, manifest: dict[str, object]) -> None:
         if manifest.get("artifact_id") != artifact_id:
             raise DataContractError(
                 f"manifest artifact mismatch for {artifact_id}: {manifest.get('artifact_id')}"
@@ -376,7 +704,6 @@ class DataGateway:
             raise DataContractError(
                 f"artifact {artifact_id} duplicate_count is {duplicate_count}, expected 0"
             )
-        return manifest
 
     def read_artifact(
         self,
@@ -468,9 +795,16 @@ class DataGateway:
         start: str | pd.Timestamp | None = None,
         end: str | pd.Timestamp | None = None,
         date_column: str | None = None,
+        manifest: dict[str, object] | None = None,
+        validate_coverage: bool = True,
+        schema_validator: Callable[[pa.Schema], None] | None = None,
+        table_validator: Callable[[pa.Table], None] | None = None,
     ) -> pd.DataFrame:
         """Read a governed artifact subset with Arrow predicate pushdown."""
-        manifest = self.load_manifest(artifact_id)
+        if manifest is None:
+            manifest = self.load_manifest(artifact_id)
+        else:
+            self._validate_loaded_manifest(artifact_id, manifest)
         declared_columns = tuple(str(value) for value in manifest.get("columns", ()))
         selected_columns = tuple(columns) if columns is not None else declared_columns
         filter_specs = tuple(filters or ())
@@ -507,7 +841,8 @@ class DataGateway:
             raise DataContractError(
                 f"artifact {artifact_id} manifest missing requested columns: {missing}"
             )
-        self._validate_requested_coverage(artifact_id, manifest, start, end)
+        if validate_coverage:
+            self._validate_requested_coverage(artifact_id, manifest, start, end)
         read_columns = tuple(
             dict.fromkeys(
                 (
@@ -539,6 +874,8 @@ class DataGateway:
                 raise DataContractError(f"artifact {artifact_id} declared file is missing: {path}")
             try:
                 dataset = ds.dataset(path, format="parquet")
+                if schema_validator is not None:
+                    schema_validator(dataset.schema)
                 physical_columns = set(dataset.schema.names)
                 physical_missing = sorted(set(read_columns).difference(physical_columns))
                 if physical_missing:
@@ -555,6 +892,8 @@ class DataGateway:
                     end=end,
                 )
                 table = dataset.to_table(columns=list(read_columns), filter=expression)
+                if table_validator is not None:
+                    table_validator(table)
                 if table.num_rows:
                     frames.append(table.to_pandas())
             except DataContractError:
