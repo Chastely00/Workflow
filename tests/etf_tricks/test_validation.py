@@ -32,6 +32,9 @@ def _valid_result() -> ETFTrickResult:
             "tax": [0.0, 0.0],
             "total_cost": [0.0, 0.0],
             "missing_traded_value_count": [0, 0],
+            "status_missing_count": [0, 0],
+            "status_zero_authorized_count": [0, 1],
+            "amount_quality_state": ["READY", "READY"],
         }
     )
     holdings = pd.DataFrame(
@@ -154,7 +157,6 @@ def test_operational_limitations_remain_warnings_not_hidden_failures():
     result.monthly_targets = result.monthly_targets.iloc[:3].copy()
     result.daily_holdings.loc[1, "stale_price_days"] = 2
     result.daily_etf.loc[1, "target_completion_ratio"] = 0.8
-    result.daily_etf.loc[1, "missing_traded_value_count"] = 1
     result.trades = pd.concat([result.trades, pd.DataFrame(
         {
             "date": [DATES[1]],
@@ -184,11 +186,47 @@ def test_operational_limitations_remain_warnings_not_hidden_failures():
         "backlog",
         "incomplete_transition",
         "forced_delisting",
-        "missing_traded_amount",
         "zero_candidate_carry_forward",
         "snapshot_industry_classification",
         "synthetic_corporate_action_model",
     }.issubset(warning_codes)
+
+
+def test_missing_authoritative_amount_audit_blocks_ready():
+    result = _valid_result()
+    result.daily_etf.loc[1, "missing_traded_value_count"] = 1
+    result.daily_etf.loc[1, "status_missing_count"] = 1
+    result.daily_etf.loc[1, "amount_quality_state"] = "MISSING"
+    result.daily_etf.loc[1, "has_data_quality_flag"] = True
+
+    report = validate_result(result, _calendar(), ["momentum"])
+
+    assert report.status == "NOT_READY"
+    assert "missing_authoritative_amount" in _codes(report)
+    assert report.per_etf.iloc[0]["status_missing_count"] == 1
+    assert report.per_etf.iloc[0]["status_zero_authorized_count"] == 1
+
+
+@pytest.mark.parametrize(
+    "updates",
+    [
+        {"status_missing_count": [0, -1]},
+        {"status_missing_count": [0, 0.5]},
+        {"status_missing_count": [0, float("inf")]},
+        {"status_zero_authorized_count": [0, True]},
+        {"missing_traded_value_count": [0, 1], "status_missing_count": [0, 0]},
+        {"amount_quality_state": ["READY", "MISSING"]},
+    ],
+)
+def test_amount_audit_dtype_and_cross_field_mismatches_fail_ready(updates):
+    result = _valid_result()
+    for column, values in updates.items():
+        result.daily_etf[column] = values
+
+    report = validate_result(result, _calendar(), ["momentum"])
+
+    assert report.status == "NOT_READY"
+    assert "invalid_amount_audit" in _codes(report)
 
 
 def test_zero_execution_with_missing_price_has_zero_notional() -> None:

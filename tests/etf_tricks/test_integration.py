@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import json
 import copy
+import hashlib
 from decimal import Decimal
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pyarrow.parquet as pq
 import pytest
 
 import etf_tricks.lab as lab_module
@@ -14,6 +16,157 @@ from etf_tricks import ETF_IDS, ETFTrickLab
 from etf_tricks.features import PITFeatureEngine
 from etf_tricks.execution import PortfolioExecutionEngine
 from etf_tricks.universe import UniverseEngine
+
+
+_SHA256 = "a" * 64
+_MARKET_STATE_COLUMNS = (
+    "date", "ticker", "market", "market_state", "state_reason",
+    "amount_state", "authoritative_traded_value", "amount_zero_authorized",
+    "price_row_present", "attr_row_present", "atten_fg", "disp_fg",
+    "full_fg", "limit_fg", "limo_fg", "sbadt_fg", "ssadt_fg",
+    "susp_fg", "exchange_tradable", "full_delivery", "instrument_kind",
+    "identity_source", "security_master_market", "lifecycle_list_date",
+    "lifecycle_delist_date", "lifecycle_interval_start",
+    "lifecycle_interval_end_exclusive", "lifecycle_active",
+    "lifecycle_conflict", "identity_conflict", "lifecycle_pit_status",
+    "revision_pit_status", "observation_date", "source_available_date",
+    "availability_precision", "earliest_execution_session",
+    "security_master_manifest_sha256", "calendar_manifest_sha256",
+    "price_manifest_sha256", "tradability_manifest_sha256",
+    "classification_policy_version", "data_cutoff_at",
+)
+
+
+def _publish_daily_market_state(
+    root: Path,
+    daily: pd.DataFrame,
+    build_start: pd.Timestamp,
+    build_end: pd.Timestamp,
+) -> None:
+    rows: list[dict[str, object]] = []
+    selected = daily[
+        pd.to_datetime(daily["date"]).between(build_start, build_end)
+    ]
+    interval_end = build_end + pd.Timedelta(days=1)
+    for source in selected.itertuples(index=False):
+        row_date = pd.Timestamp(source.date)
+        is_index = str(source.ticker) == "IX0001"
+        raw_flag = None if is_index else "N"
+        rows.append(
+            {
+                "date": row_date,
+                "ticker": str(source.ticker),
+                "market": "INDEX" if is_index else "TWSE",
+                "market_state": "TRADING",
+                "state_reason": "APIPRCD_OBSERVED_AMOUNT",
+                "amount_state": "OBSERVED",
+                "authoritative_traded_value": float(source.traded_value),
+                "amount_zero_authorized": False,
+                "price_row_present": True,
+                "attr_row_present": not is_index,
+                "atten_fg": raw_flag,
+                "disp_fg": raw_flag,
+                "full_fg": raw_flag,
+                "limit_fg": raw_flag,
+                "limo_fg": raw_flag,
+                "sbadt_fg": raw_flag,
+                "ssadt_fg": raw_flag,
+                "susp_fg": raw_flag,
+                "exchange_tradable": True,
+                "full_delivery": None if is_index else False,
+                "instrument_kind": "INDEX" if is_index else "EQUITY",
+                "identity_source": (
+                    "APIPRCD_PRICE_ROW" if is_index else "SECURITY_MASTER_SNAPSHOT"
+                ),
+                "security_master_market": None if is_index else "TWSE",
+                "lifecycle_list_date": None if is_index else "2020-01-01",
+                "lifecycle_delist_date": None,
+                "lifecycle_interval_start": (
+                    None if is_index else str(build_start.date())
+                ),
+                "lifecycle_interval_end_exclusive": (
+                    None if is_index else str(interval_end.date())
+                ),
+                "lifecycle_active": not is_index,
+                "lifecycle_conflict": False,
+                "identity_conflict": False,
+                "lifecycle_pit_status": "SNAPSHOT_EFFECTIVE_DATE_USER_AUTHORIZED",
+                "revision_pit_status": "PIT_REVISION_UNVERIFIED",
+                "observation_date": row_date,
+                "source_available_date": row_date,
+                "availability_precision": "AFTER_CLOSE_DATE_ONLY",
+                "earliest_execution_session": row_date + pd.offsets.BDay(1),
+                "security_master_manifest_sha256": _SHA256,
+                "calendar_manifest_sha256": _SHA256,
+                "price_manifest_sha256": _SHA256,
+                "tradability_manifest_sha256": _SHA256,
+                "classification_policy_version": "daily_market_state_v3",
+                "data_cutoff_at": f"{row_date.date()}T14:00:00Z",
+            }
+        )
+
+    frame = pd.DataFrame(rows, columns=_MARKET_STATE_COLUMNS)
+    store = root / "data_store"
+    relative = "canonical/derived/daily_market_state/year=2025/part.parquet"
+    parquet_path = store / relative
+    manifest_dir = store / "manifests"
+    parquet_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest_dir.mkdir(parents=True, exist_ok=True)
+    frame.to_parquet(parquet_path, index=False)
+    content_sha256 = hashlib.sha256(parquet_path.read_bytes()).hexdigest()
+    schema_fingerprint = hashlib.sha256(
+        pq.read_schema(parquet_path).serialize().to_pybytes()
+    ).hexdigest()
+    manifest = {
+        "artifact_id": "daily_market_state",
+        "artifact_paths": [relative],
+        "columns": list(_MARKET_STATE_COLUMNS),
+        "date_range": [str(build_start.date()), str(build_end.date())],
+        "availability_date_range": [str(build_start.date()), str(build_end.date())],
+        "status": "ready",
+        "row_count": len(frame),
+        "duplicate_count": 0,
+        "logical_key": ["date", "ticker"],
+        "schema_version": "1.0",
+        "schema_fingerprint": schema_fingerprint,
+        "active_version": "market-state-v3",
+        "source_families": [
+            "security_master", "trading_calendar", "daily_price_volume",
+            "daily_tradability",
+        ],
+        "dependency_versions": {
+            "security_master": "security-master-v1",
+            "trading_calendar": "calendar-v1",
+            "daily_price_volume": "dpv-v1",
+            "daily_tradability": "tradability-v1",
+        },
+        "dependency_manifest_sha256_by_contract": {
+            "security_master": _SHA256,
+            "trading_calendar": _SHA256,
+            "daily_price_volume": _SHA256,
+            "daily_tradability": _SHA256,
+        },
+        "dependency_certification_fingerprint": "certification-v1",
+        "build_start": str(build_start.date()),
+        "build_end": str(build_end.date()),
+        "certified_source_start": str(build_start.date()),
+        "classification_policy_version": "daily_market_state_v3",
+        "state_lattice_policy_version": "daily_market_state_lattice_v5",
+        "market_identity_policy_version": "daily_market_identity_v3",
+        "partition_inventory": [
+            {
+                "partition_value": "2025",
+                "path": relative,
+                "size": parquet_path.stat().st_size,
+                "row_count": len(frame),
+                "schema_fingerprint": schema_fingerprint,
+                "content_sha256": content_sha256,
+            }
+        ],
+    }
+    (manifest_dir / "daily_market_state.json").write_text(
+        json.dumps(manifest), encoding="utf-8"
+    )
 
 
 def _publish(root: Path, artifact_id: str, frame: pd.DataFrame) -> None:
@@ -96,7 +249,9 @@ def _data_analysts_fixture(root: Path) -> tuple[pd.Timestamp, pd.Timestamp]:
                     "dlrp_examt": -10.0 + index,
                 }
             )
-    _publish(root, "daily_price_volume", pd.DataFrame(daily_rows))
+    daily = pd.DataFrame(daily_rows)
+    _publish(root, "daily_price_volume", daily)
+    _publish_daily_market_state(root, daily, run_start, run_end)
     _publish(root, "daily_chip", pd.DataFrame(chip_rows))
 
     sales = pd.DataFrame(

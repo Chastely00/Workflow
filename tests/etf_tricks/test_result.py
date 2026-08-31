@@ -38,6 +38,21 @@ def _result(daily: pd.DataFrame | None = None) -> ETFTrickResult:
     )
 
 
+def _state(market: pd.DataFrame) -> pd.DataFrame:
+    frame = market.rename(
+        columns={"traded_value": "authoritative_traded_value"}
+    ).copy()
+    frame["market_state"] = "TRADING"
+    frame["amount_state"] = "OBSERVED"
+    frame["amount_zero_authorized"] = False
+    frame["exchange_tradable"] = True
+    return frame
+
+
+def _master(tickers: list[str]) -> pd.DataFrame:
+    return pd.DataFrame({"ticker": tickers, "delist_date": pd.NaT})
+
+
 def test_notebook_views_have_exactly_13_stably_ordered_columns():
     result = _result()
     assert result.nav.columns.tolist() == list(ETF_IDS)
@@ -100,7 +115,7 @@ def test_etf_amount_uses_previous_close_actual_weights_not_current_weights():
         ]
     )
 
-    calculated = attach_etf_amount(daily, holdings, market)
+    calculated = attach_etf_amount(daily, holdings, _state(market), _master(["1101", "1102"]))
     assert calculated["etf_amount"].tolist() == pytest.approx([0.0, 1_200.0])
     assert calculated["missing_traded_value_count"].tolist() == [0, 0]
     assert calculated["has_data_quality_flag"].tolist() == [False, False]
@@ -124,10 +139,32 @@ def test_missing_stock_amount_contributes_zero_and_sets_quality_flag():
         [{"date": dates[0], "ticker": "1101", "traded_value": 100.0}]
     )
 
-    calculated = attach_etf_amount(daily, holdings, market)
+    calculated = attach_etf_amount(daily, holdings, _state(market), _master(["1101"]))
     assert calculated.iloc[1]["etf_amount"] == 0.0
     assert calculated.iloc[1]["missing_traded_value_count"] == 1
     assert bool(calculated.iloc[1]["has_data_quality_flag"]) is True
+
+
+def test_market_state_amount_uses_prior_weights_and_lifecycle_states():
+    dates = pd.to_datetime(["2025-01-02", "2025-01-03"])
+    daily = pd.DataFrame({"date": dates, "etf_id": "momentum"})
+    holdings = pd.DataFrame([
+        {"date": dates[0], "etf_id": "momentum", "ticker": "1101", "actual_weight": 0.6},
+        {"date": dates[0], "etf_id": "momentum", "ticker": "1102", "actual_weight": 0.4},
+    ])
+    state = pd.DataFrame([
+        {"date": dates[1], "ticker": "1101", "market_state": "TRADING", "amount_state": "OBSERVED", "amount_zero_authorized": False, "authoritative_traded_value": 100.0, "exchange_tradable": True},
+        {"date": dates[1], "ticker": "1102", "market_state": "HALTED", "amount_state": "ZERO_AUTHORIZED", "amount_zero_authorized": True, "authoritative_traded_value": 0.0, "exchange_tradable": False},
+    ])
+    security_master = pd.DataFrame({"ticker": ["1101", "1102"], "delist_date": [pd.NaT, pd.NaT]})
+
+    calculated = attach_etf_amount(daily, holdings, state, security_master)
+
+    assert calculated["etf_amount"].tolist() == [0.0, 60.0]
+    assert calculated["status_zero_authorized_count"].tolist() == [0, 1]
+    assert calculated["missing_traded_value_count"].tolist() == [0, 0]
+    assert calculated["status_missing_count"].tolist() == [0, 0]
+    assert calculated["amount_quality_state"].tolist() == ["READY", "READY"]
 
 
 def test_etf_amount_aligns_tables_without_iterating_daily_rows(monkeypatch):
@@ -158,14 +195,152 @@ def test_etf_amount_aligns_tables_without_iterating_daily_rows(monkeypatch):
     )
 
     def reject_row_iteration(*args, **kwargs):
-        raise AssertionError("ETF amount must use relational alignment, not iterrows")
+        raise AssertionError("ETF amount must use relational alignment, not row iteration")
 
     monkeypatch.setattr(pd.DataFrame, "iterrows", reject_row_iteration)
+    monkeypatch.setattr(pd.DataFrame, "itertuples", reject_row_iteration)
 
-    calculated = attach_etf_amount(daily, holdings, market)
+    calculated = attach_etf_amount(daily, holdings, _state(market), _master(["1101"]))
 
     assert calculated["etf_amount"].tolist() == [0.0, 1_500.0]
     assert calculated["missing_traded_value_count"].tolist() == [0, 0]
+
+
+def test_observed_amount_preserves_prior_holding_sequential_sum_order():
+    dates = pd.to_datetime(["2025-01-02", "2025-01-03"])
+    daily = pd.DataFrame({"date": dates, "etf_id": "momentum"})
+    holdings = pd.DataFrame(
+        [
+            {"date": dates[0], "etf_id": "momentum", "ticker": "1101", "actual_weight": 0.5},
+            {"date": dates[0], "etf_id": "momentum", "ticker": "1102", "actual_weight": 0.25},
+            {"date": dates[0], "etf_id": "momentum", "ticker": "1103", "actual_weight": 0.25},
+        ]
+    )
+    state = _state(
+        pd.DataFrame(
+            [
+                {"date": dates[1], "ticker": "1101", "traded_value": 2e16},
+                {"date": dates[1], "ticker": "1102", "traded_value": 4.0},
+                {"date": dates[1], "ticker": "1103", "traded_value": 4.0},
+            ]
+        )
+    )
+
+    calculated = attach_etf_amount(
+        daily, holdings, state, _master(["1101", "1102", "1103"])
+    )
+
+    expected = 0.0
+    for value in (1e16, 1.0, 1.0):
+        expected += value
+    assert calculated.iloc[1]["etf_amount"] == expected
+
+
+def test_halted_observed_amount_contributes_even_though_not_executable():
+    dates = pd.to_datetime(["2025-01-02", "2025-01-03"])
+    daily = pd.DataFrame({"date": dates, "etf_id": "momentum"})
+    holdings = pd.DataFrame(
+        [{"date": dates[0], "etf_id": "momentum", "ticker": "1101", "actual_weight": 0.8}]
+    )
+    state = pd.DataFrame(
+        [{
+            "date": dates[1], "ticker": "1101", "market_state": "HALTED",
+            "amount_state": "OBSERVED", "amount_zero_authorized": False,
+            "authoritative_traded_value": 125.0, "exchange_tradable": False,
+        }]
+    )
+
+    calculated = attach_etf_amount(daily, holdings, state, _master(["1101"]))
+
+    assert calculated["etf_amount"].tolist() == [0.0, 100.0]
+    assert calculated["status_missing_count"].tolist() == [0, 0]
+    assert calculated["status_zero_authorized_count"].tolist() == [0, 0]
+
+
+def test_missing_state_counts_both_missing_audits_and_blocks_amount_quality():
+    dates = pd.to_datetime(["2025-01-02", "2025-01-03"])
+    daily = pd.DataFrame({"date": dates, "etf_id": "momentum"})
+    holdings = pd.DataFrame(
+        [{"date": dates[0], "etf_id": "momentum", "ticker": "1101", "actual_weight": 0.8}]
+    )
+    state = pd.DataFrame(
+        [{
+            "date": dates[1], "ticker": "1101", "market_state": "MISSING",
+            "amount_state": "MISSING", "amount_zero_authorized": False,
+            "authoritative_traded_value": None, "exchange_tradable": None,
+        }]
+    )
+
+    calculated = attach_etf_amount(daily, holdings, state, _master(["1101"]))
+
+    assert calculated["etf_amount"].tolist() == [0.0, 0.0]
+    assert calculated["missing_traded_value_count"].tolist() == [0, 1]
+    assert calculated["status_missing_count"].tolist() == [0, 1]
+    assert calculated["status_zero_authorized_count"].tolist() == [0, 0]
+    assert calculated["amount_quality_state"].tolist() == ["READY", "MISSING"]
+
+
+def test_delisted_prior_holding_is_excluded_before_state_join_without_renormalizing():
+    dates = pd.to_datetime(["2025-01-02", "2025-01-03"])
+    daily = pd.DataFrame({"date": dates, "etf_id": "momentum"})
+    holdings = pd.DataFrame(
+        [
+            {"date": dates[0], "etf_id": "momentum", "ticker": "1101", "actual_weight": 0.6},
+            {"date": dates[0], "etf_id": "momentum", "ticker": "1102", "actual_weight": 0.4},
+        ]
+    )
+    state = _state(
+        pd.DataFrame(
+            [{"date": dates[1], "ticker": "1102", "traded_value": 100.0}]
+        )
+    )
+    master = pd.DataFrame(
+        {"ticker": ["1101", "1102"], "delist_date": [dates[1], pd.NaT]}
+    )
+
+    calculated = attach_etf_amount(daily, holdings, state, master)
+
+    assert calculated["etf_amount"].tolist() == [0.0, 40.0]
+    assert calculated["status_missing_count"].tolist() == [0, 0]
+    assert calculated["status_zero_authorized_count"].tolist() == [0, 0]
+
+
+@pytest.mark.parametrize(
+    "updates",
+    [
+        {"market_state": "TRADING", "amount_state": "ZERO_AUTHORIZED", "amount_zero_authorized": True, "authoritative_traded_value": 0.0, "exchange_tradable": True},
+        {"market_state": "HALTED", "amount_state": "MISSING", "amount_zero_authorized": False, "authoritative_traded_value": None, "exchange_tradable": False},
+        {"market_state": "MISSING", "amount_state": "OBSERVED", "amount_zero_authorized": False, "authoritative_traded_value": 1.0, "exchange_tradable": None},
+        {"market_state": "TRADING", "amount_state": "OBSERVED", "amount_zero_authorized": False, "authoritative_traded_value": 1.0, "exchange_tradable": False},
+        {"market_state": "HALTED", "amount_state": "ZERO_AUTHORIZED", "amount_zero_authorized": "true", "authoritative_traded_value": 0.0, "exchange_tradable": False},
+        {"market_state": "TRADING", "amount_state": "OBSERVED", "amount_zero_authorized": False, "authoritative_traded_value": "1.0", "exchange_tradable": True},
+        {"market_state": "TRADING", "amount_state": "OBSERVED", "amount_zero_authorized": False, "authoritative_traded_value": float("inf"), "exchange_tradable": True},
+        {"market_state": "TRADING", "amount_state": "OBSERVED", "amount_zero_authorized": False, "authoritative_traded_value": True, "exchange_tradable": True},
+    ],
+)
+def test_market_state_cross_field_and_dtype_violations_fail_closed(updates):
+    dates = pd.to_datetime(["2025-01-02", "2025-01-03"])
+    state = pd.DataFrame([{"date": dates[1], "ticker": "1101", **updates}])
+
+    with pytest.raises(ValueError, match="cross-field|dtype"):
+        attach_etf_amount(
+            pd.DataFrame({"date": dates, "etf_id": "momentum"}),
+            pd.DataFrame([{"date": dates[0], "etf_id": "momentum", "ticker": "1101", "actual_weight": 1.0}]),
+            state,
+            _master(["1101"]),
+        )
+
+
+def test_market_state_and_security_master_duplicate_keys_fail_closed():
+    dates = pd.to_datetime(["2025-01-02", "2025-01-03"])
+    daily = pd.DataFrame({"date": dates, "etf_id": "momentum"})
+    holdings = pd.DataFrame([{"date": dates[0], "etf_id": "momentum", "ticker": "1101", "actual_weight": 1.0}])
+    state = _state(pd.DataFrame([{"date": dates[1], "ticker": "1101", "traded_value": 1.0}]))
+
+    with pytest.raises(ValueError, match="duplicate"):
+        attach_etf_amount(daily, holdings, pd.concat([state, state]), _master(["1101"]))
+    with pytest.raises(ValueError, match="duplicate"):
+        attach_etf_amount(daily, holdings, state, pd.concat([_master(["1101"]), _master(["1101"])]))
 
 
 def test_notebook_facade_binds_one_explicit_data_analysts_root(tmp_path):

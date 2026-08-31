@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date, datetime
 import hashlib
 import json
+from numbers import Number, Real
 from pathlib import Path
 from typing import Any
 
@@ -19,41 +21,165 @@ def _sequential_float_sum(values: pd.Series) -> float:
     return total
 
 
+def _strict_boolean_mask(values: pd.Series, expected: bool) -> pd.Series:
+    return values.map(
+        lambda value: isinstance(value, (bool, np.bool_))
+        and bool(value) is expected
+    )
+
+
+def _finite_nonnegative_number_mask(values: pd.Series) -> pd.Series:
+    return values.map(
+        lambda value: not isinstance(value, (bool, np.bool_))
+        and isinstance(value, Real)
+        and np.isfinite(float(value))
+        and float(value) >= 0.0
+    )
+
+
+def _normalize_security_master(security_master: pd.DataFrame) -> pd.DataFrame:
+    master = security_master.loc[:, ["ticker", "delist_date"]].copy()
+    if master["ticker"].isna().any() or not master["ticker"].map(
+        lambda value: isinstance(value, str) and bool(value)
+    ).all():
+        raise ValueError("security_master ticker dtype is invalid")
+    if master["ticker"].duplicated().any():
+        raise ValueError("security_master contains duplicate ticker keys")
+
+    raw_dates = master["delist_date"]
+    non_null = raw_dates.notna()
+    valid_date_type = raw_dates.map(
+        lambda value: pd.isna(value)
+        or (
+            not isinstance(value, (bool, np.bool_, Number))
+            and isinstance(value, (str, pd.Timestamp, datetime, date))
+        )
+    )
+    if not valid_date_type.all():
+        raise ValueError("security_master delist_date dtype is invalid")
+    parsed = pd.to_datetime(raw_dates, errors="coerce")
+    if (non_null & parsed.isna()).any():
+        raise ValueError("security_master contains invalid delist_date")
+    master["delist_date"] = parsed.dt.normalize()
+    return master
+
+
+def _validate_market_state_amounts(market_state: pd.DataFrame) -> pd.DataFrame:
+    amounts = market_state.copy()
+    if amounts["date"].isna().any():
+        raise ValueError("market_state contains invalid date")
+    amounts["date"] = pd.to_datetime(amounts["date"], errors="coerce")
+    if amounts["date"].isna().any():
+        raise ValueError("market_state contains invalid date")
+    if amounts["ticker"].isna().any() or not amounts["ticker"].map(
+        lambda value: isinstance(value, str) and bool(value)
+    ).all():
+        raise ValueError("market_state ticker dtype is invalid")
+    if amounts.duplicated(["date", "ticker"]).any():
+        raise ValueError("market_state contains duplicate date-ticker keys")
+
+    state = amounts["market_state"]
+    amount_state = amounts["amount_state"]
+    raw_amount = amounts["authoritative_traded_value"]
+    amount_valid = _finite_nonnegative_number_mask(raw_amount)
+    amount_null = raw_amount.isna()
+    zero_false = _strict_boolean_mask(amounts["amount_zero_authorized"], False)
+    zero_true = _strict_boolean_mask(amounts["amount_zero_authorized"], True)
+    exchange_true = _strict_boolean_mask(amounts["exchange_tradable"], True)
+    exchange_false = _strict_boolean_mask(amounts["exchange_tradable"], False)
+    exchange_null = amounts["exchange_tradable"].isna()
+
+    trading_observed = (
+        state.eq("TRADING")
+        & amount_state.eq("OBSERVED")
+        & zero_false
+        & amount_valid
+        & exchange_true
+    )
+    halted_observed = (
+        state.eq("HALTED")
+        & amount_state.eq("OBSERVED")
+        & zero_false
+        & amount_valid
+        & exchange_false
+    )
+    halted_zero = (
+        state.eq("HALTED")
+        & amount_state.eq("ZERO_AUTHORIZED")
+        & zero_true
+        & amount_valid
+        & raw_amount.eq(0)
+        & exchange_false
+    )
+    missing = (
+        state.eq("MISSING")
+        & amount_state.eq("MISSING")
+        & zero_false
+        & amount_null
+        & exchange_null
+    )
+    if not (trading_observed | halted_observed | halted_zero | missing).all():
+        raise ValueError("market_state amount cross-field or dtype invariant failed")
+    amounts["authoritative_traded_value"] = pd.to_numeric(
+        raw_amount, errors="coerce"
+    )
+    return amounts
+
+
 def attach_etf_amount(
     daily_etf: pd.DataFrame,
     daily_holdings: pd.DataFrame,
-    market: pd.DataFrame,
+    market_state: pd.DataFrame,
+    security_master: pd.DataFrame,
 ) -> pd.DataFrame:
     daily = daily_etf.copy()
     required_daily = {"date", "etf_id"}
     required_holdings = {"date", "etf_id", "ticker", "actual_weight"}
-    required_market = {"date", "ticker", "traded_value"}
+    required_market = {
+        "date", "ticker", "market_state", "amount_state",
+        "amount_zero_authorized", "authoritative_traded_value",
+        "exchange_tradable",
+    }
+    required_master = {"ticker", "delist_date"}
     for name, frame, required in (
         ("daily_etf", daily, required_daily),
         ("daily_holdings", daily_holdings, required_holdings),
-        ("market", market, required_market),
+        ("market_state", market_state, required_market),
+        ("security_master", security_master, required_master),
     ):
         missing = sorted(required.difference(frame.columns))
         if missing:
             raise ValueError(f"{name} missing columns: {missing}")
 
     daily["date"] = pd.to_datetime(daily["date"], errors="coerce")
+    if daily[["date", "etf_id"]].isna().any().any():
+        raise ValueError("daily_etf contains invalid date or etf_id")
+    daily["etf_id"] = daily["etf_id"].astype(str)
     holdings = daily_holdings.copy()
     holdings["date"] = pd.to_datetime(holdings["date"], errors="coerce")
-    holdings["ticker"] = holdings["ticker"].astype(str)
-    amounts = market.copy()
-    amounts["date"] = pd.to_datetime(amounts["date"], errors="coerce")
-    amounts["ticker"] = amounts["ticker"].astype(str)
+    if holdings[["date", "etf_id", "ticker"]].isna().any().any():
+        raise ValueError("daily_holdings contains invalid keys")
+    if not holdings["ticker"].map(
+        lambda value: isinstance(value, str) and bool(value)
+    ).all():
+        raise ValueError("daily_holdings ticker dtype is invalid")
+    holdings["etf_id"] = holdings["etf_id"].astype(str)
+    amounts = _validate_market_state_amounts(market_state)
     if daily.duplicated(["date", "etf_id"]).any():
         raise ValueError("daily_etf contains duplicate date-etf_id keys")
     if holdings.duplicated(["date", "etf_id", "ticker"]).any():
         raise ValueError("daily_holdings contains duplicate keys")
-    if amounts.duplicated(["date", "ticker"]).any():
-        raise ValueError("market contains duplicate date-ticker keys")
+    master = _normalize_security_master(security_master)
+    unknown_lifecycle = set(holdings["ticker"]).difference(master["ticker"])
+    if unknown_lifecycle:
+        raise ValueError("daily_holdings ticker is absent from security_master")
 
     if daily.empty:
         daily["etf_amount"] = pd.Series(dtype="float64")
         daily["missing_traded_value_count"] = pd.Series(dtype="int64")
+        daily["status_missing_count"] = pd.Series(dtype="int64")
+        daily["status_zero_authorized_count"] = pd.Series(dtype="int64")
+        daily["amount_quality_state"] = pd.Series(dtype="object")
     else:
         daily["_result_row"] = np.arange(len(daily), dtype=np.int64)
         pairs = daily.loc[:, ["_result_row", "date", "etf_id"]].sort_values(
@@ -63,6 +189,9 @@ def attach_etf_amount(
         previous_holdings = holdings.loc[
             :, ["date", "etf_id", "ticker", "actual_weight"]
         ].rename(columns={"date": "holding_date"})
+        previous_holdings["_holding_order"] = np.arange(
+            len(previous_holdings), dtype=np.int64
+        )
         aligned = pairs.merge(
             previous_holdings,
             on=["holding_date", "etf_id"],
@@ -70,30 +199,47 @@ def attach_etf_amount(
             sort=False,
             validate="one_to_many",
         )
+        aligned = aligned.merge(master, on="ticker", how="left", validate="many_to_one")
+
+        has_holding = aligned["ticker"].notna()
+        valid_weight = _finite_nonnegative_number_mask(aligned["actual_weight"])
+        invalid_weight = has_holding & ~valid_weight
+        if invalid_weight.any():
+            raise ValueError(
+                "daily_holdings actual_weight dtype must be finite and non-negative"
+            )
+        weights = pd.to_numeric(aligned["actual_weight"], errors="coerce")
+        delisted = (
+            has_holding
+            & aligned["delist_date"].notna()
+            & aligned["delist_date"].le(aligned["date"])
+        )
+        aligned.loc[delisted, ["ticker", "actual_weight"]] = pd.NA
         aligned = aligned.merge(
-            amounts.loc[:, ["date", "ticker", "traded_value"]],
+            amounts.loc[:, list(required_market)],
             on=["date", "ticker"],
             how="left",
             sort=False,
             validate="many_to_one",
         )
-
+        aligned = aligned.sort_values(
+            ["_result_row", "_holding_order"], kind="stable", na_position="last"
+        )
         has_holding = aligned["ticker"].notna()
         weights = pd.to_numeric(aligned["actual_weight"], errors="coerce")
-        invalid_weight = has_holding & (~np.isfinite(weights) | weights.lt(0))
-        if invalid_weight.any():
-            raise ValueError(
-                "daily_holdings actual_weight must be finite and non-negative"
-            )
-        traded_values = pd.to_numeric(aligned["traded_value"], errors="coerce")
+        amount = pd.to_numeric(
+            aligned["authoritative_traded_value"], errors="coerce"
+        )
+        observed = has_holding & aligned["amount_state"].eq("OBSERVED")
+        zero = has_holding & aligned["amount_state"].eq("ZERO_AUTHORIZED")
         missing_amount = has_holding & (
-            ~np.isfinite(traded_values) | traded_values.lt(0)
+            aligned["market_state"].isna()
+            | aligned["market_state"].eq("MISSING")
         )
         aligned["_missing_amount"] = missing_amount.astype("int64")
-        aligned["_amount_contribution"] = np.where(
-            has_holding & ~missing_amount,
-            traded_values * weights,
-            0.0,
+        aligned["_zero_authorized"] = zero.astype("int64")
+        aligned["_amount_contribution"] = (
+            amount.where(observed, 0.0) * weights.where(has_holding, 0.0)
         )
 
         grouped = aligned.groupby("_result_row", sort=False)
@@ -101,10 +247,16 @@ def attach_etf_amount(
             _sequential_float_sum
         )
         missing_by_row = grouped["_missing_amount"].sum()
-        daily["etf_amount"] = daily["_result_row"].map(amount_by_row)
+        zero_by_row = grouped["_zero_authorized"].sum()
+        daily["etf_amount"] = daily["_result_row"].map(amount_by_row).fillna(0.0)
         daily["missing_traded_value_count"] = (
-            daily["_result_row"].map(missing_by_row).astype("int64")
+            daily["_result_row"].map(missing_by_row).fillna(0).astype("int64")
         )
+        daily["status_missing_count"] = daily["missing_traded_value_count"]
+        daily["status_zero_authorized_count"] = (
+            daily["_result_row"].map(zero_by_row).fillna(0).astype("int64")
+        )
+        daily["amount_quality_state"] = np.where(daily["status_missing_count"].gt(0), "MISSING", "READY")
         daily = daily.drop(columns="_result_row")
     if "has_data_quality_flag" not in daily.columns:
         daily["has_data_quality_flag"] = False

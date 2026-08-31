@@ -162,9 +162,13 @@ class ETFTrickLab:
                 target["signal_name"] = spec.signal_name
                 targets_by_etf[etf_id].append(target)
 
+        market_state = self.gateway.scan_market_state(run_days[0], run_days[-1])
         execution_market = daily[
             daily["date"].between(run_days[0], run_days[-1])
-        ].copy()
+        ].merge(
+            market_state.loc[:, ["date", "ticker", "market_state", "exchange_tradable"]],
+            on=["date", "ticker"], how="left", validate="one_to_one",
+        )
         engine = PortfolioExecutionEngine()
         prepared_execution_market = engine.prepare_market(execution_market)
         engine_tables = []
@@ -193,7 +197,7 @@ class ETFTrickLab:
                 build_selection_diagnostics(candidate_output),
             ]
         )
-        daily_etf = attach_etf_amount(daily_etf, holdings, execution_market)
+        daily_etf = attach_etf_amount(daily_etf, holdings, market_state, security_master)
         result = ETFTrickResult(
             daily_etf=daily_etf,
             daily_holdings=holdings,

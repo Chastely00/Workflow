@@ -177,6 +177,62 @@ def validate_result(
                     "invalid_etf_amount", "ETF amount must be finite and non-negative"
                 )
             )
+    amount_audit_columns = {
+        "missing_traded_value_count",
+        "status_missing_count",
+        "status_zero_authorized_count",
+        "amount_quality_state",
+    }
+    if not amount_audit_columns.issubset(daily.columns):
+        hard.append(
+            ValidationIssue(
+                "invalid_amount_audit",
+                "daily_etf lacks authoritative amount audit columns",
+            )
+        )
+    else:
+        integer_audits = {
+            column: daily[column].map(
+                lambda value: not isinstance(value, (bool, np.bool_))
+                and isinstance(value, (int, np.integer))
+                and int(value) >= 0
+            )
+            for column in (
+                "missing_traded_value_count",
+                "status_missing_count",
+                "status_zero_authorized_count",
+            )
+        }
+        missing_count = pd.to_numeric(
+            daily["status_missing_count"], errors="coerce"
+        )
+        legacy_missing = pd.to_numeric(
+            daily["missing_traded_value_count"], errors="coerce"
+        )
+        expected_quality = pd.Series(
+            np.where(missing_count.gt(0), "MISSING", "READY"),
+            index=daily.index,
+        )
+        audit_invalid = (
+            not all(mask.all() for mask in integer_audits.values())
+            or not legacy_missing.eq(missing_count).all()
+            or not daily["amount_quality_state"].isin({"READY", "MISSING"}).all()
+            or not daily["amount_quality_state"].eq(expected_quality).all()
+        )
+        if audit_invalid:
+            hard.append(
+                ValidationIssue(
+                    "invalid_amount_audit",
+                    "authoritative amount audit counts or quality state are inconsistent",
+                )
+            )
+        elif missing_count.gt(0).any():
+            hard.append(
+                ValidationIssue(
+                    "missing_authoritative_amount",
+                    "one or more held constituents lack authoritative market-state amount",
+                )
+            )
     if "cash" not in daily.columns or (
         pd.to_numeric(daily.get("cash"), errors="coerce") < 0
     ).any():
@@ -626,6 +682,18 @@ def _report(
             )
         else:
             incomplete_count = 0
+
+        def amount_audit_total(column: str) -> int | float:
+            if group.empty or column not in group:
+                return 0
+            values = group[column]
+            valid = values.map(
+                lambda value: not isinstance(value, (bool, np.bool_))
+                and isinstance(value, (int, np.integer))
+                and int(value) >= 0
+            )
+            return int(values.sum()) if valid.all() else np.nan
+
         summaries.append(
             {
                 "etf_id": etf_id,
@@ -638,6 +706,8 @@ def _report(
                 "incomplete_transition_count": incomplete_count,
                 "forced_delisting_count": 0 if trade_group.empty or "is_forced_delist_liquidation" not in trade_group else int(trade_group["is_forced_delist_liquidation"].fillna(False).astype(bool).sum()),
                 "total_cost": np.nan if group.empty or "total_cost" not in group else pd.to_numeric(group["total_cost"], errors="coerce").sum(),
+                "status_missing_count": amount_audit_total("status_missing_count"),
+                "status_zero_authorized_count": amount_audit_total("status_zero_authorized_count"),
             }
         )
     status = "NOT_READY" if hard else "READY"
