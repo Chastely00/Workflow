@@ -132,8 +132,10 @@ class PortfolioExecutionEngine:
             else self.prepare_market(market)
         )
         target_frame = self._normalize_targets(targets, spec)
-        delist_dates = self._delist_dates(security_master)
         days = tuple(pd.Timestamp(day) for day in calendar.days)
+        effective_delist_sessions = self._effective_delist_sessions(
+            security_master, days
+        )
         days_by_month: dict[pd.Period, list[pd.Timestamp]] = {}
         for day in days:
             days_by_month.setdefault(day.to_period("M"), []).append(day)
@@ -156,6 +158,7 @@ class PortfolioExecutionEngine:
         schedule_start: dict[str, int] = {}
         schedule_target: dict[str, int] = {}
         target_weights: dict[str, float] = {}
+        lifecycle_blocked: set[str] = set()
         schedule_month: pd.Period | None = None
         schedule_n = 0
         inception: pd.Timestamp | None = None
@@ -168,13 +171,31 @@ class PortfolioExecutionEngine:
 
         for date in days:
             month, k, month_day_count = day_schedule[date]
+            lifecycle_blocked.update(
+                ticker
+                for ticker, effective_session in effective_delist_sessions.items()
+                if effective_session == date
+            )
+            for ticker in lifecycle_blocked:
+                schedule_start.pop(ticker, None)
+                schedule_target.pop(ticker, None)
+                backlog.pop(ticker, None)
+                target_weights.pop(ticker, None)
             current_tickers = {
                 ticker for ticker, quantity in shares.items() if quantity > 0
             }
             if schedule_month == month:
-                current_tickers.update(schedule_start)
-                current_tickers.update(schedule_target)
+                current_tickers.update(
+                    ticker for ticker in schedule_start if ticker not in lifecycle_blocked
+                )
+                current_tickers.update(
+                    ticker for ticker in schedule_target if ticker not in lifecycle_blocked
+                )
             month_targets = targets_by_month.get(month, empty_targets)
+            if lifecycle_blocked:
+                month_targets = month_targets[
+                    ~month_targets["ticker"].isin(lifecycle_blocked)
+                ]
             current_tickers |= set(month_targets["ticker"])
 
             ca_by_ticker: dict[str, CorporateActionConversion] = {}
@@ -231,7 +252,10 @@ class PortfolioExecutionEngine:
             forced_commission = Decimal("0")
             forced_tax = Decimal("0")
             for ticker in sorted(list(shares)):
-                if shares.get(ticker, 0) <= 0 or delist_dates.get(ticker) != date:
+                if (
+                    shares.get(ticker, 0) <= 0
+                    or effective_delist_sessions.get(ticker) != date
+                ):
                     continue
                 price, _, _ = price_state.get(ticker, (None, None, 0))
                 if price is None:
@@ -262,11 +286,17 @@ class PortfolioExecutionEngine:
                     for ticker, quantity in shares.items()
                     if quantity > 0 and price_state.get(ticker, (None, None, 0))[0] is not None
                 )
-                schedule_start = {ticker: quantity for ticker, quantity in shares.items() if quantity > 0}
+                schedule_start = {
+                    ticker: quantity
+                    for ticker, quantity in shares.items()
+                    if quantity > 0 and ticker not in lifecycle_blocked
+                }
                 schedule_target = {ticker: 0 for ticker in schedule_start}
                 target_weights = {}
                 for target in month_targets.sort_values("ticker", kind="stable").itertuples(index=False):
                     ticker = str(target.ticker)
+                    if ticker in lifecycle_blocked:
+                        continue
                     weight = float(target.target_weight)
                     target_weights[ticker] = weight
                     price = price_state.get(ticker, (None, None, 0))[0]
@@ -288,7 +318,9 @@ class PortfolioExecutionEngine:
 
             desired: dict[str, int] = {}
             if schedule_month == month:
-                for ticker in sorted(set(schedule_start) | set(schedule_target)):
+                for ticker in sorted(
+                    (set(schedule_start) | set(schedule_target)) - lifecycle_blocked
+                ):
                     scheduled = scheduled_position(
                         schedule_start.get(ticker, 0),
                         schedule_target.get(ticker, 0),
@@ -688,7 +720,31 @@ class PortfolioExecutionEngine:
         frame["delist_date"] = pd.to_datetime(frame["delist_date"], errors="coerce")
         if frame["ticker"].duplicated().any():
             raise ExecutionInvariantError("security_master contains duplicate tickers")
+        if frame["delist_date"].isna().any():
+            raise ExecutionInvariantError("security_master contains invalid delist_date")
         return dict(zip(frame["ticker"], frame["delist_date"], strict=True))
+
+    @classmethod
+    def _effective_delist_sessions(
+        cls,
+        security_master: pd.DataFrame | None,
+        days: tuple[pd.Timestamp, ...],
+    ) -> dict[str, pd.Timestamp]:
+        delist_dates = cls._delist_dates(security_master)
+        if not delist_dates:
+            return {}
+        sessions = pd.DatetimeIndex(days)
+        if sessions.empty:
+            raise ExecutionInvariantError("delist date is outside governed calendar")
+        effective_sessions: dict[str, pd.Timestamp] = {}
+        for ticker, delist_date in delist_dates.items():
+            position = int(sessions.searchsorted(delist_date, side="left"))
+            if position >= len(sessions):
+                raise ExecutionInvariantError(
+                    f"delist date is outside governed calendar: {ticker}"
+                )
+            effective_sessions[ticker] = pd.Timestamp(sessions[position])
+        return effective_sessions
 
     @staticmethod
     def _market_row(

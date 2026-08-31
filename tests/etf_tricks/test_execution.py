@@ -497,6 +497,107 @@ def test_missing_price_carries_last_value_and_delisting_forces_settlement():
     assert result.daily_etf.iloc[-1]["holdings_count"] == 0
 
 
+def test_weekend_delist_liquidates_once_at_last_raw_close_and_never_rebuys():
+    dates = ["2025-01-02", "2025-01-03", "2025-01-06", "2025-02-03"]
+    targets = pd.concat(
+        [
+            _targets("2025-01", {"1101": 1.0}),
+            _targets("2025-02", {"1101": 1.0}),
+        ],
+        ignore_index=True,
+    )
+    market = _market(dates, ["1101"])
+    market.loc[
+        market["date"].eq(pd.Timestamp("2025-01-03")),
+        ["market_state", "exchange_tradable"],
+    ] = ["HALTED", False]
+    market.loc[
+        market["date"].eq(pd.Timestamp("2025-01-06")), ["close", "adj_close"]
+    ] = float("nan")
+    security_master = pd.DataFrame(
+        {"ticker": ["1101"], "delist_date": [pd.Timestamp("2025-01-04")]}
+    )
+    engine = PortfolioExecutionEngine()
+    calendar = _calendar(dates)
+
+    raw = engine.run(
+        get_etf_spec("momentum"),
+        targets,
+        market,
+        calendar,
+        Decimal("1000"),
+        security_master=security_master,
+    )
+    prepared = engine.run(
+        get_etf_spec("momentum"),
+        targets,
+        engine.prepare_market(market),
+        calendar,
+        Decimal("1000"),
+        security_master=security_master,
+    )
+
+    forced = raw.trades[raw.trades["is_forced_delist_liquidation"]]
+    assert forced[["date", "ticker", "side", "executed_shares", "raw_close"]].to_dict(
+        "records"
+    ) == [
+        {
+            "date": pd.Timestamp("2025-01-06"),
+            "ticker": "1101",
+            "side": "sell",
+            "executed_shares": -3,
+            "raw_close": 100.0,
+        }
+    ]
+    assert forced.iloc[0]["commission"] == pytest.approx(1.0)
+    assert forced.iloc[0]["tax"] == pytest.approx(1.0)
+    halted_backlog = raw.trades[
+        raw.trades["date"].eq(pd.Timestamp("2025-01-03"))
+        & raw.trades["ticker"].eq("1101")
+    ].iloc[0]
+    assert halted_backlog["executed_shares"] == 0
+    assert halted_backlog["unfilled_shares"] == 4
+    assert raw.trades[raw.trades["ticker"].eq("1101")].shape[0] == 3
+    assert raw.daily_holdings.loc[
+        raw.daily_holdings["date"].ge(pd.Timestamp("2025-01-06"))
+        & raw.daily_holdings["ticker"].eq("1101")
+    ].empty
+    pdt.assert_frame_equal(prepared.daily_etf, raw.daily_etf)
+    pdt.assert_frame_equal(prepared.daily_holdings, raw.daily_holdings)
+    pdt.assert_frame_equal(prepared.trades, raw.trades)
+    pdt.assert_frame_equal(prepared.diagnostics, raw.diagnostics)
+
+
+def test_lifecycle_rows_beyond_calendar_or_duplicate_ticker_fail_closed():
+    dates = ["2025-01-02", "2025-01-03"]
+    engine = PortfolioExecutionEngine()
+    arguments = (
+        get_etf_spec("momentum"),
+        _targets("2025-01", {"1101": 1.0}),
+        _market(dates, ["1101"]),
+        _calendar(dates),
+        Decimal("1000"),
+    )
+
+    with pytest.raises(ValueError, match="outside.*calendar"):
+        engine.run(
+            *arguments,
+            security_master=pd.DataFrame(
+                {"ticker": ["1101"], "delist_date": [pd.Timestamp("2025-01-06")]}
+            ),
+        )
+    with pytest.raises(ValueError, match="duplicate"):
+        engine.run(
+            *arguments,
+            security_master=pd.DataFrame(
+                {
+                    "ticker": ["1101", "1101"],
+                    "delist_date": [pd.Timestamp("2025-01-02"), pd.Timestamp("2025-01-03")],
+                }
+            ),
+        )
+
+
 def test_duplicate_market_keys_and_negative_capital_fail_closed():
     dates = ["2025-01-02"]
     market = _market(dates, ["1101"])
