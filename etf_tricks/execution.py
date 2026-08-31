@@ -3,7 +3,9 @@ from __future__ import annotations
 import math
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import date, datetime
 from decimal import Decimal, ROUND_FLOOR, ROUND_HALF_UP
+from numbers import Number
 from types import MappingProxyType
 
 import numpy as np
@@ -717,12 +719,41 @@ class PortfolioExecutionEngine:
             raise ExecutionInvariantError("security_master requires ticker and delist_date")
         frame = security_master.copy()
         frame["ticker"] = frame["ticker"].astype(str)
-        frame["delist_date"] = pd.to_datetime(frame["delist_date"], errors="coerce")
         if frame["ticker"].duplicated().any():
             raise ExecutionInvariantError("security_master contains duplicate tickers")
-        if frame["delist_date"].isna().any():
+        delist_dates: dict[str, pd.Timestamp] = {}
+        for ticker, value in frame[["ticker", "delist_date"]].itertuples(
+            index=False
+        ):
+            normalized = PortfolioExecutionEngine._normalize_delist_date(value)
+            if normalized is not None:
+                delist_dates[str(ticker)] = normalized
+        return delist_dates
+
+    @staticmethod
+    def _normalize_delist_date(value: object) -> pd.Timestamp | None:
+        if value is None or value is pd.NaT or value is pd.NA:
+            return None
+        if isinstance(value, (bool, np.bool_)):
+            raise ExecutionInvariantError("security_master delist_date cannot be boolean")
+        if isinstance(value, Number):
+            raise ExecutionInvariantError("security_master delist_date cannot be numeric")
+        if isinstance(value, str):
+            try:
+                parsed = pd.Timestamp(datetime.fromisoformat(value))
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise ExecutionInvariantError(
+                    "security_master contains invalid delist_date"
+                ) from exc
+        elif isinstance(value, (pd.Timestamp, datetime, date)):
+            parsed = pd.Timestamp(value)
+        else:
             raise ExecutionInvariantError("security_master contains invalid delist_date")
-        return dict(zip(frame["ticker"], frame["delist_date"], strict=True))
+        if parsed is pd.NaT or pd.isna(parsed):
+            raise ExecutionInvariantError("security_master contains invalid delist_date")
+        if parsed.tz is not None:
+            parsed = parsed.tz_convert("Asia/Taipei").tz_localize(None)
+        return parsed.normalize()
 
     @classmethod
     def _effective_delist_sessions(

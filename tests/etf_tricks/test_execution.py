@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from datetime import date, datetime
 from decimal import Decimal
 
 import numpy as np
@@ -10,6 +11,7 @@ import pytest
 
 from etf_tricks.calendar import TradingCalendar
 from etf_tricks.execution import (
+    ExecutionInvariantError,
     PreparedExecutionMarket,
     PortfolioExecutionEngine,
     apply_synthetic_corporate_action,
@@ -594,6 +596,109 @@ def test_lifecycle_rows_beyond_calendar_or_duplicate_ticker_fail_closed():
                     "ticker": ["1101", "1101"],
                     "delist_date": [pd.Timestamp("2025-01-02"), pd.Timestamp("2025-01-03")],
                 }
+            ),
+        )
+
+
+@pytest.mark.parametrize(
+    "delist_date",
+    [
+        0,
+        20250103,
+        np.int64(-1),
+        np.float64(20250103.0),
+        float("nan"),
+        np.float64(np.inf),
+        Decimal("20250103"),
+    ],
+)
+def test_numeric_delist_dates_are_rejected_before_datetime_coercion(delist_date: object):
+    dates = ["2025-01-02", "2025-01-03"]
+
+    with pytest.raises(ExecutionInvariantError, match="numeric"):
+        PortfolioExecutionEngine().run(
+            get_etf_spec("momentum"),
+            _targets("2025-01", {"1101": 1.0}),
+            _market(dates, ["1101"]),
+            _calendar(dates),
+            Decimal("1000"),
+            security_master=pd.DataFrame(
+                {"ticker": ["1101"], "delist_date": [delist_date]}
+            ),
+        )
+
+
+@pytest.mark.parametrize("delist_date", [False, np.bool_(True)])
+def test_boolean_delist_dates_are_rejected_before_datetime_coercion(delist_date: object):
+    with pytest.raises(ExecutionInvariantError, match="boolean"):
+        PortfolioExecutionEngine().run(
+            get_etf_spec("momentum"),
+            _targets("2025-01", {"1101": 1.0}),
+            _market(["2025-01-02"], ["1101"]),
+            _calendar(["2025-01-02"]),
+            Decimal("1000"),
+            security_master=pd.DataFrame(
+                {"ticker": ["1101"], "delist_date": [delist_date]}
+            ),
+        )
+
+
+@pytest.mark.parametrize(
+    "delist_date",
+    [
+        "2025-01-04",
+        date(2025, 1, 4),
+        datetime(2025, 1, 4, 23, 59),
+        pd.Timestamp("2025-01-04 23:59:00"),
+    ],
+)
+def test_canonical_delist_dates_normalize_to_the_same_governed_session(
+    delist_date: object,
+):
+    dates = ["2025-01-02", "2025-01-03", "2025-01-06"]
+    result = PortfolioExecutionEngine().run(
+        get_etf_spec("momentum"),
+        _targets("2025-01", {"1101": 1.0}),
+        _market(dates, ["1101"]),
+        _calendar(dates),
+        Decimal("1000"),
+        security_master=pd.DataFrame(
+            {"ticker": ["1101"], "delist_date": [delist_date]}
+        ),
+    )
+
+    forced = result.trades[result.trades["is_forced_delist_liquidation"]]
+    assert forced["date"].tolist() == [pd.Timestamp("2025-01-06")]
+
+
+@pytest.mark.parametrize("delist_date", [None, pd.NaT, pd.NA])
+def test_null_delist_date_means_security_is_not_delisted(delist_date: object):
+    dates = ["2025-01-02", "2025-01-03"]
+    result = PortfolioExecutionEngine().run(
+        get_etf_spec("momentum"),
+        _targets("2025-01", {"1101": 1.0}),
+        _market(dates, ["1101"]),
+        _calendar(dates),
+        Decimal("1000"),
+        security_master=pd.DataFrame(
+            {"ticker": ["1101"], "delist_date": [delist_date]}
+        ),
+    )
+
+    assert not result.trades["is_forced_delist_liquidation"].any()
+    assert result.daily_holdings.iloc[-1]["ticker"] == "1101"
+
+
+def test_malformed_delist_date_fails_closed_without_coercion():
+    with pytest.raises(ExecutionInvariantError, match="invalid delist_date"):
+        PortfolioExecutionEngine().run(
+            get_etf_spec("momentum"),
+            _targets("2025-01", {"1101": 1.0}),
+            _market(["2025-01-02"], ["1101"]),
+            _calendar(["2025-01-02"]),
+            Decimal("1000"),
+            security_master=pd.DataFrame(
+                {"ticker": ["1101"], "delist_date": ["not-a-date"]}
             ),
         )
 
