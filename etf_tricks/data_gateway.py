@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -7,7 +8,8 @@ import math
 from pathlib import Path
 import re
 import tempfile
-from typing import Callable, Iterable
+from types import MappingProxyType
+from typing import Callable, Iterable, Mapping
 
 import pandas as pd
 import pyarrow as pa
@@ -17,6 +19,14 @@ import pyarrow.parquet as pq
 
 class DataContractError(RuntimeError):
     pass
+
+
+@dataclass(frozen=True, slots=True)
+class MarketStateAuthoritySnapshot:
+    manifest_bytes: bytes
+    manifest_sha256: str
+    manifest: Mapping[str, object]
+    identity: Mapping[str, str]
 
 
 _DATE_COLUMNS = {
@@ -136,11 +146,12 @@ class DataGateway:
         start: str | pd.Timestamp,
         end: str | pd.Timestamp,
         tickers: Iterable[str] | None = None,
+        *,
+        authority_snapshot: MarketStateAuthoritySnapshot | None = None,
     ) -> pd.DataFrame:
         """Read the certified TEJ-only daily market-state artifact."""
-        manifest_bytes, manifest = self._load_manifest_snapshot("daily_market_state")
-        self._validate_market_state_manifest(manifest)
-        self._validate_market_state_inventory(manifest)
+        authority = authority_snapshot or self.capture_market_state_authority()
+        manifest = self._manifest_from_market_state_authority(authority)
         self._validate_market_state_coverage(manifest, start, end)
 
         filters: tuple[tuple[str, str, object], ...] = ()
@@ -151,8 +162,7 @@ class DataGateway:
             if any(not isinstance(ticker, str) or not ticker for ticker in selected_tickers):
                 raise DataContractError("daily_market_state tickers must contain non-empty strings")
             if not selected_tickers:
-                if self._read_manifest_bytes("daily_market_state") != manifest_bytes:
-                    raise DataContractError("daily_market_state manifest drifted during scan")
+                self.assert_market_state_authority_unchanged(authority)
                 return self._empty_market_state_frame()
             filters = (("ticker", "in", selected_tickers),)
 
@@ -174,9 +184,112 @@ class DataGateway:
             )
             self._validate_market_state_inventory(manifest)
             self._validate_market_state_rows(result, manifest)
-            if self._read_manifest_bytes("daily_market_state") != manifest_bytes:
-                raise DataContractError("daily_market_state manifest drifted during scan")
+            self.assert_market_state_authority_unchanged(authority)
         return result.loc[:, list(_MARKET_STATE_COLUMNS)].reset_index(drop=True)
+
+    def capture_market_state_authority(self) -> MarketStateAuthoritySnapshot:
+        """Capture one validated, immutable daily-market-state authority."""
+        manifest_bytes, manifest = self._load_manifest_snapshot("daily_market_state")
+        self._validate_market_state_manifest(manifest)
+        self._validate_market_state_inventory(manifest)
+        manifest_sha256 = hashlib.sha256(manifest_bytes).hexdigest()
+        identity = self._market_state_identity(manifest, manifest_sha256)
+        frozen_manifest = self._freeze_json(manifest)
+        frozen_identity = self._freeze_json(identity)
+        if not isinstance(frozen_manifest, Mapping) or not isinstance(
+            frozen_identity, Mapping
+        ):
+            raise DataContractError("daily_market_state authority snapshot is invalid")
+        return MarketStateAuthoritySnapshot(
+            manifest_bytes=manifest_bytes,
+            manifest_sha256=manifest_sha256,
+            manifest=frozen_manifest,
+            identity=frozen_identity,
+        )
+
+    def assert_market_state_authority_unchanged(
+        self, authority: MarketStateAuthoritySnapshot
+    ) -> None:
+        if self._read_manifest_bytes("daily_market_state") != authority.manifest_bytes:
+            raise DataContractError(
+                "daily_market_state manifest drifted from captured authority during operation"
+            )
+
+    def _manifest_from_market_state_authority(
+        self, authority: MarketStateAuthoritySnapshot
+    ) -> dict[str, object]:
+        if not isinstance(authority, MarketStateAuthoritySnapshot):
+            raise DataContractError("daily_market_state authority snapshot is invalid")
+        if hashlib.sha256(authority.manifest_bytes).hexdigest() != authority.manifest_sha256:
+            raise DataContractError("daily_market_state authority digest is invalid")
+        manifest = self._thaw_json(authority.manifest)
+        if not isinstance(manifest, dict):
+            raise DataContractError("daily_market_state authority manifest is invalid")
+        try:
+            parsed_manifest = json.loads(authority.manifest_bytes.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise DataContractError(
+                "daily_market_state authority manifest bytes are invalid"
+            ) from exc
+        if parsed_manifest != manifest:
+            raise DataContractError(
+                "daily_market_state authority manifest does not match its bytes"
+            )
+        self._validate_market_state_manifest(manifest)
+        expected_identity = self._market_state_identity(
+            manifest, authority.manifest_sha256
+        )
+        if dict(authority.identity) != expected_identity:
+            raise DataContractError("daily_market_state authority identity is invalid")
+        return manifest
+
+    @staticmethod
+    def _market_state_identity(
+        manifest: dict[str, object], manifest_sha256: str
+    ) -> dict[str, str]:
+        fields = (
+            "active_version",
+            "classification_policy_version",
+            "state_lattice_policy_version",
+            "market_identity_policy_version",
+            "dependency_certification_fingerprint",
+        )
+        identity: dict[str, str] = {
+            "artifact_id": "daily_market_state",
+            "manifest_sha256": manifest_sha256,
+        }
+        for field in fields:
+            value = manifest.get(field)
+            if not isinstance(value, str):
+                raise DataContractError(
+                    f"daily_market_state manifest {field} must be a canonical string"
+                )
+            identity[field] = value
+        return identity
+
+    @staticmethod
+    def _freeze_json(value: object) -> object:
+        if isinstance(value, dict):
+            return MappingProxyType(
+                {
+                    key: DataGateway._freeze_json(item)
+                    for key, item in value.items()
+                }
+            )
+        if isinstance(value, list):
+            return tuple(DataGateway._freeze_json(item) for item in value)
+        return value
+
+    @staticmethod
+    def _thaw_json(value: object) -> object:
+        if isinstance(value, Mapping):
+            return {
+                key: DataGateway._thaw_json(item)
+                for key, item in value.items()
+            }
+        if isinstance(value, tuple):
+            return [DataGateway._thaw_json(item) for item in value]
+        return value
 
     @staticmethod
     def _empty_market_state_frame() -> pd.DataFrame:
@@ -237,8 +350,14 @@ class DataGateway:
             "market_identity_policy_version",
         ):
             value = manifest.get(field)
-            if not isinstance(value, str) or not value.strip():
-                raise DataContractError(f"daily_market_state manifest {field} is missing")
+            if (
+                not isinstance(value, str)
+                or not value
+                or value != value.strip()
+            ):
+                raise DataContractError(
+                    f"daily_market_state manifest {field} must be a canonical string"
+                )
         if manifest["classification_policy_version"] != _CLASSIFICATION_POLICY_VERSION:
             raise DataContractError(
                 "daily_market_state manifest classification_policy_version is invalid"

@@ -10,7 +10,11 @@ import pandas as pd
 
 from .allocation import AllocationPlan, AllocationPlanner
 from .calendar import TradingCalendar
-from .data_gateway import DataGateway
+from .data_gateway import (
+    DataContractError,
+    DataGateway,
+    MarketStateAuthoritySnapshot,
+)
 from .execution import PortfolioExecutionEngine
 from .features import PITFeatureEngine
 from .registry import ETF_IDS, get_etf_spec
@@ -95,13 +99,12 @@ class ETFTrickLab:
         daily = self.gateway.read_artifact(
             "daily_price_volume", columns=daily_columns, start=daily_read_start, end=end
         )
-        state_manifest = self.gateway.load_manifest("daily_market_state")
-        state_manifest_hash = self._manifest_hash(state_manifest)
-        market_state = self.gateway.scan_market_state(state_scan_start, run_days[-1])
-        if self._manifest_hash(
-            self.gateway.load_manifest("daily_market_state")
-        ) != state_manifest_hash:
-            raise ValueError("daily_market_state manifest drifted across orchestration")
+        state_authority = self.gateway.capture_market_state_authority()
+        market_state = self.gateway.scan_market_state(
+            state_scan_start,
+            run_days[-1],
+            authority_snapshot=state_authority,
+        )
         required_state_sessions = pd.DatetimeIndex(
             [*formation_dates, *run_days]
         ).unique()
@@ -245,9 +248,8 @@ class ETFTrickLab:
         )
         diagnostics = append_lifecycle_evidence(diagnostics, lifecycle_diagnostics)
         daily_etf = attach_etf_amount(daily_etf, holdings, market_state, security_master)
-        manifest_hashes = self._manifest_hashes()
-        if manifest_hashes["daily_market_state"] != state_manifest_hash:
-            raise ValueError("daily_market_state manifest drifted before result finalization")
+        manifest_hashes = self._manifest_hashes(state_authority)
+        self.gateway.assert_market_state_authority_unchanged(state_authority)
         result = ETFTrickResult(
             daily_etf=daily_etf,
             daily_holdings=holdings,
@@ -263,9 +265,7 @@ class ETFTrickLab:
                 },
                 "manifest_hashes": manifest_hashes,
                 "spec_hash": self._spec_hash(),
-                "market_state_identity": self._market_state_identity(
-                    state_manifest, state_manifest_hash
-                ),
+                "market_state_identity": dict(state_authority.identity),
                 "market_state_config": {
                     "scan_start_date": str(state_scan_start.date()),
                     "scan_end_date": str(run_days[-1].date()),
@@ -343,12 +343,9 @@ class ETFTrickLab:
         ]
         validation_calendar = TradingCalendar(calendar_frame)
         identity_failures: list[ValidationIssue] = []
-        current_manifest_hashes = self._manifest_hashes()
-        current_state_manifest = self.gateway.load_manifest("daily_market_state")
-        expected_state_identity = self._market_state_identity(
-            current_state_manifest,
-            current_manifest_hashes["daily_market_state"],
-        )
+        state_authority = self.gateway.capture_market_state_authority()
+        current_manifest_hashes = self._manifest_hashes(state_authority)
+        expected_state_identity = dict(state_authority.identity)
         report = validate_result(
             selected,
             validation_calendar,
@@ -394,6 +391,15 @@ class ETFTrickLab:
                 ValidationIssue(
                     "run_bounds_mismatch",
                     "daily ETF dates do not equal the governed trading days in run_config bounds",
+                )
+            )
+        try:
+            self.gateway.assert_market_state_authority_unchanged(state_authority)
+        except DataContractError as exc:
+            identity_failures.append(
+                ValidationIssue(
+                    "market_state_authority_drift",
+                    str(exc),
                 )
             )
         if not identity_failures:
@@ -475,38 +481,24 @@ class ETFTrickLab:
         nonempty = [frame for frame in frames if not frame.empty]
         return pd.concat(nonempty, ignore_index=True) if nonempty else pd.DataFrame()
 
-    def _manifest_hashes(self) -> dict[str, str]:
+    def _manifest_hashes(
+        self, state_authority: MarketStateAuthoritySnapshot
+    ) -> dict[str, str]:
         artifact_ids = (
             "trading_calendar", "daily_price_volume", "daily_chip", "monthly_sales",
-            "financial_statement_raw", "security_master", "daily_market_state",
+            "financial_statement_raw", "security_master",
         )
         hashes = {}
         for artifact_id in artifact_ids:
             manifest = self.gateway.load_manifest(artifact_id)
             hashes[artifact_id] = self._manifest_hash(manifest)
+        hashes["daily_market_state"] = state_authority.manifest_sha256
         return hashes
 
     @staticmethod
     def _manifest_hash(manifest: dict[str, object]) -> str:
         payload = json.dumps(manifest, sort_keys=True, ensure_ascii=False).encode("utf-8")
         return hashlib.sha256(payload).hexdigest()
-
-    @staticmethod
-    def _market_state_identity(
-        manifest: dict[str, object], manifest_hash: str
-    ) -> dict[str, str]:
-        fields = (
-            "active_version",
-            "classification_policy_version",
-            "state_lattice_policy_version",
-            "market_identity_policy_version",
-            "dependency_certification_fingerprint",
-        )
-        return {
-            "artifact_id": "daily_market_state",
-            "manifest_sha256": manifest_hash,
-            **{field: str(manifest[field]) for field in fields},
-        }
 
     @staticmethod
     def _lifecycle_diagnostics(

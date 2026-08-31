@@ -740,13 +740,11 @@ def test_run_all_records_state_lineage_and_bounded_round_trip(tmp_path, monkeypa
         initial_capital=Decimal("1234567"),
     )
 
-    state_manifest = json.loads(
-        (tmp_path / "data_store/manifests/daily_market_state.json").read_text(
-            encoding="utf-8"
-        )
+    state_manifest_path = (
+        tmp_path / "data_store/manifests/daily_market_state.json"
     )
     expected_manifest_hash = hashlib.sha256(
-        json.dumps(state_manifest, sort_keys=True, ensure_ascii=False).encode("utf-8")
+        state_manifest_path.read_bytes()
     ).hexdigest()
     assert seen["scan_calls"] == 1
     assert seen["scan_bounds"] == (
@@ -840,6 +838,112 @@ def test_run_all_accepts_certified_market_state_generation_rotation(tmp_path):
     assert stale_report.status == "NOT_READY"
     assert "market_state_identity_mismatch" in {
         issue.code for issue in stale_report.hard_failures
+    }
+
+
+def test_validate_rejects_non_string_market_state_generation_even_if_coerced_identity_matches(
+    tmp_path,
+):
+    start, end = _data_analysts_fixture(tmp_path)
+    lab = ETFTrickLab.from_data_analysts(tmp_path)
+    result = lab.run_all(
+        start_date=start,
+        end_date=end,
+        initial_capital=Decimal("1234567"),
+    )
+
+    manifest_path = (
+        tmp_path / "data_store" / "manifests" / "daily_market_state.json"
+    )
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["active_version"] = 4
+    manifest_bytes = json.dumps(
+        manifest, sort_keys=True, ensure_ascii=False
+    ).encode("utf-8")
+    manifest_path.write_bytes(manifest_bytes)
+    manifest_sha256 = hashlib.sha256(manifest_bytes).hexdigest()
+
+    result.metadata["manifest_hashes"]["daily_market_state"] = manifest_sha256
+    result.metadata["market_state_identity"].update(
+        {
+            "manifest_sha256": manifest_sha256,
+            "active_version": "4",
+        }
+    )
+
+    with pytest.raises(DataContractError, match="active_version"):
+        lab.validate(result)
+
+
+def test_validate_rejects_hybrid_identity_when_market_state_rotates_mid_validation(
+    tmp_path, monkeypatch
+):
+    start, end = _data_analysts_fixture(tmp_path)
+    lab = ETFTrickLab.from_data_analysts(tmp_path)
+    result = lab.run_all(
+        start_date=start,
+        end_date=end,
+        initial_capital=Decimal("1234567"),
+    )
+
+    manifest_path = (
+        tmp_path / "data_store" / "manifests" / "daily_market_state.json"
+    )
+    manifest_a = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest_b = copy.deepcopy(manifest_a)
+    manifest_b.update(
+        {
+            "active_version": "market-state-v4",
+            "state_lattice_policy_version": "daily_market_state_lattice_v6",
+            "market_identity_policy_version": "daily_market_identity_v4",
+            "dependency_certification_fingerprint": "c" * 64,
+        }
+    )
+    manifest_a_bytes = json.dumps(
+        manifest_a, sort_keys=True, ensure_ascii=False
+    ).encode("utf-8")
+    manifest_b_bytes = json.dumps(
+        manifest_b, sort_keys=True, ensure_ascii=False
+    ).encode("utf-8")
+    manifest_a_sha256 = hashlib.sha256(manifest_a_bytes).hexdigest()
+
+    result.metadata["manifest_hashes"][
+        "daily_market_state"
+    ] = manifest_a_sha256
+    result.metadata["market_state_identity"].update(
+        {
+            "manifest_sha256": manifest_a_sha256,
+            "active_version": manifest_b["active_version"],
+            "state_lattice_policy_version": manifest_b[
+                "state_lattice_policy_version"
+            ],
+            "market_identity_policy_version": manifest_b[
+                "market_identity_policy_version"
+            ],
+            "dependency_certification_fingerprint": manifest_b[
+                "dependency_certification_fingerprint"
+            ],
+        }
+    )
+
+    original_read_manifest_bytes = lab.gateway._read_manifest_bytes
+    daily_reads = 0
+
+    def rotating_manifest_bytes(artifact_id: str) -> bytes:
+        nonlocal daily_reads
+        if artifact_id != "daily_market_state":
+            return original_read_manifest_bytes(artifact_id)
+        daily_reads += 1
+        return manifest_a_bytes if daily_reads == 1 else manifest_b_bytes
+
+    monkeypatch.setattr(
+        lab.gateway, "_read_manifest_bytes", rotating_manifest_bytes
+    )
+
+    report = lab.validate(result)
+    assert report.status == "NOT_READY"
+    assert "market_state_authority_drift" in {
+        issue.code for issue in report.hard_failures
     }
 
 

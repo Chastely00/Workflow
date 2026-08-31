@@ -458,6 +458,38 @@ def test_scan_market_state_returns_exact_governed_contract(tmp_path: Path) -> No
         assert pd.api.types.is_datetime64_any_dtype(result[column])
 
 
+def test_market_state_authority_snapshot_is_byte_bound_and_immutable(
+    tmp_path: Path,
+) -> None:
+    _write_market_state_artifact(tmp_path)
+    gateway = DataGateway.from_data_analysts(tmp_path)
+    manifest_path = (
+        tmp_path / "data_store" / "manifests" / "daily_market_state.json"
+    )
+
+    authority = gateway.capture_market_state_authority()
+
+    assert authority.manifest_bytes == manifest_path.read_bytes()
+    assert authority.manifest_sha256 == hashlib.sha256(
+        authority.manifest_bytes
+    ).hexdigest()
+    assert authority.identity["manifest_sha256"] == authority.manifest_sha256
+    assert authority.identity["active_version"] == "market-state-v3"
+    with pytest.raises(TypeError):
+        authority.manifest["active_version"] = "market-state-v4"  # type: ignore[index]
+    with pytest.raises(TypeError):
+        authority.manifest["dependency_versions"][  # type: ignore[index]
+            "daily_price_volume"
+        ] = "changed"
+
+    result = gateway.scan_market_state(
+        "2025-01-02",
+        "2025-01-03",
+        authority_snapshot=authority,
+    )
+    assert len(result) == 2
+
+
 def test_scan_market_state_accepts_manifest_column_permutation_but_projects_order(
     tmp_path: Path,
 ) -> None:
@@ -489,6 +521,7 @@ def test_scan_market_state_accepts_manifest_column_permutation_but_projects_orde
             "source_families",
         ),
         ({"dependency_versions": {}}, "dependency_versions"),
+        ({"active_version": " market-state-v4 "}, "active_version"),
         ({"dependency_certification_fingerprint": ""}, "certification"),
         (
             {"dependency_certification_fingerprint": "certification-v1"},
