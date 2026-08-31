@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 import pandas.testing as pdt
 import pytest
@@ -53,11 +54,28 @@ def _ix0001(total: float = 1_000.0) -> pd.DataFrame:
     return pd.DataFrame({"date": dates, "ticker": "IX0001", "amt": total / 20})
 
 
+def _formation_state(
+    tickers: list[str],
+    *,
+    states: list[str] | None = None,
+    full_delivery: list[bool] | None = None,
+) -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "date": FORMATION,
+            "ticker": tickers,
+            "market_state": states or ["TRADING"] * len(tickers),
+            "full_delivery": full_delivery or [False] * len(tickers),
+        }
+    )
+
+
 def _select(
     etf_id: str,
     features: pd.DataFrame,
     security_master: pd.DataFrame,
     ix0001: pd.DataFrame | None = None,
+    market_state: pd.DataFrame | None = None,
 ):
     return UniverseEngine(_calendar()).select(
         get_etf_spec(etf_id),
@@ -65,6 +83,9 @@ def _select(
         features,
         security_master,
         _ix0001() if ix0001 is None else ix0001,
+        _formation_state(features["ticker"].astype(str).tolist())
+        if market_state is None
+        else market_state,
     )
 
 
@@ -189,13 +210,57 @@ def test_prepared_formation_context_preserves_each_spec_selection():
     features = _features(tickers)
     master = _master(tickers)
     engine = UniverseEngine(_calendar())
-    context = engine.prepare(FORMATION, features, master, _ix0001())
+    state = _formation_state(tickers)
+    context = engine.prepare(FORMATION, features, master, _ix0001(), state)
 
     for etf_id in ("momentum", "market_cap"):
         spec = get_etf_spec(etf_id)
-        expected = engine.select(spec, FORMATION, features, master, _ix0001())
+        expected = engine.select(spec, FORMATION, features, master, _ix0001(), state)
         actual = engine.select_prepared(spec, context)
         assert actual.liquidity_threshold == expected.liquidity_threshold
         assert actual.carry_forward == expected.carry_forward
         pdt.assert_frame_equal(actual.candidates, expected.candidates)
         pdt.assert_frame_equal(actual.targets, expected.targets)
+
+
+def test_exact_formation_state_admits_only_trading_without_excluding_full_delivery():
+    tickers = ["1101", "1102", "1103", "1104"]
+    state = _formation_state(
+        tickers,
+        states=["TRADING", "HALTED", "MISSING", "TRADING"],
+        full_delivery=[False, False, False, True],
+    )
+
+    result = _select("momentum", _features(tickers), _master(tickers), market_state=state)
+    audit = result.candidates.set_index("ticker")
+
+    assert result.targets["ticker"].tolist() == ["1101", "1104"]
+    assert audit.loc["1101", "formation_market_state"] == "TRADING"
+    assert audit.loc["1102", "exclusion_reason"] == "formation_market_halted"
+    assert audit.loc["1103", "exclusion_reason"] == "formation_market_state_missing"
+    assert audit.loc["1104", "formation_full_delivery"] == np.bool_(True)
+    assert audit.loc["1104", "eligible"] == np.bool_(True)
+
+
+def test_formation_state_is_order_independent_and_ignores_future_append():
+    tickers = ["1101", "1102", "1103"]
+    features = _features(tickers)
+    master = _master(tickers)
+    formation_state = _formation_state(tickers)
+    future = formation_state.assign(
+        date=pd.Timestamp("2025-02-03"),
+        market_state="HALTED",
+    )
+
+    expected = _select("momentum", features, master, market_state=formation_state)
+    actual = _select(
+        "momentum",
+        features.sample(frac=1.0, random_state=11),
+        master.sample(frac=1.0, random_state=12),
+        market_state=pd.concat([future, formation_state], ignore_index=True).sample(
+            frac=1.0, random_state=13
+        ),
+    )
+
+    pdt.assert_frame_equal(actual.candidates, expected.candidates)
+    pdt.assert_frame_equal(actual.targets, expected.targets)

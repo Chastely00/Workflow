@@ -12,8 +12,9 @@ import pyarrow.parquet as pq
 import pytest
 
 import etf_tricks.lab as lab_module
-from etf_tricks import ETF_IDS, ETFTrickLab
+from etf_tricks import ETF_IDS, ETFTrickLab, ETFTrickResult
 from etf_tricks.features import PITFeatureEngine
+from etf_tricks.data_gateway import DataContractError
 from etf_tricks.execution import PortfolioExecutionEngine
 from etf_tricks.universe import UniverseEngine
 
@@ -180,6 +181,27 @@ def _publish_daily_market_state(
     )
 
 
+def _rewrite_market_state_rows(root: Path, frame: pd.DataFrame) -> None:
+    store = root / "data_store"
+    parquet_path = (
+        store / "canonical/derived/daily_market_state/year=2025/part.parquet"
+    )
+    manifest_path = store / "manifests/daily_market_state.json"
+    frame.loc[:, list(_MARKET_STATE_COLUMNS)].to_parquet(parquet_path, index=False)
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    schema_fingerprint = hashlib.sha256(
+        pq.read_schema(parquet_path).serialize().to_pybytes()
+    ).hexdigest()
+    inventory = manifest["partition_inventory"][0]
+    manifest["row_count"] = len(frame)
+    manifest["schema_fingerprint"] = schema_fingerprint
+    inventory["size"] = parquet_path.stat().st_size
+    inventory["row_count"] = len(frame)
+    inventory["schema_fingerprint"] = schema_fingerprint
+    inventory["content_sha256"] = hashlib.sha256(parquet_path.read_bytes()).hexdigest()
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+
 def _publish(root: Path, artifact_id: str, frame: pd.DataFrame) -> None:
     store = root / "data_store"
     data_dir = store / "canonical"
@@ -291,7 +313,7 @@ def _data_analysts_fixture(
     _publish_daily_market_state(
         root,
         state_source,
-        run_start,
+        pd.Timestamp("2025-01-31"),
         run_end,
         halted_without_price=halted_keys,
     )
@@ -393,12 +415,16 @@ def test_manifest_backed_public_api_produces_13_continuous_curves(tmp_path):
 
     stale = copy.deepcopy(result)
     stale.metadata["manifest_hashes"]["daily_price_volume"] = "stale"
+    stale.metadata["market_state_identity"]["manifest_sha256"] = "stale"
     stale.metadata["spec_hash"] = "stale"
     stale_report = lab.validate(stale)
     assert stale_report.status == "NOT_READY"
     assert {issue.code for issue in stale_report.hard_failures}.issuperset(
         {"source_identity_mismatch", "spec_identity_mismatch"}
     )
+    assert "market_state_identity_mismatch" in {
+        issue.code for issue in stale_report.hard_failures
+    }
 
     sales_manifest_path = tmp_path / "data_store" / "manifests" / "monthly_sales.json"
     sales_manifest = json.loads(sales_manifest_path.read_text(encoding="utf-8"))
@@ -437,17 +463,34 @@ def test_run_all_computes_all_formation_features_in_one_batch(tmp_path, monkeypa
 def test_run_all_prepares_the_execution_market_once_for_all_etfs(tmp_path, monkeypatch):
     start, end = _data_analysts_fixture(tmp_path)
     calls: list[int] = []
+    prepared_ids: list[int] = []
     original = PortfolioExecutionEngine.prepare_market
+    original_run = PortfolioExecutionEngine.run
 
     def recording_prepare_market(market):
         calls.append(len(market))
         return original(market)
+
+    def recording_run(
+        self, spec, targets, market, calendar, initial_capital, *, security_master=None
+    ):
+        prepared_ids.append(id(market))
+        return original_run(
+            self,
+            spec,
+            targets,
+            market,
+            calendar,
+            initial_capital,
+            security_master=security_master,
+        )
 
     monkeypatch.setattr(
         PortfolioExecutionEngine,
         "prepare_market",
         staticmethod(recording_prepare_market),
     )
+    monkeypatch.setattr(PortfolioExecutionEngine, "run", recording_run)
 
     ETFTrickLab.from_data_analysts(tmp_path).run_all(
         start_date=start,
@@ -456,6 +499,8 @@ def test_run_all_prepares_the_execution_market_once_for_all_etfs(tmp_path, monke
     )
 
     assert len(calls) == 1
+    assert len(prepared_ids) == len(ETF_IDS) == 13
+    assert len(set(prepared_ids)) == 1
 
 
 def test_run_all_prepares_one_universe_context_per_formation(tmp_path, monkeypatch):
@@ -463,9 +508,13 @@ def test_run_all_prepares_one_universe_context_per_formation(tmp_path, monkeypat
     calls: list[pd.Timestamp] = []
     original = UniverseEngine.prepare
 
-    def recording_prepare(self, formation_date, features, security_master, ix0001):
+    def recording_prepare(
+        self, formation_date, features, security_master, ix0001, market_state
+    ):
         calls.append(pd.Timestamp(formation_date))
-        return original(self, formation_date, features, security_master, ix0001)
+        return original(
+            self, formation_date, features, security_master, ix0001, market_state
+        )
 
     monkeypatch.setattr(UniverseEngine, "prepare", recording_prepare)
 
@@ -631,6 +680,151 @@ def test_run_all_rejects_requested_scope_dpv_key_without_certified_state(
     monkeypatch.setattr(PITFeatureEngine, "compute_many", reject_late_calculation)
 
     with pytest.raises(ValueError, match="daily_price_volume.*without certified"):
+        ETFTrickLab.from_data_analysts(tmp_path).run_all(
+            start_date=start,
+            end_date=end,
+            initial_capital=Decimal("1234567"),
+        )
+
+
+def test_run_all_records_state_lineage_and_bounded_round_trip(tmp_path, monkeypatch):
+    start, end = _data_analysts_fixture(tmp_path)
+    lab = ETFTrickLab.from_data_analysts(tmp_path)
+    seen: dict[str, object] = {"scan_calls": 0, "prepared_ids": []}
+    original_scan = lab.gateway.scan_market_state
+    original_run = PortfolioExecutionEngine.run
+    original_attach = lab_module.attach_etf_amount
+
+    def recording_scan(*args, **kwargs):
+        seen["scan_calls"] = int(seen["scan_calls"]) + 1
+        seen["scan_bounds"] = tuple(pd.Timestamp(value) for value in args[:2])
+        state = original_scan(*args, **kwargs)
+        seen["state"] = state
+        return state
+
+    def recording_run(
+        self, spec, targets, market, calendar, initial_capital, *, security_master=None
+    ):
+        seen["prepared_ids"].append(id(market))
+        return original_run(
+            self,
+            spec,
+            targets,
+            market,
+            calendar,
+            initial_capital,
+            security_master=security_master,
+        )
+
+    def recording_attach(daily_etf, holdings, market_state, security_master):
+        seen["amount_uses_same_state"] = market_state is seen["state"]
+        return original_attach(daily_etf, holdings, market_state, security_master)
+
+    monkeypatch.setattr(lab.gateway, "scan_market_state", recording_scan)
+    monkeypatch.setattr(PortfolioExecutionEngine, "run", recording_run)
+    monkeypatch.setattr(lab_module, "attach_etf_amount", recording_attach)
+
+    result = lab.run_all(
+        start_date=start,
+        end_date=end,
+        initial_capital=Decimal("1234567"),
+    )
+
+    state_manifest = json.loads(
+        (tmp_path / "data_store/manifests/daily_market_state.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    expected_manifest_hash = hashlib.sha256(
+        json.dumps(state_manifest, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    ).hexdigest()
+    assert seen["scan_calls"] == 1
+    assert seen["scan_bounds"] == (
+        pd.Timestamp("2025-01-31"),
+        pd.Timestamp("2025-02-07"),
+    )
+    assert len(seen["prepared_ids"]) == len(ETF_IDS) == 13
+    assert len(set(seen["prepared_ids"])) == 1
+    assert seen["amount_uses_same_state"] is True
+    assert result.metadata["manifest_hashes"]["daily_market_state"] == expected_manifest_hash
+    assert result.metadata["market_state_identity"] == {
+        "artifact_id": "daily_market_state",
+        "manifest_sha256": expected_manifest_hash,
+        "active_version": "market-state-v3",
+        "classification_policy_version": "daily_market_state_v3",
+        "state_lattice_policy_version": "daily_market_state_lattice_v5",
+        "market_identity_policy_version": "daily_market_identity_v3",
+        "dependency_certification_fingerprint": "certification-v1",
+    }
+    assert result.metadata["market_state_config"] == {
+        "scan_start_date": "2025-01-31",
+        "scan_end_date": "2025-02-07",
+        "formation_admission": "EXACT_DATE_TRADING_ONLY",
+        "execution_admission": "SAME_SESSION_TRADING_AND_EXCHANGE_TRADABLE",
+        "amount_source": "PRIOR_SESSION_HOLDINGS_AUTHORITATIVE_TRADED_VALUE",
+    }
+    lifecycle = result.metadata["lifecycle_diagnostics"]
+    assert lifecycle["lifecycle_conflict_count"] == 0
+    assert lifecycle["identity_conflict_count"] == 0
+    assert lifecycle["formation_exclusion_reason_counts"] == {}
+
+    output = tmp_path / "bounded-result"
+    manifest = result.write(output)
+    restored = ETFTrickResult.read(output)
+    for name in (
+        "daily_etf",
+        "daily_holdings",
+        "trades",
+        "monthly_targets",
+        "candidate_audit",
+        "diagnostics",
+    ):
+        pd.testing.assert_frame_equal(getattr(restored, name), getattr(result, name))
+        assert len(manifest["tables"][name]["sha256"]) == 64
+    assert restored.metadata == result.metadata
+    assert lab.validate(restored).status == "READY"
+
+
+def test_run_all_rejects_missing_physical_state_end_before_feature_calculation(
+    tmp_path, monkeypatch
+):
+    start, end = _data_analysts_fixture(tmp_path)
+    parquet_path = (
+        tmp_path
+        / "data_store/canonical/derived/daily_market_state/year=2025/part.parquet"
+    )
+    state = pd.read_parquet(parquet_path)
+    _rewrite_market_state_rows(
+        tmp_path,
+        state[pd.to_datetime(state["date"]).lt(end)].copy(),
+    )
+
+    def reject_late_calculation(*args, **kwargs):
+        raise AssertionError("feature calculation ran before state coverage gate")
+
+    monkeypatch.setattr(PITFeatureEngine, "compute_many", reject_late_calculation)
+    with pytest.raises(ValueError, match="daily_market_state physical coverage"):
+        ETFTrickLab.from_data_analysts(tmp_path).run_all(
+            start_date=start,
+            end_date=end,
+            initial_capital=Decimal("1234567"),
+        )
+
+
+def test_run_all_rejects_stale_state_manifest_before_feature_calculation(
+    tmp_path, monkeypatch
+):
+    start, end = _data_analysts_fixture(tmp_path)
+    manifest_path = tmp_path / "data_store/manifests/daily_market_state.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["build_end"] = "2025-02-06"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    def reject_late_calculation(*args, **kwargs):
+        raise AssertionError("feature calculation ran before state coverage gate")
+
+    monkeypatch.setattr(PITFeatureEngine, "compute_many", reject_late_calculation)
+    with pytest.raises(DataContractError, match="outside governed build coverage"):
         ETFTrickLab.from_data_analysts(tmp_path).run_all(
             start_date=start,
             end_date=end,

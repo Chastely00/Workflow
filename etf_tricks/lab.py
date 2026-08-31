@@ -59,6 +59,7 @@ class ETFTrickLab:
             )
         )
         formation_dates = self._formation_dates_for_run(full_calendar, start, end)
+        state_scan_start = min((run_days[0], *formation_dates))
         if formation_dates:
             latest_formation = max(formation_dates)
             self._assert_sparse_source_fresh("monthly_sales", latest_formation, 45)
@@ -89,7 +90,26 @@ class ETFTrickLab:
         daily = self.gateway.read_artifact(
             "daily_price_volume", columns=daily_columns, start=daily_read_start, end=end
         )
-        market_state = self.gateway.scan_market_state(run_days[0], run_days[-1])
+        state_manifest = self.gateway.load_manifest("daily_market_state")
+        state_manifest_hash = self._manifest_hash(state_manifest)
+        market_state = self.gateway.scan_market_state(state_scan_start, run_days[-1])
+        if self._manifest_hash(
+            self.gateway.load_manifest("daily_market_state")
+        ) != state_manifest_hash:
+            raise ValueError("daily_market_state manifest drifted across orchestration")
+        required_state_sessions = pd.DatetimeIndex(
+            [*formation_dates, *run_days]
+        ).unique()
+        observed_state_sessions = pd.DatetimeIndex(
+            pd.to_datetime(market_state["date"], errors="coerce")
+            .dropna()
+            .unique()
+        )
+        if len(required_state_sessions.difference(observed_state_sessions)) > 0:
+            raise ValueError(
+                "daily_market_state physical coverage does not contain every "
+                "requested formation and execution session"
+            )
         requested_daily = daily.loc[
             daily["date"].between(run_days[0], run_days[-1])
         ].copy()
@@ -165,7 +185,7 @@ class ETFTrickLab:
         for formation in formation_dates:
             features = features_by_date[formation]
             universe_context = universe_engine.prepare(
-                formation, features, security_master, ix0001
+                formation, features, security_master, ix0001, market_state
             )
             for etf_id in ETF_IDS:
                 spec = get_etf_spec(etf_id)
@@ -216,6 +236,9 @@ class ETFTrickLab:
             ]
         )
         daily_etf = attach_etf_amount(daily_etf, holdings, market_state, security_master)
+        manifest_hashes = self._manifest_hashes()
+        if manifest_hashes["daily_market_state"] != state_manifest_hash:
+            raise ValueError("daily_market_state manifest drifted before result finalization")
         result = ETFTrickResult(
             daily_etf=daily_etf,
             daily_holdings=holdings,
@@ -229,8 +252,25 @@ class ETFTrickLab:
                     "end_date": str(end.date()),
                     "initial_capital": str(initial_capital),
                 },
-                "manifest_hashes": self._manifest_hashes(),
+                "manifest_hashes": manifest_hashes,
                 "spec_hash": self._spec_hash(),
+                "market_state_identity": self._market_state_identity(
+                    state_manifest, state_manifest_hash
+                ),
+                "market_state_config": {
+                    "scan_start_date": str(state_scan_start.date()),
+                    "scan_end_date": str(run_days[-1].date()),
+                    "formation_admission": "EXACT_DATE_TRADING_ONLY",
+                    "execution_admission": (
+                        "SAME_SESSION_TRADING_AND_EXCHANGE_TRADABLE"
+                    ),
+                    "amount_source": (
+                        "PRIOR_SESSION_HOLDINGS_AUTHORITATIVE_TRADED_VALUE"
+                    ),
+                },
+                "lifecycle_diagnostics": self._lifecycle_diagnostics(
+                    market_state, candidate_output, formation_dates
+                ),
             },
         )
         self._last_result = result
@@ -297,11 +337,24 @@ class ETFTrickLab:
         validation_calendar = TradingCalendar(calendar_frame)
         report = validate_result(selected, validation_calendar, ETF_IDS)
         identity_failures: list[ValidationIssue] = []
-        if selected.metadata.get("manifest_hashes") != self._manifest_hashes():
+        current_manifest_hashes = self._manifest_hashes()
+        if selected.metadata.get("manifest_hashes") != current_manifest_hashes:
             identity_failures.append(
                 ValidationIssue(
                     "source_identity_mismatch",
                     "result source manifest hashes do not match the current DataAnalysts artifacts",
+                )
+            )
+        current_state_manifest = self.gateway.load_manifest("daily_market_state")
+        expected_state_identity = self._market_state_identity(
+            current_state_manifest,
+            current_manifest_hashes["daily_market_state"],
+        )
+        if selected.metadata.get("market_state_identity") != expected_state_identity:
+            identity_failures.append(
+                ValidationIssue(
+                    "market_state_identity_mismatch",
+                    "result market-state identity does not match the current certified artifact",
                 )
             )
         if selected.metadata.get("spec_hash") != self._spec_hash():
@@ -411,14 +464,68 @@ class ETFTrickLab:
     def _manifest_hashes(self) -> dict[str, str]:
         artifact_ids = (
             "trading_calendar", "daily_price_volume", "daily_chip", "monthly_sales",
-            "financial_statement_raw", "security_master",
+            "financial_statement_raw", "security_master", "daily_market_state",
         )
         hashes = {}
         for artifact_id in artifact_ids:
             manifest = self.gateway.load_manifest(artifact_id)
-            payload = json.dumps(manifest, sort_keys=True, ensure_ascii=False).encode("utf-8")
-            hashes[artifact_id] = hashlib.sha256(payload).hexdigest()
+            hashes[artifact_id] = self._manifest_hash(manifest)
         return hashes
+
+    @staticmethod
+    def _manifest_hash(manifest: dict[str, object]) -> str:
+        payload = json.dumps(manifest, sort_keys=True, ensure_ascii=False).encode("utf-8")
+        return hashlib.sha256(payload).hexdigest()
+
+    @staticmethod
+    def _market_state_identity(
+        manifest: dict[str, object], manifest_hash: str
+    ) -> dict[str, str]:
+        fields = (
+            "active_version",
+            "classification_policy_version",
+            "state_lattice_policy_version",
+            "market_identity_policy_version",
+            "dependency_certification_fingerprint",
+        )
+        return {
+            "artifact_id": "daily_market_state",
+            "manifest_sha256": manifest_hash,
+            **{field: str(manifest[field]) for field in fields},
+        }
+
+    @staticmethod
+    def _lifecycle_diagnostics(
+        market_state: pd.DataFrame,
+        candidate_audit: pd.DataFrame,
+        formation_dates: tuple[pd.Timestamp, ...],
+    ) -> dict[str, object]:
+        formation_rows = market_state[
+            pd.to_datetime(market_state["date"], errors="coerce").isin(formation_dates)
+            & market_state["instrument_kind"].eq("EQUITY")
+        ]
+        state_counts = formation_rows["market_state"].value_counts(sort=False)
+        state_reasons = {"formation_market_halted", "formation_market_state_missing"}
+        if "exclusion_reason" in candidate_audit:
+            exclusion_counts = candidate_audit.loc[
+                candidate_audit["exclusion_reason"].isin(state_reasons),
+                "exclusion_reason",
+            ].value_counts(sort=False)
+        else:
+            exclusion_counts = pd.Series(dtype="int64")
+        return {
+            "state_row_count": int(len(market_state)),
+            "lifecycle_active_row_count": int(market_state["lifecycle_active"].sum()),
+            "lifecycle_inactive_row_count": int((~market_state["lifecycle_active"]).sum()),
+            "lifecycle_conflict_count": int(market_state["lifecycle_conflict"].sum()),
+            "identity_conflict_count": int(market_state["identity_conflict"].sum()),
+            "formation_state_counts": {
+                str(key): int(value) for key, value in state_counts.items()
+            },
+            "formation_exclusion_reason_counts": {
+                str(key): int(value) for key, value in exclusion_counts.items()
+            },
+        }
 
     def _assert_sparse_source_fresh(
         self, artifact_id: str, formation_date: pd.Timestamp, max_staleness_days: int
