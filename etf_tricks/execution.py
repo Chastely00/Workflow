@@ -18,6 +18,18 @@ class ExecutionInvariantError(ValueError):
     pass
 
 
+_MARKET_STATE_TRADING = np.int8(1)
+_MARKET_STATE_HALTED = np.int8(2)
+_MARKET_STATE_MISSING = np.int8(3)
+_EXCHANGE_TRADABLE_TRUE = np.int8(1)
+_EXCHANGE_TRADABLE_FALSE = np.int8(0)
+_EXCHANGE_TRADABLE_UNKNOWN = np.int8(-1)
+
+
+def _is_boolean(value: object, expected: bool) -> bool:
+    return isinstance(value, (bool, np.bool_)) and bool(value) is expected
+
+
 @dataclass(frozen=True)
 class CorporateActionConversion:
     multiplier: Decimal
@@ -40,10 +52,12 @@ class PreparedExecutionMarket:
     close: np.ndarray
     adj_close: np.ndarray
     traded_value: np.ndarray
+    market_state: np.ndarray
+    exchange_tradable: np.ndarray
 
     def lookup(
         self, date: pd.Timestamp, ticker: str
-    ) -> tuple[np.float64, np.float64, np.float64] | None:
+    ) -> tuple[np.float64, np.float64, np.float64, np.int8, np.int8] | None:
         date_position = self.date_positions.get(pd.Timestamp(date))
         ticker_position = self.ticker_positions.get(str(ticker))
         if date_position is None or ticker_position is None:
@@ -52,6 +66,8 @@ class PreparedExecutionMarket:
             self.close[date_position, ticker_position],
             self.adj_close[date_position, ticker_position],
             self.traded_value[date_position, ticker_position],
+            self.market_state[date_position, ticker_position],
+            self.exchange_tradable[date_position, ticker_position],
         )
 
 
@@ -267,6 +283,17 @@ class PortfolioExecutionEngine:
                     )
                     desired[ticker] = scheduled - shares.get(ticker, 0)
 
+            for ticker, quantity in desired.items():
+                if quantity != 0 and self._market_state_code(prepared_market, date, ticker) == _MARKET_STATE_MISSING:
+                    diagnostic_records.append(
+                        {
+                            "date": date,
+                            "etf_id": spec.etf_id,
+                            "ticker": ticker,
+                            "diagnostic": "missing_market_state",
+                        }
+                    )
+
             day_commission = forced_commission
             day_tax = forced_tax
             day_trades: list[dict[str, object]] = []
@@ -450,6 +477,32 @@ class PortfolioExecutionEngine:
             ).to_numpy(dtype=np.float64)
             matrix.setflags(write=False)
             matrices.append(matrix)
+        state_matrix = np.full(shape, _MARKET_STATE_MISSING, dtype=np.int8)
+        state_codes = frame["market_state"].map(
+            {
+                "TRADING": _MARKET_STATE_TRADING,
+                "HALTED": _MARKET_STATE_HALTED,
+                "MISSING": _MARKET_STATE_MISSING,
+            }
+        ).to_numpy(dtype=np.int8)
+        state_matrix[date_codes, ticker_codes] = state_codes
+        state_matrix.setflags(write=False)
+        tradability_matrix = np.full(
+            shape, _EXCHANGE_TRADABLE_UNKNOWN, dtype=np.int8
+        )
+        tradability_codes = np.array(
+            [
+                _EXCHANGE_TRADABLE_TRUE
+                if _is_boolean(value, True)
+                else _EXCHANGE_TRADABLE_FALSE
+                if _is_boolean(value, False)
+                else _EXCHANGE_TRADABLE_UNKNOWN
+                for value in frame["exchange_tradable"]
+            ],
+            dtype=np.int8,
+        )
+        tradability_matrix[date_codes, ticker_codes] = tradability_codes
+        tradability_matrix.setflags(write=False)
         return PreparedExecutionMarket(
             date_positions=MappingProxyType(
                 {pd.Timestamp(date): index for index, date in enumerate(dates)}
@@ -460,6 +513,8 @@ class PortfolioExecutionEngine:
             close=matrices[0],
             adj_close=matrices[1],
             traded_value=matrices[2],
+            market_state=state_matrix,
+            exchange_tradable=tradability_matrix,
         )
 
     @staticmethod
@@ -469,10 +524,41 @@ class PortfolioExecutionEngine:
         if missing:
             raise ExecutionInvariantError(f"market missing columns: {missing}")
         frame = market.copy()
+        has_market_state = "market_state" in frame.columns
+        has_exchange_tradable = "exchange_tradable" in frame.columns
+        if has_market_state != has_exchange_tradable:
+            raise ExecutionInvariantError(
+                "market_state and exchange_tradable must be supplied together"
+            )
+        if not has_market_state:
+            frame["market_state"] = "TRADING"
+            frame["exchange_tradable"] = True
         frame["date"] = pd.to_datetime(frame["date"], errors="coerce")
         frame["ticker"] = frame["ticker"].astype(str)
         if frame.duplicated(["date", "ticker"]).any():
             raise ExecutionInvariantError("market contains duplicate date-ticker keys")
+        allowed_states = {"TRADING", "HALTED", "MISSING"}
+        if frame["market_state"].isna().any() or not set(
+            frame["market_state"]
+        ).issubset(allowed_states):
+            raise ExecutionInvariantError("market has invalid market_state")
+        for row in frame[["market_state", "exchange_tradable"]].itertuples(index=False):
+            if row.market_state == "TRADING" and not _is_boolean(
+                row.exchange_tradable, True
+            ):
+                raise ExecutionInvariantError(
+                    "TRADING market_state requires exchange_tradable=True"
+                )
+            if row.market_state == "HALTED" and not _is_boolean(
+                row.exchange_tradable, False
+            ):
+                raise ExecutionInvariantError(
+                    "HALTED market_state requires exchange_tradable=False"
+                )
+            if row.market_state == "MISSING" and not pd.isna(row.exchange_tradable):
+                raise ExecutionInvariantError(
+                    "MISSING market_state requires null exchange_tradable"
+                )
         return frame.sort_values(["date", "ticker"], kind="stable")
 
     @staticmethod
@@ -514,7 +600,7 @@ class PortfolioExecutionEngine:
     @staticmethod
     def _market_row(
         market: PreparedExecutionMarket, date: pd.Timestamp, ticker: str
-    ) -> tuple[np.float64, np.float64, np.float64] | None:
+    ) -> tuple[np.float64, np.float64, np.float64, np.int8, np.int8] | None:
         return market.lookup(date, ticker)
 
     @staticmethod
@@ -527,7 +613,7 @@ class PortfolioExecutionEngine:
 
     @classmethod
     def _valid_pair(
-        cls, row: tuple[np.float64, np.float64, np.float64] | None
+        cls, row: tuple[np.float64, np.float64, np.float64, np.int8, np.int8] | None
     ) -> tuple[Decimal | None, Decimal | None]:
         if row is None:
             return None, None
@@ -540,7 +626,20 @@ class PortfolioExecutionEngine:
         cls, market: PreparedExecutionMarket, date: pd.Timestamp, ticker: str
     ) -> Decimal | None:
         row = cls._market_row(market, date, ticker)
-        return None if row is None else cls._valid_decimal(row[0])
+        if (
+            row is None
+            or row[3] != _MARKET_STATE_TRADING
+            or row[4] != _EXCHANGE_TRADABLE_TRUE
+        ):
+            return None
+        return cls._valid_decimal(row[0])
+
+    @classmethod
+    def _market_state_code(
+        cls, market: PreparedExecutionMarket, date: pd.Timestamp, ticker: str
+    ) -> np.int8 | None:
+        row = cls._market_row(market, date, ticker)
+        return None if row is None else row[3]
 
     def _cost_or_zero(
         self, side: str, quantity: int, price: Decimal | None

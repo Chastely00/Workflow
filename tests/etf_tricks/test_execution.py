@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 
+import numpy as np
 import pandas as pd
 import pandas.testing as pdt
 import pytest
@@ -39,6 +40,15 @@ def _market(dates: list[str], tickers: list[str], close: float = 100.0) -> pd.Da
             for ticker in tickers
         ]
     )
+
+
+def _state_market(dates: list[str], tickers: list[str], close: float = 100.0) -> pd.DataFrame:
+    frame = _market(dates, tickers, close)
+    frame["market_state"] = "TRADING"
+    frame["exchange_tradable"] = pd.Series([True] * len(frame), dtype=object)
+    frame["amount_state"] = "OBSERVED"
+    frame["full_delivery"] = False
+    return frame
 
 
 def _targets(month: str, weights: dict[str, float]) -> pd.DataFrame:
@@ -113,6 +123,135 @@ def test_prepared_market_preserves_the_exact_hand_ledger():
         calendar,
         Decimal("1000"),
     )
+
+    pdt.assert_frame_equal(actual.daily_etf, expected.daily_etf)
+    pdt.assert_frame_equal(actual.daily_holdings, expected.daily_holdings)
+    pdt.assert_frame_equal(actual.trades, expected.trades)
+    pdt.assert_frame_equal(actual.diagnostics, expected.diagnostics)
+
+
+def test_prepared_market_has_independent_state_and_tradability_codes():
+    dates = ["2025-01-02", "2025-01-03", "2025-01-06"]
+    market = _state_market(dates, ["1101"])
+    market.loc[market["date"].eq(pd.Timestamp("2025-01-03")), "market_state"] = "HALTED"
+    market.loc[market["date"].eq(pd.Timestamp("2025-01-03")), "exchange_tradable"] = False
+    market.loc[market["date"].eq(pd.Timestamp("2025-01-06")), "market_state"] = "MISSING"
+    market.loc[market["date"].eq(pd.Timestamp("2025-01-06")), "exchange_tradable"] = None
+
+    prepared = PortfolioExecutionEngine.prepare_market(market)
+
+    assert prepared.market_state.tolist() == [[1], [2], [3]]
+    assert prepared.exchange_tradable.tolist() == [[1], [0], [-1]]
+
+
+def test_prepared_market_accepts_arrow_style_numpy_boolean_tradability():
+    market = _state_market(["2025-01-02"], ["1101"])
+    market["exchange_tradable"] = pd.Series([np.bool_(True)], dtype=object)
+
+    prepared = PortfolioExecutionEngine.prepare_market(market)
+
+    assert prepared.exchange_tradable.tolist() == [[1]]
+
+
+def test_halted_zero_authorized_day_keeps_backlog_and_resumes_only_when_trading():
+    dates = ["2025-01-02", "2025-01-03", "2025-01-06"]
+    market = _state_market(dates, ["1101"])
+    halted = market["date"].eq(pd.Timestamp("2025-01-03"))
+    market.loc[halted, "market_state"] = "HALTED"
+    market.loc[halted, "amount_state"] = "ZERO_AUTHORIZED"
+    market.loc[halted, "exchange_tradable"] = False
+    market.loc[halted, "traded_value"] = 0.0
+    market.loc[halted, ["close", "adj_close"]] = float("nan")
+
+    result = PortfolioExecutionEngine().run(
+        get_etf_spec("momentum"),
+        _targets("2025-01", {"1101": 1.0}),
+        market,
+        _calendar(dates),
+        Decimal("2000"),
+    )
+
+    halted_trade = result.trades[result.trades["date"].eq(pd.Timestamp("2025-01-03"))].iloc[0]
+    resumed_trade = result.trades[result.trades["date"].eq(pd.Timestamp("2025-01-06"))].iloc[0]
+    halted_holding = result.daily_holdings[
+        result.daily_holdings["date"].eq(pd.Timestamp("2025-01-03"))
+    ].iloc[0]
+    assert halted_trade["executed_shares"] == 0
+    assert halted_trade["unfilled_shares"] > 0
+    assert resumed_trade["backlog_before"] == halted_trade["unfilled_shares"]
+    assert resumed_trade["executed_shares"] > 0
+    assert halted_holding["raw_close"] == pytest.approx(100.0)
+    assert halted_holding["source_price_date"] == pd.Timestamp("2025-01-02")
+    assert halted_holding["stale_price_days"] == 1
+
+
+def test_halted_observed_amount_is_preserved_but_never_executable():
+    dates = ["2025-01-02"]
+    market = _state_market(dates, ["1101"])
+    market["market_state"] = "HALTED"
+    market["exchange_tradable"] = False
+    market["traded_value"] = 1234.5
+
+    prepared = PortfolioExecutionEngine.prepare_market(market)
+    result = PortfolioExecutionEngine().run(
+        get_etf_spec("momentum"),
+        _targets("2025-01", {"1101": 1.0}),
+        prepared,
+        _calendar(dates),
+        Decimal("1000"),
+    )
+
+    assert prepared.traded_value.tolist() == [[1234.5]]
+    assert result.trades.iloc[0]["executed_shares"] == 0
+
+
+def test_trading_full_delivery_remains_executable():
+    dates = ["2025-01-02"]
+    market = _state_market(dates, ["1101"])
+    market["full_delivery"] = True
+
+    result = PortfolioExecutionEngine().run(
+        get_etf_spec("momentum"),
+        _targets("2025-01", {"1101": 1.0}),
+        market,
+        _calendar(dates),
+        Decimal("1000"),
+    )
+
+    assert result.trades.iloc[0]["executed_shares"] > 0
+
+
+def test_missing_market_state_is_non_executable_with_distinct_diagnostic():
+    dates = ["2025-01-02"]
+    market = _state_market(dates, ["1101"])
+    market["market_state"] = "MISSING"
+    market["amount_state"] = "MISSING"
+    market["exchange_tradable"] = None
+
+    result = PortfolioExecutionEngine().run(
+        get_etf_spec("momentum"),
+        _targets("2025-01", {"1101": 1.0}),
+        market,
+        _calendar(dates),
+        Decimal("1000"),
+    )
+
+    assert result.trades.iloc[0]["executed_shares"] == 0
+    assert result.diagnostics["diagnostic"].tolist() == ["missing_market_state"]
+
+
+def test_stateful_prepared_and_reordered_raw_market_produce_identical_ledgers():
+    dates = ["2025-01-02", "2025-01-03", "2025-01-06"]
+    market = _state_market(dates, ["1101"])
+    market.loc[market["date"].eq(pd.Timestamp("2025-01-03")), "market_state"] = "HALTED"
+    market.loc[market["date"].eq(pd.Timestamp("2025-01-03")), "exchange_tradable"] = False
+    engine = PortfolioExecutionEngine()
+    spec = get_etf_spec("momentum")
+    targets = _targets("2025-01", {"1101": 1.0})
+    calendar = _calendar(dates)
+
+    expected = engine.run(spec, targets, market.sample(frac=1.0, random_state=7), calendar, Decimal("2000"))
+    actual = engine.run(spec, targets, engine.prepare_market(market), calendar, Decimal("2000"))
 
     pdt.assert_frame_equal(actual.daily_etf, expected.daily_etf)
     pdt.assert_frame_equal(actual.daily_holdings, expected.daily_holdings)
