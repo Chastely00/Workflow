@@ -7,7 +7,11 @@ import numpy as np
 import pandas as pd
 
 from .calendar import TradingCalendar
-from .result import ETFTrickResult
+from .result import (
+    ETFTrickResult,
+    ResultMetadataError,
+    validate_governed_result_metadata,
+)
 
 
 def build_selection_diagnostics(candidate_audit: pd.DataFrame) -> pd.DataFrame:
@@ -61,6 +65,12 @@ def validate_result(
 ) -> ReadinessReport:
     expected = tuple(expected_etf_ids)
     hard: list[ValidationIssue] = []
+    try:
+        validate_governed_result_metadata(
+            result.metadata, result.candidate_audit, result.diagnostics
+        )
+    except ResultMetadataError as exc:
+        hard.append(ValidationIssue(exc.code, str(exc)))
     warnings: list[ValidationIssue] = [
         ValidationIssue(
             "snapshot_industry_classification",

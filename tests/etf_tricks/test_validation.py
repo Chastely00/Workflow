@@ -4,7 +4,7 @@ import pandas as pd
 import pytest
 
 from etf_tricks.calendar import TradingCalendar
-from etf_tricks.result import ETFTrickResult
+from etf_tricks.result import ETFTrickResult, append_lifecycle_evidence
 from etf_tricks.validation import build_selection_diagnostics, validate_result
 
 
@@ -65,10 +65,32 @@ def _valid_result() -> ETFTrickResult:
             "formation_date": pd.Timestamp("2024-12-31"),
             "etf_id": "momentum",
             "ticker": ["1101"],
+            "formation_market_state": ["TRADING"],
             "liquidity_ratio_vs_ix0001_20d": [0.002],
             "r18_source_available_date": [pd.Timestamp("2024-12-30")],
         }
     )
+    lifecycle = {
+        "state_row_count": 1,
+        "lifecycle_active_row_count": 1,
+        "lifecycle_inactive_row_count": 0,
+        "lifecycle_conflict_count": 0,
+        "identity_conflict_count": 0,
+        "formation_state_counts": {"TRADING": 1},
+        "formation_exclusion_reason_counts": {},
+    }
+    manifest_hashes = {
+        artifact_id: "a" * 64
+        for artifact_id in (
+            "trading_calendar",
+            "daily_price_volume",
+            "daily_chip",
+            "monthly_sales",
+            "financial_statement_raw",
+            "security_master",
+            "daily_market_state",
+        )
+    }
     return ETFTrickResult(
         daily_etf=daily,
         daily_holdings=holdings,
@@ -89,13 +111,32 @@ def _valid_result() -> ETFTrickResult:
         ),
         monthly_targets=targets,
         candidate_audit=candidates,
-        diagnostics=pd.DataFrame(),
+        diagnostics=append_lifecycle_evidence(pd.DataFrame(), lifecycle),
         metadata={
             "run_config": {
                 "start_date": "2025-01-02",
                 "end_date": "2025-01-03",
                 "initial_capital": "1000",
-            }
+            },
+            "manifest_hashes": manifest_hashes,
+            "spec_hash": "b" * 64,
+            "market_state_identity": {
+                "artifact_id": "daily_market_state",
+                "manifest_sha256": "a" * 64,
+                "active_version": "market-state-v3",
+                "classification_policy_version": "daily_market_state_v3",
+                "state_lattice_policy_version": "daily_market_state_lattice_v5",
+                "market_identity_policy_version": "daily_market_identity_v3",
+                "dependency_certification_fingerprint": "certification-v1",
+            },
+            "market_state_config": {
+                "scan_start_date": "2024-12-31",
+                "scan_end_date": "2025-01-03",
+                "formation_admission": "TRADING_ONLY",
+                "execution_admission": "SAME_SESSION_TRADING_AND_EXCHANGE_TRADABLE",
+                "amount_source": "PRIOR_SESSION_HOLDINGS_AUTHORITATIVE_TRADED_VALUE",
+            },
+            "lifecycle_diagnostics": lifecycle,
         },
     )
 
@@ -173,8 +214,13 @@ def test_operational_limitations_remain_warnings_not_hidden_failures():
             "is_forced_delist_liquidation": [True],
         }
     )], ignore_index=True)
-    result.diagnostics = pd.DataFrame(
-        {"diagnostic": ["zero_candidate_carry_forward"]}
+    result.diagnostics = pd.concat(
+        [
+            result.diagnostics,
+            pd.DataFrame({"diagnostic": ["zero_candidate_carry_forward"]}),
+        ],
+        ignore_index=True,
+        sort=False,
     )
 
     report = validate_result(result, _calendar(), ["momentum"])

@@ -38,6 +38,15 @@ _MARKET_STATE_COLUMNS = (
 )
 
 
+def _canonical_json_bytes(value: object) -> bytes:
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+
+
 def _publish_daily_market_state(
     root: Path,
     daily: pd.DataFrame,
@@ -759,7 +768,7 @@ def test_run_all_records_state_lineage_and_bounded_round_trip(tmp_path, monkeypa
     assert result.metadata["market_state_config"] == {
         "scan_start_date": "2025-01-31",
         "scan_end_date": "2025-02-07",
-        "formation_admission": "EXACT_DATE_TRADING_ONLY",
+        "formation_admission": "TRADING_ONLY",
         "execution_admission": "SAME_SESSION_TRADING_AND_EXCHANGE_TRADABLE",
         "amount_source": "PRIOR_SESSION_HOLDINGS_AUTHORITATIVE_TRADED_VALUE",
     }
@@ -769,8 +778,11 @@ def test_run_all_records_state_lineage_and_bounded_round_trip(tmp_path, monkeypa
     assert lifecycle["formation_exclusion_reason_counts"] == {}
 
     output = tmp_path / "bounded-result"
-    manifest = result.write(output)
-    restored = ETFTrickResult.read(output)
+    handle = result.write(output)
+    restored = ETFTrickResult.read(
+        output,
+        expected_manifest_sha256=handle.manifest_sha256,
+    )
     for name in (
         "daily_etf",
         "daily_holdings",
@@ -780,9 +792,127 @@ def test_run_all_records_state_lineage_and_bounded_round_trip(tmp_path, monkeypa
         "diagnostics",
     ):
         pd.testing.assert_frame_equal(getattr(restored, name), getattr(result, name))
-        assert len(manifest["tables"][name]["sha256"]) == 64
+        assert len(handle["tables"][name]["sha256"]) == 64
     assert restored.metadata == result.metadata
+    assert restored.result_manifest_sha256 == handle.manifest_sha256
     assert lab.validate(restored).status == "READY"
+
+
+def test_strict_result_read_rejects_metadata_tampering(tmp_path):
+    start, end = _data_analysts_fixture(tmp_path)
+    result = ETFTrickLab.from_data_analysts(tmp_path).run_all(
+        start_date=start,
+        end_date=end,
+        initial_capital=Decimal("1234567"),
+    )
+    output = tmp_path / "strict-result"
+    handle = result.write(output)
+    manifest_path = output / "result_manifest.json"
+    original = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+    for metadata_key in ("market_state_config", "lifecycle_diagnostics"):
+        tampered = copy.deepcopy(original)
+        if metadata_key == "market_state_config":
+            tampered["metadata"][metadata_key]["formation_admission"] = "HALTED_ALLOWED"
+        else:
+            tampered["metadata"][metadata_key]["state_row_count"] += 1
+        manifest_path.write_bytes(_canonical_json_bytes(tampered))
+        with pytest.raises(ValueError, match="result manifest hash mismatch"):
+            ETFTrickResult.read(
+                output,
+                expected_manifest_sha256=handle.manifest_sha256,
+            )
+
+    self_endorsed = copy.deepcopy(original)
+    self_endorsed["metadata"]["market_state_config"][
+        "formation_admission"
+    ] = "HALTED_ALLOWED"
+    self_endorsed["metadata_sha256"] = hashlib.sha256(
+        _canonical_json_bytes(self_endorsed["metadata"])
+    ).hexdigest()
+    manifest_path.write_bytes(_canonical_json_bytes(self_endorsed))
+    with pytest.raises(ValueError, match="result manifest hash mismatch"):
+        ETFTrickResult.read(
+            output,
+            expected_manifest_sha256=handle.manifest_sha256,
+        )
+
+
+def test_strict_result_read_rejects_ungoverned_policy_with_new_digest(tmp_path):
+    start, end = _data_analysts_fixture(tmp_path)
+    result = ETFTrickLab.from_data_analysts(tmp_path).run_all(
+        start_date=start,
+        end_date=end,
+        initial_capital=Decimal("1234567"),
+    )
+    output = tmp_path / "policy-result"
+    result.write(output)
+    manifest_path = output / "result_manifest.json"
+    original = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+    cases: list[tuple[str, dict[str, object]]] = []
+    wrong_config = copy.deepcopy(original)
+    wrong_config["metadata"]["market_state_config"][
+        "formation_admission"
+    ] = "HALTED_ALLOWED"
+    cases.append(("market_state_config", wrong_config))
+    extra_config = copy.deepcopy(original)
+    extra_config["metadata"]["market_state_config"]["fallback"] = "DPV"
+    cases.append(("market_state_config", extra_config))
+    missing_config = copy.deepcopy(original)
+    del missing_config["metadata"]["market_state_config"]["amount_source"]
+    cases.append(("market_state_config", missing_config))
+    wrong_identity = copy.deepcopy(original)
+    wrong_identity["metadata"]["market_state_identity"][
+        "classification_policy_version"
+    ] = "daily_market_state_v2"
+    cases.append(("market_state_identity", wrong_identity))
+    extra_identity = copy.deepcopy(original)
+    extra_identity["metadata"]["market_state_identity"]["fallback"] = "DPV"
+    cases.append(("market_state_identity", extra_identity))
+    wrong_lifecycle = copy.deepcopy(original)
+    wrong_lifecycle["metadata"]["lifecycle_diagnostics"]["state_row_count"] += 1
+    cases.append(("lifecycle diagnostics", wrong_lifecycle))
+
+    for expected_message, tampered in cases:
+        tampered["metadata_sha256"] = hashlib.sha256(
+            _canonical_json_bytes(tampered["metadata"])
+        ).hexdigest()
+        raw = _canonical_json_bytes(tampered)
+        manifest_path.write_bytes(raw)
+        with pytest.raises(ValueError, match=expected_message):
+            ETFTrickResult.read(
+                output,
+                expected_manifest_sha256=hashlib.sha256(raw).hexdigest(),
+            )
+
+
+def test_validate_rejects_in_memory_state_metadata_tampering(tmp_path):
+    start, end = _data_analysts_fixture(tmp_path)
+    lab = ETFTrickLab.from_data_analysts(tmp_path)
+    result = lab.run_all(
+        start_date=start,
+        end_date=end,
+        initial_capital=Decimal("1234567"),
+    )
+
+    config_tampered = copy.deepcopy(result)
+    config_tampered.metadata["market_state_config"][
+        "formation_admission"
+    ] = "HALTED_ALLOWED"
+    config_report = lab.validate(config_tampered)
+    assert config_report.status == "NOT_READY"
+    assert "market_state_metadata_mismatch" in {
+        issue.code for issue in config_report.hard_failures
+    }
+
+    lifecycle_tampered = copy.deepcopy(result)
+    lifecycle_tampered.metadata["lifecycle_diagnostics"]["state_row_count"] += 1
+    lifecycle_report = lab.validate(lifecycle_tampered)
+    assert lifecycle_report.status == "NOT_READY"
+    assert "lifecycle_diagnostics_mismatch" in {
+        issue.code for issue in lifecycle_report.hard_failures
+    }
 
 
 def test_run_all_rejects_missing_physical_state_end_before_feature_calculation(

@@ -14,7 +14,7 @@ from .data_gateway import DataGateway
 from .execution import PortfolioExecutionEngine
 from .features import PITFeatureEngine
 from .registry import ETF_IDS, get_etf_spec
-from .result import ETFTrickResult, attach_etf_amount
+from .result import ETFTrickResult, append_lifecycle_evidence, attach_etf_amount
 from .universe import UniverseEngine
 from .validation import (
     ReadinessReport,
@@ -235,6 +235,10 @@ class ETFTrickLab:
                 build_selection_diagnostics(candidate_output),
             ]
         )
+        lifecycle_diagnostics = self._lifecycle_diagnostics(
+            market_state, candidate_output, formation_dates
+        )
+        diagnostics = append_lifecycle_evidence(diagnostics, lifecycle_diagnostics)
         daily_etf = attach_etf_amount(daily_etf, holdings, market_state, security_master)
         manifest_hashes = self._manifest_hashes()
         if manifest_hashes["daily_market_state"] != state_manifest_hash:
@@ -260,7 +264,7 @@ class ETFTrickLab:
                 "market_state_config": {
                     "scan_start_date": str(state_scan_start.date()),
                     "scan_end_date": str(run_days[-1].date()),
-                    "formation_admission": "EXACT_DATE_TRADING_ONLY",
+                    "formation_admission": "TRADING_ONLY",
                     "execution_admission": (
                         "SAME_SESSION_TRADING_AND_EXCHANGE_TRADABLE"
                     ),
@@ -268,9 +272,7 @@ class ETFTrickLab:
                         "PRIOR_SESSION_HOLDINGS_AUTHORITATIVE_TRADED_VALUE"
                     ),
                 },
-                "lifecycle_diagnostics": self._lifecycle_diagnostics(
-                    market_state, candidate_output, formation_dates
-                ),
+                "lifecycle_diagnostics": lifecycle_diagnostics,
             },
         )
         self._last_result = result
@@ -500,11 +502,22 @@ class ETFTrickLab:
         candidate_audit: pd.DataFrame,
         formation_dates: tuple[pd.Timestamp, ...],
     ) -> dict[str, object]:
-        formation_rows = market_state[
-            pd.to_datetime(market_state["date"], errors="coerce").isin(formation_dates)
-            & market_state["instrument_kind"].eq("EQUITY")
-        ]
-        state_counts = formation_rows["market_state"].value_counts(sort=False)
+        if {
+            "formation_date",
+            "ticker",
+            "formation_market_state",
+        }.issubset(candidate_audit.columns):
+            formation_rows = candidate_audit.loc[
+                pd.to_datetime(
+                    candidate_audit["formation_date"], errors="coerce"
+                ).isin(formation_dates),
+                ["formation_date", "ticker", "formation_market_state"],
+            ].drop_duplicates()
+            state_counts = formation_rows["formation_market_state"].value_counts(
+                sort=False
+            )
+        else:
+            state_counts = pd.Series(dtype="int64")
         state_reasons = {"formation_market_halted", "formation_market_state_missing"}
         if "exclusion_reason" in candidate_audit:
             exclusion_counts = candidate_audit.loc[

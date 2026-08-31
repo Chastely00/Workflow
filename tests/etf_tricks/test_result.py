@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import pandas as pd
 import pytest
 
@@ -27,14 +29,73 @@ def _daily() -> pd.DataFrame:
 
 def _result(daily: pd.DataFrame | None = None) -> ETFTrickResult:
     empty = pd.DataFrame()
+    lifecycle = {
+        "state_row_count": 0,
+        "lifecycle_active_row_count": 0,
+        "lifecycle_inactive_row_count": 0,
+        "lifecycle_conflict_count": 0,
+        "identity_conflict_count": 0,
+        "formation_state_counts": {},
+        "formation_exclusion_reason_counts": {},
+    }
+    diagnostics = pd.DataFrame(
+        {
+            "diagnostic": ["market_state_lifecycle_evidence"],
+            "lifecycle_evidence_json": [
+                json.dumps(
+                    lifecycle,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+            ],
+        }
+    )
+    manifest_hashes = {
+        artifact_id: "a" * 64
+        for artifact_id in (
+            "trading_calendar",
+            "daily_price_volume",
+            "daily_chip",
+            "monthly_sales",
+            "financial_statement_raw",
+            "security_master",
+            "daily_market_state",
+        )
+    }
     return ETFTrickResult(
         daily_etf=_daily() if daily is None else daily,
         daily_holdings=empty,
         trades=empty,
         monthly_targets=empty,
         candidate_audit=empty,
-        diagnostics=empty,
-        metadata={"spec_hash": "abc", "manifest_hashes": {"daily_price_volume": "x"}},
+        diagnostics=diagnostics,
+        metadata={
+            "run_config": {
+                "start_date": "2025-01-02",
+                "end_date": "2025-01-03",
+                "initial_capital": "10000000",
+            },
+            "spec_hash": "b" * 64,
+            "manifest_hashes": manifest_hashes,
+            "market_state_identity": {
+                "artifact_id": "daily_market_state",
+                "manifest_sha256": "a" * 64,
+                "active_version": "market-state-v3",
+                "classification_policy_version": "daily_market_state_v3",
+                "state_lattice_policy_version": "daily_market_state_lattice_v5",
+                "market_identity_policy_version": "daily_market_identity_v3",
+                "dependency_certification_fingerprint": "certification-v1",
+            },
+            "market_state_config": {
+                "scan_start_date": "2025-01-02",
+                "scan_end_date": "2025-01-03",
+                "formation_admission": "TRADING_ONLY",
+                "execution_admission": "SAME_SESSION_TRADING_AND_EXCHANGE_TRADABLE",
+                "amount_source": "PRIOR_SESSION_HOLDINGS_AUTHORITATIVE_TRADED_VALUE",
+            },
+            "lifecycle_diagnostics": lifecycle,
+        },
     )
 
 
@@ -350,8 +411,10 @@ def test_notebook_facade_binds_one_explicit_data_analysts_root(tmp_path):
 
 def test_result_artifacts_round_trip_with_hashes_and_row_counts(tmp_path):
     result = _result()
-    manifest = result.write(tmp_path / "run")
-    assert set(manifest["tables"]) == {
+    handle = result.write(tmp_path / "run")
+    assert len(handle.manifest_sha256) == 64
+    assert "result_manifest_sha256" not in handle.manifest
+    assert set(handle["tables"]) == {
         "daily_etf",
         "daily_holdings",
         "trades",
@@ -359,8 +422,14 @@ def test_result_artifacts_round_trip_with_hashes_and_row_counts(tmp_path):
         "candidate_audit",
         "diagnostics",
     }
-    assert manifest["tables"]["daily_etf"]["rows"] == 26
-    assert len(manifest["tables"]["daily_etf"]["sha256"]) == 64
-    restored = ETFTrickResult.read(tmp_path / "run")
+    assert handle["tables"]["daily_etf"]["rows"] == 26
+    assert len(handle["tables"]["daily_etf"]["sha256"]) == 64
+    restored = ETFTrickResult.read(
+        tmp_path / "run",
+        expected_manifest_sha256=handle.manifest_sha256,
+    )
     pd.testing.assert_frame_equal(restored.daily_etf, result.daily_etf)
-    assert restored.metadata["spec_hash"] == "abc"
+    assert restored.metadata["spec_hash"] == "b" * 64
+    assert restored.result_manifest_sha256 == handle.manifest_sha256
+    with pytest.raises(TypeError):
+        ETFTrickResult.read(tmp_path / "run")
