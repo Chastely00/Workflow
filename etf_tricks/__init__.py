@@ -1,7 +1,7 @@
 from .models import CostPolicy, ETFSpec, LiquidityPolicy, RunConfig
 from .registry import ETF_IDS, get_etf_spec
 from .lab import ETFTrickLab
-from .result import ETFTrickResult
+from .result import ETFTrickResult, ETFTrickResultHandle
 from .allocation import AllocationPlan
 from .validation import ReadinessReport, validate_result
 from .afml import (
@@ -18,6 +18,7 @@ __all__ = [
     "ETF_IDS",
     "ETFTrickLab",
     "ETFTrickResult",
+    "ETFTrickResultHandle",
     "AllocationPlan",
     "ReadinessReport",
     "LiquidityPolicy",

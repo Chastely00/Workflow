@@ -10,6 +10,7 @@ from .calendar import TradingCalendar
 from .result import (
     ETFTrickResult,
     ResultMetadataError,
+    market_state_identity_sha256,
     validate_governed_result_metadata,
 )
 
@@ -62,6 +63,8 @@ def validate_result(
     result: ETFTrickResult,
     calendar: TradingCalendar,
     expected_etf_ids: Iterable[str],
+    *,
+    expected_market_state_identity_sha256: str | None = None,
 ) -> ReadinessReport:
     expected = tuple(expected_etf_ids)
     hard: list[ValidationIssue] = []
@@ -71,6 +74,37 @@ def validate_result(
         )
     except ResultMetadataError as exc:
         hard.append(ValidationIssue(exc.code, str(exc)))
+    if expected_market_state_identity_sha256 is None:
+        hard.append(
+            ValidationIssue(
+                "missing_market_state_identity_authority",
+                "READY requires an external market-state identity authority",
+            )
+        )
+    else:
+        try:
+            observed_identity_sha256 = market_state_identity_sha256(
+                result.metadata.get("market_state_identity")
+                if isinstance(result.metadata, dict)
+                else None
+            )
+        except ResultMetadataError:
+            observed_identity_sha256 = None
+        if (
+            not isinstance(expected_market_state_identity_sha256, str)
+            or len(expected_market_state_identity_sha256) != 64
+            or any(
+                character not in "0123456789abcdef"
+                for character in expected_market_state_identity_sha256
+            )
+            or observed_identity_sha256 != expected_market_state_identity_sha256
+        ):
+            hard.append(
+                ValidationIssue(
+                    "market_state_identity_authority_mismatch",
+                    "result market-state identity does not match external authority",
+                )
+            )
     warnings: list[ValidationIssue] = [
         ValidationIssue(
             "snapshot_industry_classification",

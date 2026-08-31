@@ -4,7 +4,11 @@ import pandas as pd
 import pytest
 
 from etf_tricks.calendar import TradingCalendar
-from etf_tricks.result import ETFTrickResult, append_lifecycle_evidence
+from etf_tricks.result import (
+    ETFTrickResult,
+    append_lifecycle_evidence,
+    market_state_identity_sha256,
+)
 from etf_tricks.validation import build_selection_diagnostics, validate_result
 
 
@@ -127,7 +131,7 @@ def _valid_result() -> ETFTrickResult:
                 "classification_policy_version": "daily_market_state_v3",
                 "state_lattice_policy_version": "daily_market_state_lattice_v5",
                 "market_identity_policy_version": "daily_market_identity_v3",
-                "dependency_certification_fingerprint": "certification-v1",
+                "dependency_certification_fingerprint": "b" * 64,
             },
             "market_state_config": {
                 "scan_start_date": "2024-12-31",
@@ -145,8 +149,19 @@ def _codes(report) -> set[str]:
     return {issue.code for issue in report.hard_failures}
 
 
+def _validate(result: ETFTrickResult, expected_etf_ids=("momentum",)):
+    return validate_result(
+        result,
+        _calendar(),
+        expected_etf_ids,
+        expected_market_state_identity_sha256=market_state_identity_sha256(
+            result.metadata["market_state_identity"]
+        ),
+    )
+
+
 def test_valid_result_is_ready_and_has_explicit_availability_sections():
-    report = validate_result(_valid_result(), _calendar(), ["momentum"])
+    report = _validate(_valid_result())
     assert report.status == "READY"
     assert report.目前可用
     assert isinstance(report.目前缺失限制, tuple)
@@ -155,13 +170,30 @@ def test_valid_result_is_ready_and_has_explicit_availability_sections():
     assert report.per_etf.iloc[0]["candidate_shortage_count"] == 0
 
 
+def test_ready_requires_external_market_state_identity_authority():
+    result = _valid_result()
+
+    missing = validate_result(result, _calendar(), ["momentum"])
+    assert missing.status == "NOT_READY"
+    assert "missing_market_state_identity_authority" in _codes(missing)
+
+    wrong = validate_result(
+        result,
+        _calendar(),
+        ["momentum"],
+        expected_market_state_identity_sha256="c" * 64,
+    )
+    assert wrong.status == "NOT_READY"
+    assert "market_state_identity_authority_mismatch" in _codes(wrong)
+
+
 def test_missing_etf_and_post_inception_calendar_date_are_hard_failures():
-    missing_etf = validate_result(_valid_result(), _calendar(), ["momentum", "roe"])
+    missing_etf = _validate(_valid_result(), ["momentum", "roe"])
     assert "missing_etf" in _codes(missing_etf)
 
     result = _valid_result()
     result.daily_etf = result.daily_etf.iloc[:1].copy()
-    missing_date = validate_result(result, _calendar(), ["momentum"])
+    missing_date = _validate(result)
     assert "missing_post_inception_date" in _codes(missing_date)
 
 
@@ -188,7 +220,7 @@ def test_missing_etf_and_post_inception_calendar_date_are_hard_failures():
 def test_each_accounting_and_pit_gate_fails_closed(mutation, expected: str):
     result = _valid_result()
     mutation(result)
-    report = validate_result(result, _calendar(), ["momentum"])
+    report = _validate(result)
     assert report.status == "NOT_READY"
     assert expected in _codes(report)
 
@@ -223,7 +255,7 @@ def test_operational_limitations_remain_warnings_not_hidden_failures():
         sort=False,
     )
 
-    report = validate_result(result, _calendar(), ["momentum"])
+    report = _validate(result)
     warning_codes = {issue.code for issue in report.warnings}
     assert report.status == "READY"
     assert {
@@ -245,7 +277,7 @@ def test_missing_authoritative_amount_audit_blocks_ready():
     result.daily_etf.loc[1, "amount_quality_state"] = "MISSING"
     result.daily_etf.loc[1, "has_data_quality_flag"] = True
 
-    report = validate_result(result, _calendar(), ["momentum"])
+    report = _validate(result)
 
     assert report.status == "NOT_READY"
     assert "missing_authoritative_amount" in _codes(report)
@@ -269,7 +301,7 @@ def test_amount_audit_dtype_and_cross_field_mismatches_fail_ready(updates):
     for column, values in updates.items():
         result.daily_etf[column] = values
 
-    report = validate_result(result, _calendar(), ["momentum"])
+    report = _validate(result)
 
     assert report.status == "NOT_READY"
     assert "invalid_amount_audit" in _codes(report)
@@ -292,7 +324,7 @@ def test_zero_execution_with_missing_price_has_zero_notional() -> None:
         }
     )], ignore_index=True)
 
-    report = validate_result(result, _calendar(), ["momentum"])
+    report = _validate(result)
 
     assert "broken_trade_reconciliation" not in _codes(report)
 
@@ -310,7 +342,7 @@ def test_coordinated_wealth_injection_fails_share_and_cash_ledger() -> None:
         0.1,
     ]
 
-    report = validate_result(result, _calendar(), ["momentum"])
+    report = _validate(result)
 
     assert "broken_share_ledger" in _codes(report)
 
@@ -338,7 +370,7 @@ def test_fractional_share_ledger_values_fail_closed(mutation) -> None:
     result = _valid_result()
     mutation(result)
 
-    report = validate_result(result, _calendar(), ["momentum"])
+    report = _validate(result)
 
     assert "non_integer_share_ledger" in _codes(report)
 

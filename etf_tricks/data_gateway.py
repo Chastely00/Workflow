@@ -219,9 +219,9 @@ class DataGateway:
         ):
             raise DataContractError("daily_market_state dependency_versions are incomplete")
         fingerprint = manifest.get("dependency_certification_fingerprint")
-        if not isinstance(fingerprint, str) or not fingerprint.strip():
+        if not isinstance(fingerprint, str) or _SHA256.fullmatch(fingerprint) is None:
             raise DataContractError(
-                "daily_market_state dependency certification fingerprint is missing"
+                "daily_market_state dependency certification fingerprint is invalid"
             )
         build_start = DataGateway._canonical_manifest_date(manifest, "build_start")
         build_end = DataGateway._canonical_manifest_date(manifest, "build_end")
@@ -231,6 +231,7 @@ class DataGateway:
         if certified_source_start > build_start or build_start > build_end:
             raise DataContractError("daily_market_state manifest build bounds are invalid")
         for field in (
+            "active_version",
             "classification_policy_version",
             "state_lattice_policy_version",
             "market_identity_policy_version",

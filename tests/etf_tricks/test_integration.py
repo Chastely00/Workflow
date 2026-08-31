@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-import json
 import copy
+from dataclasses import replace
 import hashlib
+import json
 from decimal import Decimal
 from pathlib import Path
 
@@ -167,7 +168,7 @@ def _publish_daily_market_state(
             "daily_price_volume": _SHA256,
             "daily_tradability": _SHA256,
         },
-        "dependency_certification_fingerprint": "certification-v1",
+        "dependency_certification_fingerprint": "b" * 64,
         "build_start": str(build_start.date()),
         "build_end": str(build_end.date()),
         "certified_source_start": str(build_start.date()),
@@ -763,7 +764,7 @@ def test_run_all_records_state_lineage_and_bounded_round_trip(tmp_path, monkeypa
         "classification_policy_version": "daily_market_state_v3",
         "state_lattice_policy_version": "daily_market_state_lattice_v5",
         "market_identity_policy_version": "daily_market_identity_v3",
-        "dependency_certification_fingerprint": "certification-v1",
+        "dependency_certification_fingerprint": "b" * 64,
     }
     assert result.metadata["market_state_config"] == {
         "scan_start_date": "2025-01-31",
@@ -781,7 +782,7 @@ def test_run_all_records_state_lineage_and_bounded_round_trip(tmp_path, monkeypa
     handle = result.write(output)
     restored = ETFTrickResult.read(
         output,
-        expected_manifest_sha256=handle.manifest_sha256,
+        expected_handle=handle,
     )
     for name in (
         "daily_etf",
@@ -796,6 +797,50 @@ def test_run_all_records_state_lineage_and_bounded_round_trip(tmp_path, monkeypa
     assert restored.metadata == result.metadata
     assert restored.result_manifest_sha256 == handle.manifest_sha256
     assert lab.validate(restored).status == "READY"
+
+
+def test_run_all_accepts_certified_market_state_generation_rotation(tmp_path):
+    start, end = _data_analysts_fixture(tmp_path)
+    manifest_path = (
+        tmp_path / "data_store" / "manifests" / "daily_market_state.json"
+    )
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    rotated_identity = {
+        "active_version": "market-state-v4",
+        "state_lattice_policy_version": "daily_market_state_lattice_v6",
+        "market_identity_policy_version": "daily_market_identity_v4",
+        "dependency_certification_fingerprint": "c" * 64,
+    }
+    manifest.update(rotated_identity)
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    lab = ETFTrickLab.from_data_analysts(tmp_path)
+    result = lab.run_all(
+        start_date=start,
+        end_date=end,
+        initial_capital=Decimal("1234567"),
+    )
+    assert {
+        key: result.metadata["market_state_identity"][key]
+        for key in rotated_identity
+    } == rotated_identity
+    assert lab.validate(result).status == "READY"
+
+    handle = result.write(tmp_path / "rotated-result")
+    restored = ETFTrickResult.read(
+        tmp_path / "rotated-result", expected_handle=handle
+    )
+    assert lab.validate(restored).status == "READY"
+
+    stale_generation = copy.deepcopy(restored)
+    stale_generation.metadata["market_state_identity"][
+        "state_lattice_policy_version"
+    ] = "daily_market_state_lattice_v7"
+    stale_report = lab.validate(stale_generation)
+    assert stale_report.status == "NOT_READY"
+    assert "market_state_identity_mismatch" in {
+        issue.code for issue in stale_report.hard_failures
+    }
 
 
 def test_strict_result_read_rejects_metadata_tampering(tmp_path):
@@ -820,7 +865,7 @@ def test_strict_result_read_rejects_metadata_tampering(tmp_path):
         with pytest.raises(ValueError, match="result manifest hash mismatch"):
             ETFTrickResult.read(
                 output,
-                expected_manifest_sha256=handle.manifest_sha256,
+                expected_handle=handle,
             )
 
     self_endorsed = copy.deepcopy(original)
@@ -834,7 +879,7 @@ def test_strict_result_read_rejects_metadata_tampering(tmp_path):
     with pytest.raises(ValueError, match="result manifest hash mismatch"):
         ETFTrickResult.read(
             output,
-            expected_manifest_sha256=handle.manifest_sha256,
+            expected_handle=handle,
         )
 
 
@@ -846,7 +891,7 @@ def test_strict_result_read_rejects_ungoverned_policy_with_new_digest(tmp_path):
         initial_capital=Decimal("1234567"),
     )
     output = tmp_path / "policy-result"
-    result.write(output)
+    original_handle = result.write(output)
     manifest_path = output / "result_manifest.json"
     original = json.loads(manifest_path.read_text(encoding="utf-8"))
 
@@ -870,6 +915,14 @@ def test_strict_result_read_rejects_ungoverned_policy_with_new_digest(tmp_path):
     extra_identity = copy.deepcopy(original)
     extra_identity["metadata"]["market_state_identity"]["fallback"] = "DPV"
     cases.append(("market_state_identity", extra_identity))
+    empty_generation = copy.deepcopy(original)
+    empty_generation["metadata"]["market_state_identity"]["active_version"] = ""
+    cases.append(("market_state_identity", empty_generation))
+    malformed_fingerprint = copy.deepcopy(original)
+    malformed_fingerprint["metadata"]["market_state_identity"][
+        "dependency_certification_fingerprint"
+    ] = "certification-v1"
+    cases.append(("market_state_identity", malformed_fingerprint))
     wrong_lifecycle = copy.deepcopy(original)
     wrong_lifecycle["metadata"]["lifecycle_diagnostics"]["state_row_count"] += 1
     cases.append(("lifecycle diagnostics", wrong_lifecycle))
@@ -880,10 +933,19 @@ def test_strict_result_read_rejects_ungoverned_policy_with_new_digest(tmp_path):
         ).hexdigest()
         raw = _canonical_json_bytes(tampered)
         manifest_path.write_bytes(raw)
+        tampered_handle = replace(
+            original_handle,
+            manifest_sha256=hashlib.sha256(raw).hexdigest(),
+            market_state_identity_sha256=hashlib.sha256(
+                _canonical_json_bytes(
+                    tampered["metadata"]["market_state_identity"]
+                )
+            ).hexdigest(),
+        )
         with pytest.raises(ValueError, match=expected_message):
             ETFTrickResult.read(
                 output,
-                expected_manifest_sha256=hashlib.sha256(raw).hexdigest(),
+                expected_handle=tampered_handle,
             )
 
 

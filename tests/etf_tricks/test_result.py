@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 import json
 
 import pandas as pd
@@ -85,7 +86,7 @@ def _result(daily: pd.DataFrame | None = None) -> ETFTrickResult:
                 "classification_policy_version": "daily_market_state_v3",
                 "state_lattice_policy_version": "daily_market_state_lattice_v5",
                 "market_identity_policy_version": "daily_market_identity_v3",
-                "dependency_certification_fingerprint": "certification-v1",
+                "dependency_certification_fingerprint": "b" * 64,
             },
             "market_state_config": {
                 "scan_start_date": "2025-01-02",
@@ -426,10 +427,42 @@ def test_result_artifacts_round_trip_with_hashes_and_row_counts(tmp_path):
     assert len(handle["tables"]["daily_etf"]["sha256"]) == 64
     restored = ETFTrickResult.read(
         tmp_path / "run",
-        expected_manifest_sha256=handle.manifest_sha256,
+        expected_handle=handle,
     )
     pd.testing.assert_frame_equal(restored.daily_etf, result.daily_etf)
     assert restored.metadata["spec_hash"] == "b" * 64
     assert restored.result_manifest_sha256 == handle.manifest_sha256
     with pytest.raises(TypeError):
         ETFTrickResult.read(tmp_path / "run")
+
+
+def test_result_artifacts_accept_certified_generation_rotation_and_bind_source_identity(
+    tmp_path, monkeypatch,
+):
+    result = _result()
+    result.metadata["market_state_identity"].update(
+        {
+            "active_version": "market-state-v4",
+            "state_lattice_policy_version": "daily_market_state_lattice_v6",
+            "market_identity_policy_version": "daily_market_identity_v4",
+            "dependency_certification_fingerprint": "c" * 64,
+        }
+    )
+
+    handle = result.write(tmp_path / "rotated")
+    assert len(handle.market_state_identity_sha256) == 64
+    restored = ETFTrickResult.read(tmp_path / "rotated", expected_handle=handle)
+    assert restored.metadata["market_state_identity"] == result.metadata[
+        "market_state_identity"
+    ]
+
+    wrong_source = replace(handle, market_state_identity_sha256="d" * 64)
+    monkeypatch.setattr(
+        pd,
+        "read_parquet",
+        lambda *args, **kwargs: pytest.fail(
+            "wrong source identity must fail before table reads"
+        ),
+    )
+    with pytest.raises(ValueError, match="market-state identity authority mismatch"):
+        ETFTrickResult.read(tmp_path / "rotated", expected_handle=wrong_source)

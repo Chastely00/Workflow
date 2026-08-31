@@ -37,13 +37,23 @@ _MARKET_STATE_CONFIG = {
     "execution_admission": "SAME_SESSION_TRADING_AND_EXCHANGE_TRADABLE",
     "amount_source": "PRIOR_SESSION_HOLDINGS_AUTHORITATIVE_TRADED_VALUE",
 }
-_MARKET_STATE_IDENTITY = {
+_MARKET_STATE_IDENTITY_KEYS = {
+    "artifact_id",
+    "manifest_sha256",
+    "active_version",
+    "classification_policy_version",
+    "state_lattice_policy_version",
+    "market_identity_policy_version",
+    "dependency_certification_fingerprint",
+}
+_MARKET_STATE_IDENTITY_FIXED = {
     "artifact_id": "daily_market_state",
-    "active_version": "market-state-v3",
     "classification_policy_version": "daily_market_state_v3",
-    "state_lattice_policy_version": "daily_market_state_lattice_v5",
-    "market_identity_policy_version": "daily_market_identity_v3",
-    "dependency_certification_fingerprint": "certification-v1",
+}
+_MARKET_STATE_IDENTITY_DYNAMIC_VERSIONS = {
+    "active_version",
+    "state_lattice_policy_version",
+    "market_identity_policy_version",
 }
 _LIFECYCLE_KEYS = {
     "state_row_count",
@@ -86,6 +96,38 @@ def _is_sha256(value: object) -> bool:
 
 def _strict_nonnegative_int(value: object) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def market_state_identity_sha256(identity: object) -> str:
+    if not isinstance(identity, dict) or set(identity) != _MARKET_STATE_IDENTITY_KEYS:
+        raise ResultMetadataError(
+            "market_state_metadata_mismatch",
+            "market_state_identity has missing or extra policy fields",
+        )
+    if any(
+        identity[key] != expected
+        for key, expected in _MARKET_STATE_IDENTITY_FIXED.items()
+    ):
+        raise ResultMetadataError(
+            "market_state_metadata_mismatch",
+            "market_state_identity contains an ungoverned fixed policy value",
+        )
+    if not _is_sha256(identity["manifest_sha256"]) or not _is_sha256(
+        identity["dependency_certification_fingerprint"]
+    ):
+        raise ResultMetadataError(
+            "market_state_metadata_mismatch",
+            "market_state_identity contains an invalid digest",
+        )
+    if any(
+        not isinstance(identity[key], str) or not identity[key].strip()
+        for key in _MARKET_STATE_IDENTITY_DYNAMIC_VERSIONS
+    ):
+        raise ResultMetadataError(
+            "market_state_metadata_mismatch",
+            "market_state_identity contains an invalid dynamic version",
+        )
+    return hashlib.sha256(canonical_json_bytes(identity)).hexdigest()
 
 
 def _validate_lifecycle_payload(value: object) -> dict[str, object]:
@@ -280,17 +322,7 @@ def validate_governed_result_metadata(
         )
 
     identity = metadata["market_state_identity"]
-    expected_identity_keys = {"manifest_sha256", *_MARKET_STATE_IDENTITY}
-    if not isinstance(identity, dict) or set(identity) != expected_identity_keys:
-        raise ResultMetadataError(
-            "market_state_metadata_mismatch",
-            "market_state_identity has missing or extra policy fields",
-        )
-    if any(identity[key] != expected for key, expected in _MARKET_STATE_IDENTITY.items()):
-        raise ResultMetadataError(
-            "market_state_metadata_mismatch",
-            "market_state_identity contains an ungoverned policy value",
-        )
+    market_state_identity_sha256(identity)
     manifest_hashes = metadata["manifest_hashes"]
     if (
         not isinstance(manifest_hashes, dict)
@@ -315,9 +347,12 @@ def validate_governed_result_metadata(
 class ETFTrickResultHandle:
     output_dir: Path
     manifest_sha256: str
-    manifest: dict[str, Any]
+    market_state_identity_sha256: str
+    manifest: dict[str, Any] | None = None
 
     def __getitem__(self, key: str) -> Any:
+        if self.manifest is None:
+            raise KeyError("result handle has no embedded manifest inventory")
         return self.manifest[key]
 
 
@@ -682,24 +717,37 @@ class ETFTrickResult:
         temporary_manifest.replace(manifest_path)
         manifest_sha256 = hashlib.sha256(manifest_bytes).hexdigest()
         self.result_manifest_sha256 = manifest_sha256
-        return ETFTrickResultHandle(output, manifest_sha256, manifest)
+        return ETFTrickResultHandle(
+            output_dir=output,
+            manifest_sha256=manifest_sha256,
+            market_state_identity_sha256=market_state_identity_sha256(
+                self.metadata["market_state_identity"]
+            ),
+            manifest=manifest,
+        )
 
     @classmethod
     def read(
         cls,
         output_dir: str | Path,
         *,
-        expected_manifest_sha256: str,
+        expected_handle: ETFTrickResultHandle,
     ) -> "ETFTrickResult":
         output = Path(output_dir).resolve()
         manifest_path = output / "result_manifest.json"
         if not manifest_path.is_file():
             raise ValueError(f"missing ETF Trick result manifest: {manifest_path}")
-        if not _is_sha256(expected_manifest_sha256):
+        if not isinstance(expected_handle, ETFTrickResultHandle):
+            raise TypeError("expected_handle must be an ETFTrickResultHandle")
+        if expected_handle.output_dir.resolve() != output:
+            raise ValueError("result handle output directory mismatch")
+        if not _is_sha256(expected_handle.manifest_sha256):
             raise ValueError("expected result manifest SHA-256 is invalid")
+        if not _is_sha256(expected_handle.market_state_identity_sha256):
+            raise ValueError("expected market-state identity SHA-256 is invalid")
         manifest_bytes = manifest_path.read_bytes()
         observed_manifest_sha256 = hashlib.sha256(manifest_bytes).hexdigest()
-        if observed_manifest_sha256 != expected_manifest_sha256:
+        if observed_manifest_sha256 != expected_handle.manifest_sha256:
             raise ValueError("result manifest hash mismatch")
         try:
             manifest = json.loads(manifest_bytes.decode("utf-8"))
@@ -718,6 +766,11 @@ class ETFTrickResult:
             != manifest["metadata_sha256"]
         ):
             raise ValueError("result metadata hash mismatch")
+        if not isinstance(metadata, dict) or (
+            market_state_identity_sha256(metadata.get("market_state_identity"))
+            != expected_handle.market_state_identity_sha256
+        ):
+            raise ValueError("market-state identity authority mismatch")
         table_entries = manifest.get("tables")
         if not isinstance(table_entries, dict) or set(table_entries) != set(
             _RESULT_TABLE_NAMES

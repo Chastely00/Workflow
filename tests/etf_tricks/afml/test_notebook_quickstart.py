@@ -143,7 +143,8 @@ def test_quickstart_is_output_free_and_uses_public_api():
     assert "from etf_tricks.afml import AFMLConfig, ETFAFMLLab" in source
     assert "ETFTrickResult.read" in source
     assert "ETF_TRICK_RESULT_MANIFEST_SHA256" in source
-    assert "expected_manifest_sha256=RESULT_MANIFEST_SHA256" in source
+    assert "ETF_TRICK_MARKET_STATE_IDENTITY_SHA256" in source
+    assert "expected_handle=RESULT_HANDLE" in source
     assert "dataset.for_ml" in source
     assert "dataset.for_trading" in source
     assert all(
@@ -209,7 +210,7 @@ def test_quickstart_code_cells_execute_against_synthetic_artifacts(
                 "classification_policy_version": "daily_market_state_v3",
                 "state_lattice_policy_version": "daily_market_state_lattice_v5",
                 "market_identity_policy_version": "daily_market_identity_v3",
-                "dependency_certification_fingerprint": "certification-v1",
+                "dependency_certification_fingerprint": "b" * 64,
                 "manifest_sha256": "a" * 64,
             },
             "market_state_config": {
@@ -230,6 +231,10 @@ def test_quickstart_code_cells_execute_against_synthetic_artifacts(
     monkeypatch.setenv("ETF_TRICK_RESULT_DIR", str(result_dir))
     monkeypatch.setenv(
         "ETF_TRICK_RESULT_MANIFEST_SHA256", result_handle.manifest_sha256
+    )
+    monkeypatch.setenv(
+        "ETF_TRICK_MARKET_STATE_IDENTITY_SHA256",
+        result_handle.market_state_identity_sha256,
     )
     monkeypatch.setenv("ETF_AFML_DATASET_DIR", str(dataset_dir))
     monkeypatch.setenv("DATA_ANALYSTS_ROOT", str(tmp_path / "unused-data-root"))

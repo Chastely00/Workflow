@@ -14,7 +14,12 @@ from .data_gateway import DataGateway
 from .execution import PortfolioExecutionEngine
 from .features import PITFeatureEngine
 from .registry import ETF_IDS, get_etf_spec
-from .result import ETFTrickResult, append_lifecycle_evidence, attach_etf_amount
+from .result import (
+    ETFTrickResult,
+    append_lifecycle_evidence,
+    attach_etf_amount,
+    market_state_identity_sha256,
+)
 from .universe import UniverseEngine
 from .validation import (
     ReadinessReport,
@@ -337,9 +342,21 @@ class ETFTrickLab:
             pd.to_datetime(calendar_frame["date"]).between(start, end)
         ]
         validation_calendar = TradingCalendar(calendar_frame)
-        report = validate_result(selected, validation_calendar, ETF_IDS)
         identity_failures: list[ValidationIssue] = []
         current_manifest_hashes = self._manifest_hashes()
+        current_state_manifest = self.gateway.load_manifest("daily_market_state")
+        expected_state_identity = self._market_state_identity(
+            current_state_manifest,
+            current_manifest_hashes["daily_market_state"],
+        )
+        report = validate_result(
+            selected,
+            validation_calendar,
+            ETF_IDS,
+            expected_market_state_identity_sha256=market_state_identity_sha256(
+                expected_state_identity
+            ),
+        )
         if selected.metadata.get("manifest_hashes") != current_manifest_hashes:
             identity_failures.append(
                 ValidationIssue(
@@ -347,11 +364,6 @@ class ETFTrickLab:
                     "result source manifest hashes do not match the current DataAnalysts artifacts",
                 )
             )
-        current_state_manifest = self.gateway.load_manifest("daily_market_state")
-        expected_state_identity = self._market_state_identity(
-            current_state_manifest,
-            current_manifest_hashes["daily_market_state"],
-        )
         if selected.metadata.get("market_state_identity") != expected_state_identity:
             identity_failures.append(
                 ValidationIssue(
