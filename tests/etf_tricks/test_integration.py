@@ -42,27 +42,38 @@ def _publish_daily_market_state(
     daily: pd.DataFrame,
     build_start: pd.Timestamp,
     build_end: pd.Timestamp,
+    *,
+    halted_without_price: set[tuple[pd.Timestamp, str]] | None = None,
 ) -> None:
     rows: list[dict[str, object]] = []
     selected = daily[
         pd.to_datetime(daily["date"]).between(build_start, build_end)
     ]
     interval_end = build_end + pd.Timedelta(days=1)
+    halted_keys = halted_without_price or set()
     for source in selected.itertuples(index=False):
         row_date = pd.Timestamp(source.date)
         is_index = str(source.ticker) == "IX0001"
+        key = (row_date, str(source.ticker))
+        is_halted = key in halted_keys
         raw_flag = None if is_index else "N"
         rows.append(
             {
                 "date": row_date,
                 "ticker": str(source.ticker),
                 "market": "INDEX" if is_index else "TWSE",
-                "market_state": "TRADING",
-                "state_reason": "APIPRCD_OBSERVED_AMOUNT",
-                "amount_state": "OBSERVED",
-                "authoritative_traded_value": float(source.traded_value),
-                "amount_zero_authorized": False,
-                "price_row_present": True,
+                "market_state": "HALTED" if is_halted else "TRADING",
+                "state_reason": (
+                    "APISTKATTR_SUSPENSION_NO_PRICE"
+                    if is_halted
+                    else "APIPRCD_OBSERVED_AMOUNT"
+                ),
+                "amount_state": "ZERO_AUTHORIZED" if is_halted else "OBSERVED",
+                "authoritative_traded_value": (
+                    0.0 if is_halted else float(source.traded_value)
+                ),
+                "amount_zero_authorized": is_halted,
+                "price_row_present": not is_halted,
                 "attr_row_present": not is_index,
                 "atten_fg": raw_flag,
                 "disp_fg": raw_flag,
@@ -71,8 +82,8 @@ def _publish_daily_market_state(
                 "limo_fg": raw_flag,
                 "sbadt_fg": raw_flag,
                 "ssadt_fg": raw_flag,
-                "susp_fg": raw_flag,
-                "exchange_tradable": True,
+                "susp_fg": "Y" if is_halted else raw_flag,
+                "exchange_tradable": not is_halted,
                 "full_delivery": None if is_index else False,
                 "instrument_kind": "INDEX" if is_index else "EQUITY",
                 "identity_source": (
@@ -202,7 +213,12 @@ def _publish(root: Path, artifact_id: str, frame: pd.DataFrame) -> None:
     )
 
 
-def _data_analysts_fixture(root: Path) -> tuple[pd.Timestamp, pd.Timestamp]:
+def _data_analysts_fixture(
+    root: Path,
+    *,
+    state_only_halt_key: tuple[str, str] | None = None,
+    dpv_only_key: tuple[str, str] | None = None,
+) -> tuple[pd.Timestamp, pd.Timestamp]:
     dates = pd.bdate_range("2023-12-01", "2025-02-07")
     run_start, run_end = pd.Timestamp("2025-02-03"), pd.Timestamp("2025-02-07")
     tickers = [str(1101 + index) for index in range(10)]
@@ -249,9 +265,36 @@ def _data_analysts_fixture(root: Path) -> tuple[pd.Timestamp, pd.Timestamp]:
                     "dlrp_examt": -10.0 + index,
                 }
             )
-    daily = pd.DataFrame(daily_rows)
-    _publish(root, "daily_price_volume", daily)
-    _publish_daily_market_state(root, daily, run_start, run_end)
+    complete_daily = pd.DataFrame(daily_rows)
+    halted_keys: set[tuple[pd.Timestamp, str]] = set()
+    published_daily = complete_daily.copy()
+    if state_only_halt_key is not None:
+        halt_date_value, halt_ticker = state_only_halt_key
+        halted_date = pd.Timestamp(halt_date_value)
+        halted_keys = {(halted_date, halt_ticker)}
+        published_daily = published_daily[
+            ~(
+                pd.to_datetime(published_daily["date"]).eq(halted_date)
+                & published_daily["ticker"].eq(halt_ticker)
+            )
+        ].copy()
+    state_source = complete_daily.copy()
+    if dpv_only_key is not None:
+        dpv_only_date, dpv_only_ticker = dpv_only_key
+        state_source = state_source[
+            ~(
+                pd.to_datetime(state_source["date"]).eq(pd.Timestamp(dpv_only_date))
+                & state_source["ticker"].eq(dpv_only_ticker)
+            )
+        ].copy()
+    _publish(root, "daily_price_volume", published_daily)
+    _publish_daily_market_state(
+        root,
+        state_source,
+        run_start,
+        run_end,
+        halted_without_price=halted_keys,
+    )
     _publish(root, "daily_chip", pd.DataFrame(chip_rows))
 
     sales = pd.DataFrame(
@@ -491,3 +534,105 @@ def test_run_all_clamps_feature_warmup_to_each_artifact_coverage_start(
     )
 
     assert result.daily_etf["etf_id"].unique().tolist() == ["market_cap"]
+
+
+def test_run_all_preserves_state_only_halted_rows_for_execution_and_amount(
+    tmp_path, monkeypatch
+):
+    start, end = _data_analysts_fixture(
+        tmp_path, state_only_halt_key=("2025-02-05", "1101")
+    )
+    monkeypatch.setattr(lab_module, "ETF_IDS", ("momentum",))
+    lab = ETFTrickLab.from_data_analysts(tmp_path)
+    seen: dict[str, object] = {"scan_calls": 0}
+    original_scan = lab.gateway.scan_market_state
+    original_prepare = PortfolioExecutionEngine.prepare_market
+    original_attach = lab_module.attach_etf_amount
+
+    def recording_scan(*args, **kwargs):
+        state = original_scan(*args, **kwargs)
+        seen["scan_calls"] = int(seen["scan_calls"]) + 1
+        seen["state"] = state
+        return state
+
+    def recording_prepare(market):
+        seen["execution_market"] = market.copy()
+        return original_prepare(market)
+
+    def recording_attach(daily_etf, holdings, market_state, security_master):
+        seen["amount_uses_same_state"] = market_state is seen["state"]
+        return original_attach(daily_etf, holdings, market_state, security_master)
+
+    monkeypatch.setattr(lab.gateway, "scan_market_state", recording_scan)
+    monkeypatch.setattr(
+        PortfolioExecutionEngine,
+        "prepare_market",
+        staticmethod(recording_prepare),
+    )
+    monkeypatch.setattr(lab_module, "attach_etf_amount", recording_attach)
+
+    result = lab.run_all(
+        start_date=start,
+        end_date=end,
+        initial_capital=Decimal("1234567"),
+    )
+
+    halted_date = pd.Timestamp("2025-02-05")
+    execution_market = seen["execution_market"]
+    halted_execution = execution_market[
+        execution_market["date"].eq(halted_date)
+        & execution_market["ticker"].eq("1101")
+    ]
+    assert seen["scan_calls"] == 1
+    assert seen["amount_uses_same_state"] is True
+    assert len(halted_execution) == 1
+    assert halted_execution["market_state"].eq("HALTED").all()
+    assert halted_execution["exchange_tradable"].eq(False).all()
+    assert halted_execution[["close", "adj_close", "traded_value"]].isna().all().all()
+
+    halted_trades = result.trades[
+        result.trades["date"].eq(halted_date)
+        & result.trades["ticker"].eq("1101")
+    ]
+    assert not halted_trades.empty
+    assert halted_trades["executed_shares"].eq(0).all()
+    prior_holdings = result.daily_holdings[
+        result.daily_holdings["date"].eq(pd.Timestamp("2025-02-04"))
+    ]
+    prior_holding = prior_holdings[prior_holdings["ticker"].eq("1101")].iloc[0]
+    halted_holding = result.daily_holdings[
+        result.daily_holdings["date"].eq(halted_date)
+        & result.daily_holdings["ticker"].eq("1101")
+    ]
+    assert len(halted_holding) == 1
+    assert halted_holding.iloc[0]["shares"] == prior_holding["shares"]
+    assert halted_holding.iloc[0]["source_price_date"] == pd.Timestamp("2025-02-04")
+    assert halted_holding.iloc[0]["stale_price_days"] == 1
+    assert halted_holding.iloc[0]["raw_close"] == pytest.approx(
+        prior_holding["raw_close"]
+    )
+
+    amount_row = result.daily_etf[result.daily_etf["date"].eq(halted_date)].iloc[0]
+    assert amount_row["status_zero_authorized_count"] == 1
+    assert amount_row["status_missing_count"] == 0
+    assert amount_row["amount_quality_state"] == "READY"
+
+
+def test_run_all_rejects_requested_scope_dpv_key_without_certified_state(
+    tmp_path, monkeypatch
+):
+    start, end = _data_analysts_fixture(
+        tmp_path, dpv_only_key=("2025-02-05", "IX0001")
+    )
+
+    def reject_late_calculation(*args, **kwargs):
+        raise AssertionError("feature calculation ran before state coverage gate")
+
+    monkeypatch.setattr(PITFeatureEngine, "compute_many", reject_late_calculation)
+
+    with pytest.raises(ValueError, match="daily_price_volume.*without certified"):
+        ETFTrickLab.from_data_analysts(tmp_path).run_all(
+            start_date=start,
+            end_date=end,
+            initial_capital=Decimal("1234567"),
+        )

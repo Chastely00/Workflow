@@ -89,6 +89,23 @@ class ETFTrickLab:
         daily = self.gateway.read_artifact(
             "daily_price_volume", columns=daily_columns, start=daily_read_start, end=end
         )
+        market_state = self.gateway.scan_market_state(run_days[0], run_days[-1])
+        requested_daily = daily.loc[
+            daily["date"].between(run_days[0], run_days[-1])
+        ].copy()
+        state_keys = market_state.loc[:, ["date", "ticker"]]
+        daily_state_coverage = requested_daily.loc[:, ["date", "ticker"]].merge(
+            state_keys,
+            on=["date", "ticker"],
+            how="left",
+            validate="one_to_one",
+            indicator=True,
+        )
+        if daily_state_coverage["_merge"].eq("left_only").any():
+            raise ValueError(
+                "daily_price_volume contains requested-scope key without certified "
+                "daily_market_state row"
+            )
         chip = self.gateway.read_artifact(
             "daily_chip",
             columns=["date", "ticker", "qfii_examt", "fund_examt", "dlrp_examt"],
@@ -162,12 +179,13 @@ class ETFTrickLab:
                 target["signal_name"] = spec.signal_name
                 targets_by_etf[etf_id].append(target)
 
-        market_state = self.gateway.scan_market_state(run_days[0], run_days[-1])
-        execution_market = daily[
-            daily["date"].between(run_days[0], run_days[-1])
+        execution_market = market_state.loc[
+            :, ["date", "ticker", "market_state", "exchange_tradable"]
         ].merge(
-            market_state.loc[:, ["date", "ticker", "market_state", "exchange_tradable"]],
-            on=["date", "ticker"], how="left", validate="one_to_one",
+            requested_daily,
+            on=["date", "ticker"],
+            how="left",
+            validate="one_to_one",
         )
         engine = PortfolioExecutionEngine()
         prepared_execution_market = engine.prepare_market(execution_market)
