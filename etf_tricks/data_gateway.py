@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import hashlib
 import json
 import math
@@ -165,6 +166,7 @@ class DataGateway:
             schema_validator=self._validate_market_state_physical_schema,
             table_validator=self._validate_market_state_arrow_table,
         )
+        self._validate_market_state_inventory(manifest)
         self._validate_market_state_rows(result, manifest)
         if self._read_manifest_bytes("daily_market_state") != manifest_bytes:
             raise DataContractError("daily_market_state manifest drifted during scan")
@@ -774,6 +776,15 @@ class DataGateway:
             )
         if getattr(row, "availability_precision") != _AVAILABILITY_PRECISION:
             raise DataContractError("daily_market_state has invalid availability_precision")
+        data_cutoff_at = DataGateway._parse_data_cutoff(
+            getattr(row, "data_cutoff_at")
+        )
+        if data_cutoff_at is None:
+            raise DataContractError("daily_market_state has malformed data_cutoff_at")
+        if data_cutoff_at.date() < source_available_date.date():
+            raise DataContractError(
+                "daily_market_state data_cutoff_at predates availability"
+            )
         if (
             getattr(row, "classification_policy_version")
             != manifest["classification_policy_version"]
@@ -782,6 +793,24 @@ class DataGateway:
             raise DataContractError(
                 "daily_market_state has invalid classification_policy_version"
             )
+
+    @staticmethod
+    def _parse_data_cutoff(value: object) -> datetime | None:
+        if isinstance(value, datetime):
+            parsed = value
+        elif isinstance(value, str) and ("T" in value or " " in value):
+            try:
+                parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+            except ValueError:
+                return None
+        else:
+            return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        parsed = parsed.astimezone(timezone.utc)
+        if parsed == datetime(1970, 1, 1, tzinfo=timezone.utc):
+            return None
+        return parsed
 
     @staticmethod
     def _is_nonnegative_finite_number(value: object) -> bool:

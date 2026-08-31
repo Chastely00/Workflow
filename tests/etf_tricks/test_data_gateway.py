@@ -660,6 +660,38 @@ def test_scan_market_state_rejects_manifest_drift_after_scan(
         )
 
 
+def test_scan_market_state_rejects_partition_replacement_after_preflight(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = _write_market_state_artifact(tmp_path)
+    original = DataGateway.scan_artifact
+
+    def replace_then_scan(
+        self: DataGateway,
+        artifact_id: str,
+        **kwargs: object,
+    ) -> pd.DataFrame:
+        replacement = pq.read_table(path)
+        amount_index = replacement.schema.get_field_index("authoritative_traded_value")
+        replacement = replacement.set_column(
+            amount_index,
+            replacement.schema.field(amount_index),
+            pa.array([999.0, 0.0], type=pa.float64()),
+        )
+        replacement_path = path.with_name("replacement.parquet")
+        pq.write_table(replacement, replacement_path)
+        replacement_path.replace(path)
+        return original(self, artifact_id, **kwargs)
+
+    monkeypatch.setattr(DataGateway, "scan_artifact", replace_then_scan)
+
+    with pytest.raises(DataContractError, match="content_sha256 mismatch"):
+        DataGateway.from_data_analysts(tmp_path).scan_market_state(
+            "2025-01-02", "2025-01-03"
+        )
+
+
 def test_scan_market_state_accepts_null_full_delivery_when_attribute_row_is_absent(
     tmp_path: Path,
 ) -> None:
@@ -967,6 +999,29 @@ def test_scan_market_state_rejects_non_pit_availability_or_policy(
     error: str,
 ) -> None:
     _write_market_state_artifact(tmp_path, rows=[row])
+
+    with pytest.raises(DataContractError, match=error):
+        DataGateway.from_data_analysts(tmp_path).scan_market_state(
+            "2025-01-02", "2025-01-02"
+        )
+
+
+@pytest.mark.parametrize(
+    ("data_cutoff_at", "error"),
+    [
+        ("not-a-timestamp", "data_cutoff_at"),
+        ("2025-01-01T23:59:59Z", "predates availability"),
+    ],
+)
+def test_scan_market_state_requires_producer_governed_data_cutoff(
+    tmp_path: Path,
+    data_cutoff_at: str,
+    error: str,
+) -> None:
+    _write_market_state_artifact(
+        tmp_path,
+        rows=[{**_market_state_rows()[0], "data_cutoff_at": data_cutoff_at}],
+    )
 
     with pytest.raises(DataContractError, match=error):
         DataGateway.from_data_analysts(tmp_path).scan_market_state(
