@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from decimal import Decimal
 
 import numpy as np
@@ -35,6 +36,8 @@ def _market(dates: list[str], tickers: list[str], close: float = 100.0) -> pd.Da
                 "close": close,
                 "adj_close": close,
                 "traded_value": 1_000_000.0,
+                "market_state": "TRADING",
+                "exchange_tradable": True,
             }
             for date in dates
             for ticker in tickers
@@ -44,7 +47,6 @@ def _market(dates: list[str], tickers: list[str], close: float = 100.0) -> pd.Da
 
 def _state_market(dates: list[str], tickers: list[str], close: float = 100.0) -> pd.DataFrame:
     frame = _market(dates, tickers, close)
-    frame["market_state"] = "TRADING"
     frame["exchange_tradable"] = pd.Series([True] * len(frame), dtype=object)
     frame["amount_state"] = "OBSERVED"
     frame["full_delivery"] = False
@@ -151,6 +153,102 @@ def test_prepared_market_accepts_arrow_style_numpy_boolean_tradability():
     prepared = PortfolioExecutionEngine.prepare_market(market)
 
     assert prepared.exchange_tradable.tolist() == [[1]]
+
+
+@pytest.mark.parametrize("missing_columns", [("market_state",), ("exchange_tradable",), ("market_state", "exchange_tradable")])
+def test_raw_market_requires_explicit_state_and_tradability(
+    missing_columns: tuple[str, ...],
+):
+    market = _market(["2025-01-02"], ["1101"]).drop(columns=list(missing_columns))
+
+    with pytest.raises(ValueError, match="market_state.*exchange_tradable"):
+        PortfolioExecutionEngine.prepare_market(market)
+
+
+@pytest.mark.parametrize(
+    ("mutate", "error"),
+    [
+        (
+            lambda market: replace(
+                market, market_state=market.market_state.astype(np.float64)
+            ),
+            "market_state.*integer",
+        ),
+        (
+            lambda market: replace(
+                market, exchange_tradable=market.exchange_tradable.astype(bool)
+            ),
+            "exchange_tradable.*integer",
+        ),
+        (
+            lambda market: replace(
+                market, exchange_tradable=np.zeros_like(market.exchange_tradable)
+            ),
+            "state/tradability",
+        ),
+        (
+            lambda market: replace(
+                market, close=market.close[:, :0]
+            ),
+            "matrix shape",
+        ),
+        (
+            lambda market: replace(
+                market, traded_value=np.array([[np.inf]], dtype=np.float64)
+            ),
+            "traded_value",
+        ),
+        (
+            lambda market: replace(
+                market,
+                date_positions={pd.Timestamp("2025-01-02"): 1},
+            ),
+            "date_positions",
+        ),
+    ],
+)
+def test_run_rejects_untrusted_prepared_market(
+    mutate: object,
+    error: str,
+):
+    dates = ["2025-01-02"]
+    prepared = PortfolioExecutionEngine.prepare_market(_market(dates, ["1101"]))
+
+    with pytest.raises(ValueError, match=error):
+        PortfolioExecutionEngine().run(
+            get_etf_spec("momentum"),
+            _targets("2025-01", {"1101": 1.0}),
+            mutate(prepared),
+            _calendar(dates),
+            Decimal("1000"),
+        )
+
+
+def test_missing_state_target_with_zero_desired_emits_one_deduplicated_diagnostic():
+    dates = ["2025-01-02"]
+    market = _state_market(dates, ["1101"])
+    market["market_state"] = "MISSING"
+    market["amount_state"] = "MISSING"
+    market["exchange_tradable"] = None
+    market[["close", "adj_close"]] = float("nan")
+    engine = PortfolioExecutionEngine()
+    targets = _targets("2025-01", {"1101": 1.0})
+    calendar = _calendar(dates)
+
+    raw = engine.run(get_etf_spec("momentum"), targets, market, calendar, Decimal("1000"))
+    prepared = engine.run(
+        get_etf_spec("momentum"),
+        targets,
+        engine.prepare_market(market),
+        calendar,
+        Decimal("1000"),
+    )
+
+    assert raw.diagnostics["diagnostic"].value_counts().to_dict() == {
+        "missing_market_state": 1,
+        "missing_target_formation_price": 1,
+    }
+    pdt.assert_frame_equal(prepared.diagnostics, raw.diagnostics)
 
 
 def test_halted_zero_authorized_day_keeps_backlog_and_resumes_only_when_trading():
@@ -429,6 +527,8 @@ def test_rotation_keeps_one_share_when_priced_target_is_unaffordable_after_fees(
             {"date": dates[1], "ticker": "1102", "close": 100.0, "adj_close": 100.0, "traded_value": 1_000.0},
         ]
     )
+    market["market_state"] = "TRADING"
+    market["exchange_tradable"] = True
 
     result = PortfolioExecutionEngine().run(
         get_etf_spec("momentum"),

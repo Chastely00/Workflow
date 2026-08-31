@@ -127,7 +127,7 @@ class PortfolioExecutionEngine:
         if not capital.is_finite() or capital <= 0:
             raise ExecutionInvariantError("initial_capital must be finite and positive")
         prepared_market = (
-            market
+            self._validate_prepared_market(market)
             if isinstance(market, PreparedExecutionMarket)
             else self.prepare_market(market)
         )
@@ -214,6 +214,20 @@ class PortfolioExecutionEngine:
                 else:
                     price_state[ticker] = (None, None, 0)
 
+            for ticker in sorted(current_tickers):
+                if (
+                    self._market_state_code(prepared_market, date, ticker)
+                    == _MARKET_STATE_MISSING
+                ):
+                    diagnostic_records.append(
+                        {
+                            "date": date,
+                            "etf_id": spec.etf_id,
+                            "ticker": ticker,
+                            "diagnostic": "missing_market_state",
+                        }
+                    )
+
             forced_commission = Decimal("0")
             forced_tax = Decimal("0")
             for ticker in sorted(list(shares)):
@@ -282,17 +296,6 @@ class PortfolioExecutionEngine:
                         schedule_n,
                     )
                     desired[ticker] = scheduled - shares.get(ticker, 0)
-
-            for ticker, quantity in desired.items():
-                if quantity != 0 and self._market_state_code(prepared_market, date, ticker) == _MARKET_STATE_MISSING:
-                    diagnostic_records.append(
-                        {
-                            "date": date,
-                            "etf_id": spec.etf_id,
-                            "ticker": ticker,
-                            "diagnostic": "missing_market_state",
-                        }
-                    )
 
             day_commission = forced_commission
             day_tax = forced_tax
@@ -526,13 +529,10 @@ class PortfolioExecutionEngine:
         frame = market.copy()
         has_market_state = "market_state" in frame.columns
         has_exchange_tradable = "exchange_tradable" in frame.columns
-        if has_market_state != has_exchange_tradable:
+        if not has_market_state or not has_exchange_tradable:
             raise ExecutionInvariantError(
-                "market_state and exchange_tradable must be supplied together"
+                "market requires market_state and exchange_tradable"
             )
-        if not has_market_state:
-            frame["market_state"] = "TRADING"
-            frame["exchange_tradable"] = True
         frame["date"] = pd.to_datetime(frame["date"], errors="coerce")
         frame["ticker"] = frame["ticker"].astype(str)
         if frame.duplicated(["date", "ticker"]).any():
@@ -560,6 +560,99 @@ class PortfolioExecutionEngine:
                     "MISSING market_state requires null exchange_tradable"
                 )
         return frame.sort_values(["date", "ticker"], kind="stable")
+
+    @staticmethod
+    def _validate_prepared_market(
+        market: PreparedExecutionMarket,
+    ) -> PreparedExecutionMarket:
+        matrices = {
+            "close": market.close,
+            "adj_close": market.adj_close,
+            "traded_value": market.traded_value,
+            "market_state": market.market_state,
+            "exchange_tradable": market.exchange_tradable,
+        }
+        if not isinstance(market.close, np.ndarray) or market.close.ndim != 2:
+            raise ExecutionInvariantError("prepared market matrix shape is invalid")
+        shape = market.close.shape
+        for name, matrix in matrices.items():
+            if not isinstance(matrix, np.ndarray) or matrix.ndim != 2 or matrix.shape != shape:
+                raise ExecutionInvariantError(
+                    f"prepared market matrix shape is invalid for {name}"
+                )
+        PortfolioExecutionEngine._validate_prepared_axis(
+            "date_positions", market.date_positions, shape[0], dates=True
+        )
+        PortfolioExecutionEngine._validate_prepared_axis(
+            "ticker_positions", market.ticker_positions, shape[1], dates=False
+        )
+        for name, matrix in (
+            ("market_state", market.market_state),
+            ("exchange_tradable", market.exchange_tradable),
+        ):
+            if not np.issubdtype(matrix.dtype, np.integer) or np.issubdtype(
+                matrix.dtype, np.bool_
+            ):
+                raise ExecutionInvariantError(
+                    f"prepared {name} must have an integer dtype"
+                )
+        if not np.issubdtype(market.traded_value.dtype, np.number) or np.isinf(
+            market.traded_value
+        ).any():
+            raise ExecutionInvariantError(
+                "prepared traded_value must contain only finite values or nulls"
+            )
+        allowed_states = {
+            _MARKET_STATE_TRADING,
+            _MARKET_STATE_HALTED,
+            _MARKET_STATE_MISSING,
+        }
+        allowed_tradability = {
+            _EXCHANGE_TRADABLE_TRUE,
+            _EXCHANGE_TRADABLE_FALSE,
+            _EXCHANGE_TRADABLE_UNKNOWN,
+        }
+        if not set(np.unique(market.market_state)).issubset(allowed_states):
+            raise ExecutionInvariantError("prepared market_state has invalid codes")
+        if not set(np.unique(market.exchange_tradable)).issubset(allowed_tradability):
+            raise ExecutionInvariantError("prepared exchange_tradable has invalid codes")
+        valid_pairs = (
+            ((market.market_state == _MARKET_STATE_TRADING) & (market.exchange_tradable == _EXCHANGE_TRADABLE_TRUE))
+            | ((market.market_state == _MARKET_STATE_HALTED) & (market.exchange_tradable == _EXCHANGE_TRADABLE_FALSE))
+            | ((market.market_state == _MARKET_STATE_MISSING) & (market.exchange_tradable == _EXCHANGE_TRADABLE_UNKNOWN))
+        )
+        if not valid_pairs.all():
+            raise ExecutionInvariantError("prepared market state/tradability pair is invalid")
+        return market
+
+    @staticmethod
+    def _validate_prepared_axis(
+        name: str,
+        positions: Mapping[object, object],
+        size: int,
+        *,
+        dates: bool,
+    ) -> None:
+        if not isinstance(positions, Mapping) or len(positions) != size:
+            raise ExecutionInvariantError(f"prepared {name} is invalid")
+        values = list(positions.values())
+        if any(
+            isinstance(value, bool) or not isinstance(value, (int, np.integer))
+            for value in values
+        ) or set(values) != set(range(size)):
+            raise ExecutionInvariantError(f"prepared {name} is invalid")
+        keys = list(positions)
+        if dates:
+            try:
+                normalized_keys = [pd.Timestamp(value) for value in keys]
+            except (TypeError, ValueError) as exc:
+                raise ExecutionInvariantError(f"prepared {name} is invalid") from exc
+            if any(value is pd.NaT for value in normalized_keys) or len(
+                set(normalized_keys)
+            ) != size:
+                raise ExecutionInvariantError(f"prepared {name} is invalid")
+        elif any(not isinstance(value, str) or not value for value in keys):
+            raise ExecutionInvariantError(f"prepared {name} is invalid")
 
     @staticmethod
     def _normalize_targets(targets: pd.DataFrame, spec: ETFSpec) -> pd.DataFrame:
