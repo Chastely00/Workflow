@@ -10,7 +10,11 @@ from time import perf_counter
 import pyarrow.parquet as pq
 
 from data_analysts.config import load_runtime_config
-from data_analysts.daily_market_state import build_daily_market_state_rows
+from data_analysts.daily_market_state import (
+    advance_attribute_identity,
+    attribute_identity_asof,
+    build_daily_market_state_rows,
+)
 from data_analysts.daily_market_state_publication import (
     publish_daily_market_state,
     publish_daily_market_state_partitions,
@@ -53,26 +57,37 @@ def main() -> None:
     hashes = {name: hashlib.sha256((root / "manifests" / f"{name}.json").read_bytes()).hexdigest() for name in manifests}
     cutoff = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     database = MongoClient("mongodb://localhost:27017/", serverSelectionTimeoutMS=5000)["APISTKATTR"]
+    # Identity is an as-of state, not an independent yearly input.  Read it
+    # once at the global build boundary, then advance it only with each
+    # published daily_tradability partition.  Re-seeding at every year would
+    # leak Mongo rows that are absent from the certified artifact and make the
+    # streaming result differ from the single-pass materialization.
+    seeds = extract_identity_seed_rows(database, before_date=start)
     if args.chunk_by_year:
+        attribute_identity = attribute_identity_asof(seeds, start)
+
         def partition_rows():
+            nonlocal attribute_identity
             for year in sorted(years):
                 scope_start = max(start, f"{year}-01-01")
                 scope_end = min(end, f"{year}-12-31")
                 prices = rows("daily_price_volume", {year})
                 attributes = rows("daily_tradability", {year})
-                seeds = extract_identity_seed_rows(database, before_date=scope_start)
-                yield year, build_daily_market_state_rows(
+                state = build_daily_market_state_rows(
                     trading_calendar_rows=calendar,
                     price_rows=prices,
                     security_master_rows=master,
-                    attribute_rows=[*seeds, *attributes],
+                    attribute_rows=attributes,
                     manifest_hashes=hashes,
                     build_start=start,
                     build_end=end,
                     data_cutoff_at=cutoff,
                     scope_start=scope_start,
                     scope_end=scope_end,
+                    initial_attribute_identity=attribute_identity,
                 )
+                attribute_identity = advance_attribute_identity(attribute_identity, attributes)
+                yield year, state
 
         result = publish_daily_market_state_partitions(
             context, load_runtime_config(context), partition_rows(), build_start=start,
@@ -81,7 +96,6 @@ def main() -> None:
         state_row_count = result.total_row_count
     else:
         prices, attributes = rows("daily_price_volume", years), rows("daily_tradability", years)
-        seeds = extract_identity_seed_rows(database, before_date=start)
         state = build_daily_market_state_rows(
             trading_calendar_rows=calendar, price_rows=prices, security_master_rows=master,
             attribute_rows=[*seeds, *attributes], manifest_hashes=hashes, build_start=start,

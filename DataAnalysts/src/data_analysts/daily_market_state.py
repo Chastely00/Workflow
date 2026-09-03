@@ -24,6 +24,7 @@ def build_daily_market_state_rows(
     certified_source_start: str | None = None,
     scope_start: str | None = None,
     scope_end: str | None = None,
+    initial_attribute_identity: dict[str, dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Classify TEJ daily market states without using future price observations.
 
@@ -50,7 +51,17 @@ def build_daily_market_state_rows(
     attributes = _unique_by_date_ticker(attribute_rows, "attribute")
     prices_by_day = _rows_by_day(prices)
     attributes_by_day = _rows_by_day(attributes)
-    attribute_identity = _attribute_identity_before(attributes, processing_start)
+    attribute_identity = {
+        str(ticker): dict(identity)
+        for ticker, identity in (initial_attribute_identity or {}).items()
+    }
+    attribute_identity = advance_attribute_identity(
+        attribute_identity,
+        [
+            row for (day, _), row in attributes.items()
+            if day < processing_start
+        ],
+    )
     rows: list[dict[str, Any]] = []
 
     for day in scoped_sessions:
@@ -318,6 +329,29 @@ def _attribute_identity_before(
             prior = None if current is None else current[1]
             result[ticker] = (day, _merge_identity(prior, row))
     return {ticker: value[1] for ticker, value in result.items()}
+
+
+def attribute_identity_asof(
+    attribute_rows: list[dict[str, Any]], before_date: str
+) -> dict[str, dict[str, Any]]:
+    """Return an as-of identity seed without reading later attribute rows."""
+    attributes = _unique_by_date_ticker(attribute_rows, "attribute")
+    return _attribute_identity_before(attributes, before_date)
+
+
+def advance_attribute_identity(
+    identity: dict[str, dict[str, Any]], attribute_rows: list[dict[str, Any]]
+) -> dict[str, dict[str, Any]]:
+    """Advance identity state in deterministic date/ticker order."""
+    result = {str(ticker): dict(value) for ticker, value in identity.items()}
+    ordered = sorted(
+        attribute_rows,
+        key=lambda row: (_date_text(row["date"], "attribute.date"), str(row["ticker"])),
+    )
+    for row in ordered:
+        ticker = str(row["ticker"])
+        result[ticker] = _merge_identity(result.get(ticker), row)
+    return result
 
 
 def _merge_identity(

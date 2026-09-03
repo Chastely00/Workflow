@@ -250,3 +250,51 @@ def test_build_daily_market_state_partition_scope_keeps_global_lifecycle_interva
 
     assert [row["date"] for row in rows] == ["2021-01-04"]
     assert rows[0]["lifecycle_interval_start"] == "2020-01-02"
+
+
+def test_partitioned_identity_carry_matches_single_pass_identity() -> None:
+    from data_analysts.daily_market_state import (
+        advance_attribute_identity,
+        attribute_identity_asof,
+        build_daily_market_state_rows,
+    )
+
+    hashes = {
+        "security_master": "a" * 64, "trading_calendar": "b" * 64,
+        "daily_price_volume": "c" * 64, "daily_tradability": "d" * 64,
+    }
+    calendar = [
+        {"date": "2020-01-02", "market": "TWSE"},
+        {"date": "2021-01-04", "market": "TWSE"},
+        {"date": "2021-01-05", "market": "TWSE"},
+    ]
+    master = [{"ticker": "1101", "market": "", "list_date": "2000-01-01", "delist_date": None}]
+    seed = [{"date": "2019-12-31", "ticker": "1101", "mkt": "TWSE", "stktp_e": "Common Stock"}]
+    attrs_2020 = [{"date": "2020-01-02", "ticker": "1101", "mkt": "", "stktp_e": "Common Stock"}]
+    attrs_2021 = [{"date": "2021-01-04", "ticker": "1101", "mkt": "", "stktp_e": "Common Stock"}]
+    prices = [
+        {"date": "2020-01-02", "ticker": "1101", "traded_value": 100.0},
+        {"date": "2021-01-04", "ticker": "1101", "traded_value": 100.0},
+    ]
+    kwargs = dict(
+        trading_calendar_rows=calendar, security_master_rows=master,
+        manifest_hashes=hashes, build_start="2020-01-02", build_end="2021-01-04",
+        data_cutoff_at="2021-01-04T14:00:00Z",
+    )
+    direct = build_daily_market_state_rows(
+        **kwargs, price_rows=prices, attribute_rows=[*seed, *attrs_2020, *attrs_2021]
+    )
+    identity = attribute_identity_asof(seed, "2020-01-02")
+    first = build_daily_market_state_rows(
+        **kwargs, price_rows=[prices[0]], attribute_rows=attrs_2020,
+        scope_start="2020-01-02", scope_end="2020-01-02",
+        initial_attribute_identity=identity,
+    )
+    identity = advance_attribute_identity(identity, attrs_2020)
+    second = build_daily_market_state_rows(
+        **kwargs, price_rows=[prices[1]], attribute_rows=attrs_2021,
+        scope_start="2021-01-04", scope_end="2021-01-04",
+        initial_attribute_identity=identity,
+    )
+
+    assert first + second == direct
