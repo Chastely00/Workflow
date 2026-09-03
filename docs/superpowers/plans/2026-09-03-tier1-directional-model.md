@@ -4,7 +4,7 @@
 
 **Goal:** Build an immutable, capital-neutral Tier 1 target and OOF long-candidate stream from the finalized AFML dataset, without altering AFML dataset labels or shared execution accounting.
 
-**Architecture:** Add a focused `etf_tricks.tier1` package. It reads `AFMLDataset` through PIT-safe views, computes its own raw-OPEN/cost-aware target evidence, creates purged/embargoed OOF logistic predictions, and writes a separate manifest-backed artifact. Tier 3 remains the sole owner of integer-share execution.
+**Architecture:** Add a focused `etf_tricks.tier1` package. It reads `AFMLDataset` through PIT-safe views and builds a read-only, hash-linked execution-market snapshot from canonical raw OPEN, daily market state, calendar, and upstream holdings. It then computes its own raw-OPEN/cost-aware target evidence, creates purged/embargoed OOF logistic predictions, and writes a separate manifest-backed artifact. Tier 3 remains the sole owner of integer-share execution.
 
 **Tech Stack:** Python 3.12, pandas, NumPy, scikit-learn, pytest, PyArrow.
 
@@ -20,9 +20,9 @@
 
 ### Task 1: Define the target and artifact contracts
 
-**Files:** Create `etf_tricks/tier1/config.py`, `targets.py`, `artifact.py`, `__init__.py`; create `tests/etf_tricks/tier1/test_targets.py`.
+**Files:** Create `etf_tricks/tier1/config.py`, `market_snapshot.py`, `targets.py`, `artifact.py`, `__init__.py`; create `tests/etf_tricks/tier1/test_targets.py` and `test_market_snapshot.py`.
 
-- [ ] Write failing fixtures for: 60-bar EWMA/min-20 volatility, proportional buy/sell costs, next-open entry/exit timing, unresolved tails, and daily-close double-touch non-applicability.
+- [ ] Write failing fixtures for: manifest-hash/availability-bound raw-OPEN snapshot, 60-bar EWMA/min-20 volatility, proportional buy/sell costs, next-open entry/exit timing, unresolved tails, and daily-close double-touch non-applicability.
 - [ ] Implement pure target calculation with explicit `trigger_*`, `entry_*`, `exit_*`, `target_status`, `y_direction`, and availability columns.
 - [ ] Write/read a versioned parquet artifact plus manifest and reject duplicate keys, unavailable source rows, and schema/hash mismatch.
 - [ ] Run the focused target tests and commit the self-contained target contract.

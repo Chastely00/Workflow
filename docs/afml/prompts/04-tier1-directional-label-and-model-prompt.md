@@ -14,7 +14,7 @@ Do not build Tier 2, HRP, portfolio allocation, broker integration, or final str
 
 ## 2. Inputs and outputs
 
-Read only finalized AFML artifact tables, their manifests/hashes, and shared execution interfaces needed to validate semantics. Write only versioned Tier 1 target/event extensions, model/fold artifacts, out-of-fold predictions, diagnostics, and manifests. Never rewrite AFML labels or shared cost code.
+Read finalized AFML artifact tables and their manifests/hashes. Because AFML v5 does not retain constituent raw OPEN, construct a read-only, versioned execution-market snapshot from manifest-declared canonical `daily_price_volume` raw OPEN, `daily_market_state`, governed calendar, and the upstream ETF holdings lineage. The snapshot may supply only actual entry/exit feasibility and raw prices; it must preserve source availability/revision/hash evidence and never become a model feature source or alter AFML labels. Write only versioned Tier 1 target/event extensions, model/fold artifacts, out-of-fold predictions, diagnostics, and manifests. Never rewrite AFML labels, canonical source artifacts, MongoDB, or shared cost code.
 
 Allowed inputs are PIT-safe FFD state, amount/activity, liquidity, portfolio state, IX0001/regime, and other available canonical AFML features. Unavailable VPIN, Kyle lambda, ATR, ADX, and VIX remain unavailable; do not rename a proxy as one of them.
 
