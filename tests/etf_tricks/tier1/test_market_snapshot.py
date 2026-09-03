@@ -24,11 +24,12 @@ def test_snapshot_uses_previous_holdings_and_raw_open() -> None:
         }
     )
 
-    result = ExecutionMarketSnapshot.from_frames(holdings, prices)
+    nav = pd.DataFrame({"date": [pd.Timestamp("2024-01-02")], "etf_id": ["x"], "nav": [1000.0]})
+    result = ExecutionMarketSnapshot.from_frames(holdings, prices, nav)
 
     row = result.iloc[0]
     assert row["date"] == pd.Timestamp("2024-01-03")
-    assert row["raw_open_nav"] == 108.0
+    assert row["raw_open_nav"] == 1080.0
     assert row["is_legal_execution"]
 
 
@@ -36,7 +37,8 @@ def test_snapshot_fails_closed_when_a_constituent_is_not_executable() -> None:
     holdings = pd.DataFrame({"date": [pd.Timestamp("2024-01-02")], "etf_id": ["x"], "ticker": ["A"], "actual_weight": [1.0]})
     prices = pd.DataFrame({"date": [pd.Timestamp("2024-01-03")], "ticker": ["A"], "open": [110.0], "previous_close": [100.0], "source_available_at": pd.to_datetime(["2024-01-03 13:30+08:00"]), "is_legal_execution": [False]})
 
-    result = ExecutionMarketSnapshot.from_frames(holdings, prices)
+    nav = pd.DataFrame({"date": [pd.Timestamp("2024-01-02")], "etf_id": ["x"], "nav": [1000.0]})
+    result = ExecutionMarketSnapshot.from_frames(holdings, prices, nav)
 
     assert not result.iloc[0]["is_legal_execution"]
     assert result.iloc[0]["raw_open_nav"] != result.iloc[0]["raw_open_nav"]
