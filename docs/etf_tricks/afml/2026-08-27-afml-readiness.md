@@ -1,5 +1,8 @@
 # ETF Tricks AFML Dataset Readiness
 
+> **歷史紀錄，已由 [2026-09-03-short-window-acceptance.md](2026-09-03-short-window-acceptance.md) 取代。**
+> 本文件記錄 DMS 歷史狀態修復前的驗收結果；不得用於判斷目前的 AFML artifact 或研究就緒性。
+
 驗證日期：2026-08-28  
 權威目標：`GOAL-ETF-AFML-DATASET-001`  
 結論：**13 ETF 的 2024–2026 bounded research dataset 已可用；2005–2026 full-history 尚未通過，因此整體 Goal 不得宣稱 complete 或 production-ready。**
