@@ -769,11 +769,11 @@ class PortfolioExecutionEngine:
             raise ExecutionInvariantError("delist date is outside governed calendar")
         effective_sessions: dict[str, pd.Timestamp] = {}
         for ticker, delist_date in delist_dates.items():
+            # security_master contains the complete historical universe.  A
+            # future delisting is not an execution event for this bounded run.
+            if delist_date > sessions[-1]:
+                continue
             position = int(sessions.searchsorted(delist_date, side="left"))
-            if position >= len(sessions):
-                raise ExecutionInvariantError(
-                    f"delist date is outside governed calendar: {ticker}"
-                )
             effective_sessions[ticker] = pd.Timestamp(sessions[position])
         return effective_sessions
 

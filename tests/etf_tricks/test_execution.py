@@ -570,7 +570,7 @@ def test_weekend_delist_liquidates_once_at_last_raw_close_and_never_rebuys():
     pdt.assert_frame_equal(prepared.diagnostics, raw.diagnostics)
 
 
-def test_lifecycle_rows_beyond_calendar_or_duplicate_ticker_fail_closed():
+def test_future_lifecycle_rows_are_ignored_but_duplicate_ticker_fails_closed():
     dates = ["2025-01-02", "2025-01-03"]
     engine = PortfolioExecutionEngine()
     arguments = (
@@ -581,13 +581,13 @@ def test_lifecycle_rows_beyond_calendar_or_duplicate_ticker_fail_closed():
         Decimal("1000"),
     )
 
-    with pytest.raises(ValueError, match="outside.*calendar"):
-        engine.run(
-            *arguments,
-            security_master=pd.DataFrame(
-                {"ticker": ["1101"], "delist_date": [pd.Timestamp("2025-01-06")]}
-            ),
-        )
+    result = engine.run(
+        *arguments,
+        security_master=pd.DataFrame(
+            {"ticker": ["1101"], "delist_date": [pd.Timestamp("2025-01-06")]}
+        ),
+    )
+    assert not result.trades["is_forced_delist_liquidation"].any()
     with pytest.raises(ValueError, match="duplicate"):
         engine.run(
             *arguments,
