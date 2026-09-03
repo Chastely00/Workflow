@@ -38,7 +38,7 @@ def build_daily_market_state_rows(
     master = _security_master_by_ticker(security_master_rows)
     prices = _unique_by_date_ticker(price_rows, "price")
     attributes = _unique_by_date_ticker(attribute_rows, "attribute")
-    attribute_identity: dict[str, dict[str, Any]] = {}
+    attribute_identity = _attribute_identity_before(attributes, build_start)
     rows: list[dict[str, Any]] = []
 
     for day in scoped_sessions:
@@ -176,6 +176,20 @@ def _unique_by_date_ticker(rows: list[dict[str, Any]], source: str) -> dict[tupl
             raise ValueError(f"duplicate {source} date-ticker key: {key}")
         result[key] = row
     return result
+
+
+def _attribute_identity_before(
+    attributes: dict[tuple[str, str], dict[str, Any]], build_start: str
+) -> dict[str, dict[str, Any]]:
+    """Return the final known APISKTATTR identity strictly before build_start."""
+    result: dict[str, tuple[str, dict[str, Any]]] = {}
+    for (day, ticker), row in attributes.items():
+        if day >= build_start:
+            continue
+        current = result.get(ticker)
+        if current is None or day > current[0]:
+            result[ticker] = (day, row)
+    return {ticker: value[1] for ticker, value in result.items()}
 
 
 def _amount(row: dict[str, Any] | None) -> float | None:

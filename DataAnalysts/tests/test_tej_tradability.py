@@ -45,3 +45,23 @@ def test_bounded_tradability_extracts_once_per_ticker_and_sorts() -> None:
     ]
     assert [collection.calls for collection in collections.values()] == [1, 1]
     assert metrics["collection_count"] == 2
+
+
+def test_bounded_tradability_publishes_copy_on_write_year_partitions(tmp_path) -> None:
+    from data_analysts.paths import DataAnalystsContext
+    from data_analysts.tej_tradability import publish_bounded_tradability_rows
+
+    context = DataAnalystsContext.from_paths("DataAnalysts", tmp_path)
+    rows = [
+        {"date": "2024-01-02", "ticker": "1101", "source_available_date": "2024-01-02", "source_collection": "1101"},
+        {"date": "2025-01-02", "ticker": "1101", "source_available_date": "2025-01-02", "source_collection": "1101"},
+    ]
+    result = publish_bounded_tradability_rows(
+        context, rows, build_start="2024-01-02", build_end="2025-01-02",
+        data_cutoff_at="2026-09-03T00:00:00Z",
+    )
+    manifest = result["manifest"]
+    assert manifest["row_count"] == 2
+    assert len(manifest["artifact_paths"]) == 2
+    assert all("/versions/" in path for path in manifest["artifact_paths"])
+    assert context.store_path("manifests", "daily_tradability.json").is_file()

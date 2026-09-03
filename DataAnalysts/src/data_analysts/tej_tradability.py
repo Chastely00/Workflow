@@ -4,8 +4,18 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
+import hashlib
+import json
+import os
 from time import perf_counter
 from typing import Any
+import uuid
+
+import pyarrow as pa
+import pyarrow.parquet as pq
+
+from data_analysts.artifacts import atomic_write_text
+from data_analysts.paths import DataAnalystsContext
 
 
 _PROJECTION = {
@@ -48,6 +58,73 @@ def extract_bounded_tradability_rows(
         "collection_count": len(names),
         "row_count": len(rows),
         "mongo_extract_seconds": perf_counter() - started,
+    }
+
+
+def publish_bounded_tradability_rows(
+    context: DataAnalystsContext,
+    rows: list[dict[str, Any]],
+    *,
+    build_start: str,
+    build_end: str,
+    data_cutoff_at: str,
+) -> dict[str, Any]:
+    """Publish a bounded COW APISKTATTR version without SQLite key staging."""
+    started = perf_counter()
+    if not rows:
+        raise ValueError("daily_tradability bounded publication cannot be empty")
+    keys = [(str(row["date"]), str(row["ticker"])) for row in rows]
+    if keys != sorted(keys) or any(left == right for left, right in zip(keys, keys[1:])):
+        raise ValueError("daily_tradability rows must be pre-sorted and unique")
+    version = uuid.uuid4().hex
+    by_year: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        row["data_cutoff_at"] = data_cutoff_at
+        by_year.setdefault(str(row["date"])[:4], []).append(row)
+    paths: list[str] = []
+    inventory: list[dict[str, Any]] = []
+    for year, year_rows in sorted(by_year.items()):
+        relative = f"canonical/raw/daily_tradability/versions/{version}/year={year}/part.parquet"
+        target = context.artifact_path(relative)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        staging = target.with_name(f".{target.name}.{uuid.uuid4().hex}.staging")
+        table = pa.Table.from_pylist(year_rows)
+        pq.write_table(table, staging, compression="zstd")
+        os.replace(staging, target)
+        paths.append(relative)
+        inventory.append(_inventory_item(relative, target, table.num_rows))
+    schema_fingerprints = {item["schema_fingerprint"] for item in inventory}
+    if len(schema_fingerprints) != 1:
+        raise ValueError("daily_tradability yearly parquet schemas differ")
+    manifest = {
+        "artifact_id": "daily_tradability", "contract_key": "daily_tradability",
+        "variant": "default", "schema_version": "1.0", "layer": "raw",
+        "source_families": ["daily_tradability"],
+        "source_collections": sorted({str(row["source_collection"]) for row in rows}),
+        "row_count": len(rows), "date_range": [build_start, build_end],
+        "availability_date_range": [build_start, build_end],
+        "columns": list(pa.Table.from_pylist(rows[:1]).column_names),
+        "schema_fingerprint": schema_fingerprints.pop(), "partitioning": ["year"],
+        "artifact_paths": paths, "partition_inventory": inventory,
+        "pit_policy": "source_available_date", "data_cutoff_at": data_cutoff_at,
+        "duplicate_count": 0, "omitted_row_count": 0, "status": "ready",
+        "created_at": datetime.now().astimezone().isoformat(), "active_version": version,
+        "build_start": build_start, "build_end": build_end,
+        "publication_policy_version": "bounded_arrow_cow_v1",
+    }
+    atomic_write_text(
+        context.store_path("manifests", "daily_tradability.json"),
+        json.dumps(manifest, indent=2, sort_keys=True),
+    )
+    return {"manifest": manifest, "publish_seconds": perf_counter() - started}
+
+
+def _inventory_item(relative: str, path: Any, row_count: int) -> dict[str, Any]:
+    schema_fingerprint = hashlib.sha256(pq.read_schema(path).serialize().to_pybytes()).hexdigest()
+    return {
+        "path": relative, "content_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+        "size": path.stat().st_size, "row_count": row_count,
+        "schema_fingerprint": schema_fingerprint,
     }
 
 

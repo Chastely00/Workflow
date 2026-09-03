@@ -43,6 +43,7 @@ REQUIRED_STATIC_ARTIFACT_IDS = {
     "daily_price_volume",
     "trading_calendar",
     "daily_tradability",
+    "daily_market_state",
     "daily_chip",
     "monthly_sales",
     "financial_statement_raw",
