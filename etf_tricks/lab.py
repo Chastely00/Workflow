@@ -33,6 +33,12 @@ from .validation import (
 )
 
 
+def _market_state_coverage_tickers(tickers: pd.Series) -> pd.Series:
+    """Return the common-stock ticker keys governed by daily_market_state."""
+    normalized = tickers.astype("string")
+    return normalized.loc[normalized.str.fullmatch(r"\d{4}", na=False)]
+
+
 class ETFTrickLab:
     def __init__(self, gateway: DataGateway) -> None:
         self.gateway = gateway
@@ -122,7 +128,13 @@ class ETFTrickLab:
             daily["date"].between(run_days[0], run_days[-1])
         ].copy()
         state_keys = market_state.loc[:, ["date", "ticker"]]
-        daily_state_coverage = requested_daily.loc[:, ["date", "ticker"]].merge(
+        state_required_daily = requested_daily.loc[
+            requested_daily["ticker"].isin(
+                _market_state_coverage_tickers(requested_daily["ticker"])
+            ),
+            ["date", "ticker"],
+        ]
+        daily_state_coverage = state_required_daily.merge(
             state_keys,
             on=["date", "ticker"],
             how="left",

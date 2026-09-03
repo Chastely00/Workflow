@@ -21,6 +21,16 @@ from etf_tricks.universe import UniverseEngine
 
 
 _SHA256 = "a" * 64
+
+
+def test_market_state_coverage_requires_only_four_digit_candidate_tickers() -> None:
+    required = lab_module._market_state_coverage_tickers(
+        pd.Series(["1101", "0050", "IX0001", "IR0111", "KRTWIT", "1101A"])
+    )
+
+    assert required.tolist() == ["1101", "0050"]
+
+
 _MARKET_STATE_COLUMNS = (
     "date", "ticker", "market", "market_state", "state_reason",
     "amount_state", "authoritative_traded_value", "amount_zero_authorized",
@@ -681,7 +691,7 @@ def test_run_all_rejects_requested_scope_dpv_key_without_certified_state(
     tmp_path, monkeypatch
 ):
     start, end = _data_analysts_fixture(
-        tmp_path, dpv_only_key=("2025-02-05", "IX0001")
+        tmp_path, dpv_only_key=("2025-02-05", "1101")
     )
 
     def reject_late_calculation(*args, **kwargs):
