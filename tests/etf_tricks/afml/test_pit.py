@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+from types import SimpleNamespace
 
 import pandas as pd
 import pytest
@@ -105,6 +106,30 @@ def test_current_manifest_hash_mismatch_fails_closed(pit_fixture):
 
     with pytest.raises(PITContractError, match="daily_price_volume"):
         pit_fixture.adapter.prepare(stale, pit_fixture.boundaries, AFMLConfig())
+
+
+def test_daily_market_state_uses_byte_bound_authority_hash(pit_fixture, monkeypatch):
+    base = copy.deepcopy(pit_fixture.base)
+    authority = SimpleNamespace(manifest_sha256="d" * 64)
+    monkeypatch.setattr(
+        pit_fixture.adapter.gateway,
+        "capture_market_state_authority",
+        lambda: authority,
+    )
+    original_load_manifest = pit_fixture.adapter.gateway.load_manifest
+    monkeypatch.setattr(
+        pit_fixture.adapter.gateway,
+        "load_manifest",
+        lambda artifact_id: {} if artifact_id == "daily_market_state" else original_load_manifest(artifact_id),
+    )
+    base.metadata["manifest_hashes"]["daily_market_state"] = authority.manifest_sha256
+
+    inputs = pit_fixture.adapter.prepare(base, pit_fixture.boundaries, AFMLConfig())
+
+    assert (
+        inputs.source_identity["manifest_hashes"]["daily_market_state"]
+        == authority.manifest_sha256
+    )
 
 
 def test_flagged_amount_fails_default_quality_policy(pit_fixture):

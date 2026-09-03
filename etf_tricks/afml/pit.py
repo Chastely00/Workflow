@@ -135,7 +135,14 @@ class PITSourceAdapter:
                 raise PITContractError(
                     f"cannot verify upstream artifact {artifact_id}: {exc}"
                 ) from exc
-            current = _upstream_manifest_sha256(manifest)
+            # ETF results bind daily_market_state through its byte-immutable
+            # authority snapshot.  Other source manifests use the canonical
+            # JSON hash stored in result metadata.
+            current = (
+                self.gateway.capture_market_state_authority().manifest_sha256
+                if artifact_id == "daily_market_state"
+                else _upstream_manifest_sha256(manifest)
+            )
             if current != expected:
                 raise PITContractError(
                     f"source identity mismatch for {artifact_id}: "
