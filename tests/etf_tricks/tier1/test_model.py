@@ -57,3 +57,11 @@ def test_oof_supports_registered_hist_gradient_boosting_trial() -> None:
 
     assert result.loc[[8, 9, 10, 11], "p1"].notna().all()
     assert set(result.loc[[8, 9, 10, 11], "prediction_kind"]) == {"OOF_CALIBRATED"}
+
+
+def test_oof_supports_fold_local_static_etf_categories() -> None:
+    frame = pd.DataFrame({"f": [0.0, 1.0] * 6, "etf_id": ["x", "y"] * 6, "y_direction": [-1, 1] * 6, "t0": pd.date_range("2024-01-01", periods=12), "t1": pd.date_range("2024-01-01", periods=12)})
+
+    result = oof_logistic_predictions(frame, [([*range(8)], [8, 9, 10, 11])], ["f"], categorical_columns=("etf_id",))
+
+    assert result.loc[[8, 9, 10, 11], "p1"].notna().all()
