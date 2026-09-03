@@ -2,20 +2,20 @@
 
 ## 目標
 
-以已驗證的 ETF Tricks Daily NAV、ETF 成交金額、成分與可執行交易資料為唯一上游，完成可重用、PIT 安全、可復現的 AFML 研究與紙上交易流程：Tier 1 方向機會、Tier 2 Meta-Labeling、Tier 3 Equal / Inverse-vol / HRP 資金配置與實際成分股交易帳，最後以 DSR 與 sealed test 做出 `NOT_READY`、`RESEARCH_ONLY` 或 `PAPER_TRADE_ELIGIBLE` 的證據化結論。此 Goal 不授權 live trading。
+以已 finalized 的 AFML dataset 為 immutable input，完成可重用、PIT 安全、可復現的 AFML 研究與紙上交易流程：Tier 1 方向機會、Tier 2 Meta-Labeling、Tier 3 Equal / Inverse-vol / HRP 資金配置與實際成分股交易帳，最後以 DSR 與 sealed test 做出 `NOT_READY`、`RESEARCH_ONLY` 或 `PAPER_TRADE_ELIGIBLE` 的證據化結論。此 Goal 不授權 live trading。
 
 ## 每次恢復時的強制程序
 
 1. 讀取 `AGENTS.md`、本檔、`README.md`，以及當前唯一活動的編號 Prompt；讀取其要求的上游 Prompt 與計畫。權威順序由 `README.md` 定義。
-2. 讀取上游 artifact manifest、schema、coverage、code/config/input hash 與 readiness 報告。確認資料可用時間、PIT join、未來 append 不改寫既有結果、無存活者/下市/停牌/公司行動污染。資料契約不成立時，只修復或回報該契約；不得訓練、回測或宣稱績效。
+2. 讀取 immutable AFML dataset artifact 的 manifest、schema、coverage、code/config/input hash 與 readiness 報告。現行基線為 `.artifacts/etf_afml/full-history-20050103-20260707-v5`，其狀態必須仍為 `READY_FOR_BOUNDED_RESEARCH_WITH_LIMITATIONS` 且 `ML_ELIGIBLE`。確認資料可用時間、PIT join、未來 append 不改寫既有結果、無存活者/下市/停牌/公司行動污染。除非 artifact 契約失效，不得重建 01/02；資料契約不成立時，只修復或回報該契約，不得訓練、回測或宣稱績效。
 3. 維持一份可提交的 append-only progress/decision record：時間、active stage、輸入版本、假設、設定、驗證、失敗原因、下一個最小行動。每次完成 bounded slice 後更新它與 manifest；不得以聊天摘要取代磁碟證據。
 4. 一次只執行一個 stage。前一 stage 的 hand-off artifact、hash 與 gate 尚未完成，不得進入下一 stage，也不得以 tuning 繞過失敗。
 
 ## 固定階段與交接
 
 ```text
-01/02 AFML dataset（Dollar bar、FFD、PIT 特徵與事件）
--> 03/04 Tier 1（成本感知、only-long {-1,+1}、purged/embargo OOF p1）
+01/02 AFML dataset 已完成（Dollar bar、FFD、PIT 特徵、events、labels）；每次只做 artifact/readiness 驗證，不重建
+-> 03/04 Tier 1（目前活動起點：成本感知、only-long {-1,+1}、purged/embargo OOF p1）
 -> 05 Tier 2（只過濾 Tier 1 候選的 {0,1}、只用 OOF/walk-forward p1）
 -> 06 Tier 3（同一訊號下 Equal、Inverse-vol、HRP 與 constituent paper ledger）
 -> 07 registry、PSR/DSR、sealed test 與最終驗收
