@@ -1,0 +1,180 @@
+{
+  "schema_version": "1.0",
+  "families": {
+    "trading_calendar": {
+      "database": "TEJ",
+      "collection": "TRADEDAY_TWSE",
+      "availability_field": "zdate",
+      "date_normalization": "date_only",
+      "logical_key": ["date", "market"],
+      "revision_field": null,
+      "preserve_revisions": false,
+      "selected_view": false
+    },
+    "daily_tradability": {
+      "database": "APISTKATTR",
+      "collection_pattern": "{ticker}",
+      "availability_field": "mdate",
+      "date_normalization": "date_only",
+      "logical_key": ["date", "ticker"],
+      "revision_field": null,
+      "preserve_revisions": false,
+      "selected_view": false
+    },
+    "daily_chip": {
+      "database": "APISHRACT",
+      "collection_pattern": "{ticker}",
+      "availability_field": "mdate",
+      "date_normalization": "date_only",
+      "logical_key": ["date", "ticker"],
+      "revision_field": null,
+      "preserve_revisions": false,
+      "selected_view": false
+    },
+    "monthly_sales": {
+      "database": "TEJ",
+      "collection": "APISALE",
+      "availability_field": "annd_s",
+      "date_normalization": "date_only",
+      "logical_key": ["ticker", "source_period_date"],
+      "revision_field": "mdate",
+      "preserve_revisions": true,
+      "selected_view": false
+    },
+    "financial_statement_raw": {
+      "database": "TEJ",
+      "collection": "AINVFINB",
+      "availability_field": "key3",
+      "date_normalization": "date_only",
+      "logical_key": ["ticker", "no", "sem", "curr", "merg", "period_end_date", "source_available_date", "revision_date"],
+      "revision_field": "mdate",
+      "preserve_revisions": true,
+      "selected_view": false
+    },
+    "financial_statement_pit_selected": {
+      "database": "derived",
+      "collection": "financial_statement_raw",
+      "availability_field": "source_available_date",
+      "date_normalization": "date_only",
+      "logical_key": ["ticker", "no", "sem", "curr", "merg", "period_end_date"],
+      "revision_field": "revision_date",
+      "source_timestamp_tie_breaker": {
+        "field": "key3",
+        "scope": "same_normalized_source_available_date",
+        "order": "max_timestamp"
+      },
+      "preserve_revisions": false,
+      "selected_view": true
+    },
+    "self_reported_numbers_raw": {
+      "database": "TEJ",
+      "collection": "AFESTM1",
+      "availability_field": "annd",
+      "date_normalization": "date_only",
+      "logical_key": ["ticker", "key3", "sem", "curr", "merg", "period_end_date", "source_available_date", "revision_date"],
+      "revision_field": "mdate",
+      "preserve_revisions": true,
+      "selected_view": false
+    },
+    "self_reported_numbers_pit_selected": {
+      "database": "derived",
+      "collection": "self_reported_numbers_raw",
+      "availability_field": "source_available_date",
+      "date_normalization": "date_only",
+      "logical_key": ["ticker", "key3", "sem", "curr", "merg", "period_end_date"],
+      "revision_field": "revision_date",
+      "preserve_revisions": false,
+      "selected_view": true
+    },
+    "director_supervisor_holdings": {
+      "database": "TEJ",
+      "collection": "APIBSTN1",
+      "availability_field": "mdate",
+      "date_normalization": "date_only",
+      "logical_key": ["ticker", "source_date"],
+      "revision_field": "mdate",
+      "preserve_revisions": true,
+      "selected_view": false
+    },
+    "board_reelection_statistics": {
+      "database": "TEJ",
+      "collection": "APICHGSTAT",
+      "availability_field": "mdate",
+      "date_normalization": "date_only",
+      "logical_key": ["ticker", "source_date"],
+      "revision_field": "mdate",
+      "preserve_revisions": true,
+      "selected_view": false
+    },
+    "executive_change_events": {
+      "database": "TEJ",
+      "collection": "APIDIRCHG",
+      "availability_field": "mdate",
+      "date_normalization": "date_only",
+      "logical_key": ["ticker", "source_date"],
+      "revision_field": "mdate",
+      "preserve_revisions": true,
+      "selected_view": false
+    },
+    "merger_acquisition_events": {
+      "database": "TEJ",
+      "collection": "APIMA",
+      "availability_field": "mdate",
+      "date_normalization": "date_only",
+      "logical_key": ["ticker", "source_date"],
+      "revision_field": "mdate",
+      "preserve_revisions": true,
+      "selected_view": false
+    },
+    "private_placement_relation_events": {
+      "database": "TEJ",
+      "collection": "APISTKPRV",
+      "availability_field": "mdate",
+      "date_normalization": "date_only",
+      "logical_key": ["ticker", "source_date"],
+      "revision_field": "mdate",
+      "preserve_revisions": true,
+      "selected_view": false
+    },
+    "insider_transfer_completed": {
+      "database": "TEJ",
+      "collection": "APITRANS1",
+      "availability_field": "mdate",
+      "date_normalization": "date_only",
+      "logical_key": ["ticker", "source_date"],
+      "revision_field": "mdate",
+      "preserve_revisions": true,
+      "selected_view": false
+    },
+    "insider_transfer_declared_not_completed": {
+      "database": "TEJ",
+      "collection": "APITRANS2",
+      "availability_field": "mdate",
+      "date_normalization": "date_only",
+      "logical_key": ["ticker", "source_date"],
+      "revision_field": "mdate",
+      "preserve_revisions": true,
+      "selected_view": false
+    },
+    "treasury_stock_events": {
+      "database": "TEJ",
+      "collection": "APITRS",
+      "availability_field": "mdate",
+      "date_normalization": "date_only",
+      "logical_key": ["ticker", "source_date"],
+      "revision_field": "mdate",
+      "preserve_revisions": true,
+      "selected_view": false
+    },
+    "taiwan_index_futures_near_month": {
+      "database": "Futures_TAIFEX_TX",
+      "collection": "TX_1",
+      "availability_field": "日期",
+      "date_normalization": "date_only",
+      "logical_key": ["date", "contract"],
+      "revision_field": null,
+      "preserve_revisions": false,
+      "selected_view": false
+    }
+  }
+}

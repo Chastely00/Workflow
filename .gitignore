@@ -3,6 +3,10 @@
 .superpowers/
 .artifacts/
 
+# DataAnalysts source is versioned; its locally materialized parquet, manifests,
+# diagnostics, and run state are governed runtime data and must never be committed.
+DataAnalysts/data_store/
+
 # Project virtual environment
 .venv/
 

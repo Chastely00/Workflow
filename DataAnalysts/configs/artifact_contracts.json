@@ -1,0 +1,165 @@
+{
+  "schema_version": "1.0",
+  "artifacts": [
+    {
+      "artifact_id": "security_master", "layer": "raw", "base_path": "canonical/raw/security_master", "file_name": "security_master.parquet",
+      "required_columns": ["ticker", "data_cutoff_at"], "logical_key": ["ticker"], "publication_mode": "full_replace",
+      "partition_name": null, "partition_field": null, "date_field": null, "availability_field": null,
+      "pit_policy": "snapshot_cutoff", "source_families": ["security_master"]
+    },
+    {
+      "artifact_id": "daily_price_volume", "layer": "raw", "base_path": "canonical/raw/daily_price_volume", "file_name": "part.parquet",
+      "required_columns": ["date", "ticker", "open", "high", "low", "close", "volume", "traded_value", "adj_factor", "adj_close", "data_cutoff_at"], "logical_key": ["date", "ticker"], "publication_mode": "partition_upsert",
+      "partition_name": "year", "partition_field": "date", "date_field": "date", "availability_field": "date",
+      "pit_policy": "source_date_lagged_to_decision_date", "source_families": ["daily_price_volume", "dividend_policy", "capital_formation"]
+    },
+    {
+      "artifact_id": "trading_calendar", "layer": "raw", "base_path": "canonical/raw/trading_calendar", "file_name": "trading_calendar.parquet",
+      "required_columns": ["date", "market", "is_trading_day", "source_available_date", "data_cutoff_at"], "logical_key": ["date", "market"], "publication_mode": "full_replace",
+      "partition_name": null, "partition_field": null, "date_field": "date", "availability_field": "source_available_date",
+      "pit_policy": "source_available_date", "source_families": ["trading_calendar"]
+    },
+    {
+      "artifact_id": "daily_tradability", "layer": "raw", "base_path": "canonical/raw/daily_tradability", "file_name": "part.parquet",
+      "required_columns": ["date", "ticker", "source_available_date", "data_cutoff_at"], "logical_key": ["date", "ticker"], "publication_mode": "partition_upsert",
+      "partition_name": "year", "partition_field": "date", "date_field": "date", "availability_field": "source_available_date",
+      "pit_policy": "source_available_date", "source_families": ["daily_tradability"]
+    },
+    {
+      "artifact_id": "daily_chip", "layer": "raw", "base_path": "canonical/raw/daily_chip", "file_name": "part.parquet",
+      "required_columns": ["date", "ticker", "source_available_date", "data_cutoff_at"], "logical_key": ["date", "ticker"], "publication_mode": "partition_upsert",
+      "partition_name": "year", "partition_field": "date", "date_field": "date", "availability_field": "source_available_date",
+      "pit_policy": "source_available_date", "source_families": ["daily_chip"]
+    },
+    {
+      "artifact_id": "monthly_sales", "layer": "raw", "base_path": "canonical/raw/monthly_sales", "file_name": "part.parquet",
+      "required_columns": ["ticker", "source_period_date", "source_available_date", "data_cutoff_at"], "logical_key": ["ticker", "source_period_date", "source_available_date"], "publication_mode": "partition_upsert",
+      "partition_name": "available_year", "partition_field": "source_available_date", "date_field": "source_available_date", "availability_field": "source_available_date",
+      "pit_policy": "source_available_date", "source_families": ["monthly_sales"]
+    },
+    {
+      "artifact_id": "financial_statement_raw", "layer": "raw", "base_path": "canonical/raw/financial_statement_raw", "file_name": "part.parquet",
+      "required_columns": ["ticker", "no", "sem", "curr", "merg", "period_end_date", "source_available_date", "revision_date", "data_cutoff_at"], "logical_key": ["ticker", "no", "sem", "curr", "merg", "period_end_date", "source_available_date", "revision_date"], "publication_mode": "partition_upsert",
+      "partition_name": "available_year", "partition_field": "source_available_date", "date_field": "source_available_date", "availability_field": "source_available_date",
+      "pit_policy": "source_available_date", "source_families": ["financial_statement_raw"]
+    },
+    {
+      "artifact_id": "self_reported_numbers_raw", "layer": "raw", "base_path": "canonical/raw/self_reported_numbers_raw", "file_name": "part.parquet",
+      "required_columns": ["ticker", "key3", "sem", "curr", "merg", "period_end_date", "source_available_date", "revision_date", "data_cutoff_at"], "logical_key": ["ticker", "key3", "sem", "curr", "merg", "period_end_date", "source_available_date", "revision_date"], "publication_mode": "partition_upsert",
+      "partition_name": "available_year", "partition_field": "source_available_date", "date_field": "source_available_date", "availability_field": "source_available_date",
+      "pit_policy": "source_available_date", "source_families": ["self_reported_numbers_raw"]
+    },
+    {
+      "artifact_id": "taiwan_index_futures_near_month", "layer": "raw", "base_path": "canonical/raw/taiwan_index_futures_near_month", "file_name": "part.parquet",
+      "required_columns": ["date", "contract", "source_available_date", "data_cutoff_at"], "logical_key": ["date", "contract"], "publication_mode": "partition_upsert",
+      "partition_name": "year", "partition_field": "date", "date_field": "date", "availability_field": "source_available_date",
+      "pit_policy": "source_available_date", "source_families": ["taiwan_index_futures_near_month"]
+    },
+    {
+      "artifact_id": "director_supervisor_holdings", "layer": "raw", "base_path": "canonical/raw/director_supervisor_holdings", "file_name": "part.parquet",
+      "required_columns": ["ticker", "source_date", "source_available_date", "data_cutoff_at"], "logical_key": ["ticker", "source_date", "source_available_date"], "publication_mode": "partition_upsert",
+      "partition_name": "available_year", "partition_field": "source_available_date", "date_field": "source_available_date", "availability_field": "source_available_date",
+      "pit_policy": "source_available_date", "source_families": ["director_supervisor_holdings"]
+    },
+    {
+      "artifact_id": "board_reelection_statistics", "layer": "raw", "base_path": "canonical/raw/board_reelection_statistics", "file_name": "part.parquet",
+      "required_columns": ["ticker", "source_date", "source_available_date", "data_cutoff_at"], "logical_key": ["ticker", "source_date", "source_available_date"], "publication_mode": "partition_upsert",
+      "partition_name": "available_year", "partition_field": "source_available_date", "date_field": "source_available_date", "availability_field": "source_available_date",
+      "pit_policy": "source_available_date", "source_families": ["board_reelection_statistics"]
+    },
+    {
+      "artifact_id": "executive_change_events", "layer": "raw", "base_path": "canonical/raw/executive_change_events", "file_name": "part.parquet",
+      "required_columns": ["ticker", "source_date", "source_available_date", "data_cutoff_at"], "logical_key": ["ticker", "source_date", "source_available_date"], "publication_mode": "partition_upsert",
+      "partition_name": "available_year", "partition_field": "source_available_date", "date_field": "source_available_date", "availability_field": "source_available_date",
+      "pit_policy": "source_available_date", "source_families": ["executive_change_events"], "allow_empty": true
+    },
+    {
+      "artifact_id": "merger_acquisition_events", "layer": "raw", "base_path": "canonical/raw/merger_acquisition_events", "file_name": "part.parquet",
+      "required_columns": ["ticker", "source_date", "source_available_date", "data_cutoff_at"], "logical_key": ["ticker", "source_date", "source_available_date"], "publication_mode": "partition_upsert",
+      "partition_name": "available_year", "partition_field": "source_available_date", "date_field": "source_available_date", "availability_field": "source_available_date",
+      "pit_policy": "source_available_date", "source_families": ["merger_acquisition_events"], "allow_empty": true
+    },
+    {
+      "artifact_id": "private_placement_relation_events", "layer": "raw", "base_path": "canonical/raw/private_placement_relation_events", "file_name": "part.parquet",
+      "required_columns": ["ticker", "source_date", "source_available_date", "data_cutoff_at"], "logical_key": ["ticker", "source_date", "source_available_date"], "publication_mode": "partition_upsert",
+      "partition_name": "available_year", "partition_field": "source_available_date", "date_field": "source_available_date", "availability_field": "source_available_date",
+      "pit_policy": "source_available_date", "source_families": ["private_placement_relation_events"], "allow_empty": true
+    },
+    {
+      "artifact_id": "insider_transfer_completed", "layer": "raw", "base_path": "canonical/raw/insider_transfer_completed", "file_name": "part.parquet",
+      "required_columns": ["ticker", "source_date", "source_available_date", "data_cutoff_at"], "logical_key": ["ticker", "source_date", "source_available_date"], "publication_mode": "partition_upsert",
+      "partition_name": "available_year", "partition_field": "source_available_date", "date_field": "source_available_date", "availability_field": "source_available_date",
+      "pit_policy": "source_available_date", "source_families": ["insider_transfer_completed"], "allow_empty": true
+    },
+    {
+      "artifact_id": "insider_transfer_declared_not_completed", "layer": "raw", "base_path": "canonical/raw/insider_transfer_declared_not_completed", "file_name": "part.parquet",
+      "required_columns": ["ticker", "source_date", "source_available_date", "data_cutoff_at"], "logical_key": ["ticker", "source_date", "source_available_date"], "publication_mode": "partition_upsert",
+      "partition_name": "available_year", "partition_field": "source_available_date", "date_field": "source_available_date", "availability_field": "source_available_date",
+      "pit_policy": "source_available_date", "source_families": ["insider_transfer_declared_not_completed"], "allow_empty": true
+    },
+    {
+      "artifact_id": "treasury_stock_events", "layer": "raw", "base_path": "canonical/raw/treasury_stock_events", "file_name": "part.parquet",
+      "required_columns": ["ticker", "source_date", "source_available_date", "data_cutoff_at"], "logical_key": ["ticker", "source_date", "source_available_date"], "publication_mode": "partition_upsert",
+      "partition_name": "available_year", "partition_field": "source_available_date", "date_field": "source_available_date", "availability_field": "source_available_date",
+      "pit_policy": "source_available_date", "source_families": ["treasury_stock_events"], "allow_empty": true
+    },
+    {
+      "artifact_id": "financial_statement_pit_selected", "layer": "derived", "base_path": "canonical/derived/pit/financial_statement_pit_selected", "file_name": "part.parquet",
+      "required_columns": ["decision_date", "ticker", "no", "sem", "curr", "merg", "period_end_date", "source_available_date", "revision_date", "data_cutoff_at"], "logical_key": ["decision_date", "ticker", "no", "sem", "curr", "merg", "period_end_date"], "publication_mode": "partition_upsert",
+      "partition_name": "decision_year", "partition_field": "decision_date", "date_field": "decision_date", "availability_field": "source_available_date",
+      "pit_policy": "selected_pit_decision_date", "source_families": ["financial_statement_raw"]
+    },
+    {
+      "artifact_id": "self_reported_numbers_pit_selected", "layer": "derived", "base_path": "canonical/derived/pit/self_reported_numbers_pit_selected", "file_name": "part.parquet",
+      "required_columns": ["decision_date", "ticker", "key3", "sem", "curr", "merg", "period_end_date", "source_available_date", "revision_date", "data_cutoff_at"], "logical_key": ["decision_date", "ticker", "key3", "sem", "curr", "merg", "period_end_date"], "publication_mode": "partition_upsert",
+      "partition_name": "decision_year", "partition_field": "decision_date", "date_field": "decision_date", "availability_field": "source_available_date",
+      "pit_policy": "selected_pit_decision_date", "source_families": ["self_reported_numbers_raw"]
+    },
+    {
+      "artifact_id": "dividend_events", "layer": "derived", "base_path": "canonical/derived/events/dividend_events", "file_name": "part.parquet",
+      "required_columns": ["event_date", "ex_date", "ticker", "cash_dividend_per_share", "stock_dividend_ratio", "source_dataset_id", "source_row_id", "data_cutoff_at"], "logical_key": ["event_date", "ticker", "source_dataset_id", "source_row_id"], "publication_mode": "partition_upsert",
+      "partition_name": "event_year", "partition_field": "event_date", "date_field": "event_date", "availability_field": "event_date",
+      "pit_policy": "event_date", "source_families": ["dividend_policy"], "allow_empty": true
+    },
+    {
+      "artifact_id": "capital_action_events", "layer": "derived", "base_path": "canonical/derived/events/capital_action_events", "file_name": "part.parquet",
+      "required_columns": ["event_date", "ex_date", "ticker", "action_type", "share_multiplier", "cash_return_per_share", "source_dataset_id", "source_row_id", "data_cutoff_at"], "logical_key": ["event_date", "ticker", "source_dataset_id", "source_row_id"], "publication_mode": "partition_upsert",
+      "partition_name": "event_year", "partition_field": "event_date", "date_field": "event_date", "availability_field": "event_date",
+      "pit_policy": "event_date", "source_families": ["capital_formation"], "allow_empty": true
+    },
+    {
+      "artifact_id": "corporate_actions", "layer": "raw", "base_path": "canonical/raw/corporate_actions", "file_name": "part.parquet",
+      "required_columns": ["event_date", "ticker", "action_type", "cash_amount", "share_multiplier", "source_dataset_id", "source_row_id", "data_cutoff_at"], "logical_key": ["event_date", "ticker", "action_type", "source_dataset_id", "source_row_id"], "publication_mode": "partition_upsert",
+      "partition_name": "year", "partition_field": "event_date", "date_field": "event_date", "availability_field": "event_date",
+      "pit_policy": "event_date", "source_families": ["dividend_policy", "capital_formation"], "allow_empty": true
+    },
+    {
+      "artifact_id": "security_panel", "layer": "derived", "base_path": "canonical/derived/security_panel", "file_name": "security_panel.parquet",
+      "required_columns": ["as_of_date", "source_max_date", "ticker", "tradable", "adj_close", "market_cap", "adv20", "data_cutoff_at"], "logical_key": ["as_of_date", "ticker"], "publication_mode": "snapshot_by_value",
+      "partition_name": "as_of_date", "partition_field": "as_of_date", "date_field": "as_of_date", "availability_field": "as_of_date",
+      "pit_policy": "decision_date_panel", "source_families": ["daily_price_volume", "security_master"]
+    },
+    {
+      "artifact_id": "security_panel_history", "layer": "derived", "base_path": "canonical/derived/security_panel_history", "file_name": "part.parquet",
+      "required_columns": ["as_of_date", "effective_date", "source_max_date", "ticker", "tradable", "adj_close", "market_cap", "adv20", "data_cutoff_at"], "logical_key": ["as_of_date", "ticker"], "publication_mode": "partition_upsert",
+      "partition_name": "as_of_year", "partition_field": "as_of_date", "date_field": "as_of_date", "availability_field": "effective_date",
+      "pit_policy": "effective_next_trading_day_panel", "source_families": ["daily_price_volume", "security_master", "trading_calendar", "daily_tradability"]
+    }
+  ],
+  "universe_templates": [
+    {
+      "contract_key": "universe_{universe_id}:historical", "variant": "historical",
+      "artifact_id": "universe_{universe_id}", "layer": "derived", "base_path": "canonical/derived/universes/{universe_id}/membership_by_year", "file_name": "part.parquet",
+      "required_columns": ["as_of_date", "effective_date", "universe_id", "ticker", "rank", "included", "reason"], "logical_key": ["as_of_date", "universe_id", "ticker"], "publication_mode": "partition_upsert",
+      "partition_name": "as_of_year", "partition_field": "as_of_date", "date_field": "as_of_date", "availability_field": "effective_date",
+      "pit_policy": "effective_next_trading_day_membership", "source_families": ["security_panel_history"], "allow_empty": true
+    },
+    {
+      "contract_key": "universe_{universe_id}:exact_date", "variant": "exact_date",
+      "artifact_id": "universe_{universe_id}", "layer": "derived", "base_path": "canonical/derived/universes/{universe_id}/membership_by_date", "file_name": "membership.parquet",
+      "required_columns": ["as_of_date", "universe_id", "ticker", "rank"], "logical_key": ["as_of_date", "universe_id", "ticker"], "publication_mode": "snapshot_by_value",
+      "partition_name": "as_of_date", "partition_field": "as_of_date", "date_field": "as_of_date", "availability_field": "as_of_date",
+      "pit_policy": "decision_date_membership", "source_families": ["security_panel"], "allow_empty": true
+    }
+  ]
+}

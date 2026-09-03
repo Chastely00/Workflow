@@ -1,0 +1,406 @@
+{
+  "schema_version": "1.0",
+  "families": [
+    {
+      "family_id": "daily_price_volume",
+      "enabled": true,
+      "connection": "apiprcd",
+      "collection_pattern": "{ticker}",
+      "source_profile": "large_daily_panel",
+      "primary_key": ["date", "ticker"],
+      "date_fields": {
+        "source_date": "mdate"
+      },
+      "availability": {
+        "type": "same_day_after_close",
+        "field": "mdate"
+      },
+      "partitioning": ["year"],
+      "pit_policy": "source_date_lagged_to_decision_date",
+      "field_map": {
+        "date": "mdate",
+        "ticker": "coid",
+        "open": "open_d",
+        "high": "high_d",
+        "low": "low_d",
+        "close": "close_d",
+        "volume": "vol",
+        "traded_value": "amt",
+        "transaction_count": "trn",
+        "average_price": "avgprc",
+        "turnover": "turnover",
+        "shares_outstanding": "shares",
+        "market_cap": "mktcap",
+        "roi": "roi",
+        "per": "per",
+        "pbr": "pbr",
+        "dividend_yield": "div_yid",
+        "price_sales_ratio_tej": "psr_tej",
+        "data_cutoff_at": "data_cutoff_at"
+      }
+    },
+    {
+      "family_id": "security_master",
+      "enabled": true,
+      "connection": "tej",
+      "collection": "APISTOCK",
+      "source_profile": "small_snapshot",
+      "primary_key": ["ticker"],
+      "date_fields": {},
+      "availability": {
+        "type": "snapshot_as_of_cutoff"
+      },
+      "partitioning": ["single_file"],
+      "pit_policy": "snapshot_cutoff",
+      "field_map": {
+        "ticker": "coid",
+        "stock_name": "stk_name",
+        "english_name": "enm",
+        "list_date": "list_date",
+        "delist_date": "delist_date",
+        "main_industry": "main_ind_e",
+        "sub_industry": "sub_ind_e",
+        "market": "mkt",
+        "security_type": "stktp_e",
+        "data_cutoff_at": "data_cutoff_at"
+      }
+    },
+    {
+      "family_id": "dividend_policy",
+      "enabled": true,
+      "connection": "tej",
+      "collection": "APIMT1",
+      "source_profile": "medium_pit_table",
+      "primary_key": ["ticker", "source_date"],
+      "date_fields": {
+        "source_date": "mdate"
+      },
+      "event_date_fields": ["q1ex_date", "q2ex_date", "q3ex_date", "q4ex_date", "mex_date"],
+      "availability": {
+        "type": "source_available_date",
+        "field": "mdate"
+      },
+      "partitioning": ["available_year"],
+      "pit_policy": "source_available_date",
+      "field_map": {
+        "ticker": "coid",
+        "source_date": "mdate",
+        "source_available_date": "mdate",
+        "data_cutoff_at": "data_cutoff_at",
+        "q1ex_date": "q1ex_date",
+        "q1mt_div": "q1mt_div",
+        "q2ex_date": "q2ex_date",
+        "q2mt_div": "q2mt_div",
+        "q3ex_date": "q3ex_date",
+        "q3mt_div": "q3mt_div",
+        "q4ex_date": "q4ex_date",
+        "q4mt_div": "q4mt_div",
+        "mex_date": "mex_date",
+        "mt_mer": "mt_mer"
+      }
+    },
+    {
+      "family_id": "capital_formation",
+      "enabled": true,
+      "connection": "tej",
+      "collection": "APISTK1",
+      "source_profile": "medium_pit_table",
+      "primary_key": ["ticker", "source_date"],
+      "date_fields": {
+        "source_date": "mdate"
+      },
+      "availability": {
+        "type": "source_available_date",
+        "field": "mdate"
+      },
+      "partitioning": ["available_year"],
+      "pit_policy": "source_available_date",
+      "field_map": {
+        "ticker": "coid",
+        "source_date": "mdate",
+        "event_date": "mdate",
+        "source_available_date": "mdate",
+        "data_cutoff_at": "data_cutoff_at",
+        "pct_dec1": "pct_dec1",
+        "ashback": "ashback",
+        "slamt": "slamt",
+        "stk_join": "stk_join",
+        "precls": "precls",
+        "exprice": "exprice"
+      }
+    },
+    {
+      "family_id": "trading_calendar",
+      "enabled": true,
+      "connection": "tej",
+      "collection": "TRADEDAY_TWSE",
+      "source_profile": "small_snapshot",
+      "primary_key": ["date", "market"],
+      "date_fields": {
+        "source_date": "zdate"
+      },
+      "availability": {
+        "type": "source_available_date",
+        "field": "zdate"
+      },
+      "partitioning": ["single_file"],
+      "pit_policy": "source_available_date"
+    },
+    {
+      "family_id": "daily_tradability",
+      "enabled": true,
+      "connection": "apistkattr",
+      "collection_pattern": "{ticker}",
+      "source_profile": "large_daily_panel",
+      "primary_key": ["date", "ticker"],
+      "date_fields": {
+        "source_date": "mdate"
+      },
+      "availability": {
+        "type": "source_available_date",
+        "field": "mdate"
+      },
+      "partitioning": ["year"],
+      "pit_policy": "source_available_date"
+    },
+    {
+      "family_id": "daily_chip",
+      "enabled": true,
+      "connection": "apishract",
+      "collection_pattern": "{ticker}",
+      "source_profile": "large_daily_panel",
+      "primary_key": ["date", "ticker"],
+      "date_fields": {
+        "source_date": "mdate"
+      },
+      "availability": {
+        "type": "source_available_date",
+        "field": "mdate"
+      },
+      "partitioning": ["year"],
+      "pit_policy": "source_available_date"
+    },
+    {
+      "family_id": "monthly_sales",
+      "enabled": true,
+      "connection": "tej",
+      "collection": "APISALE",
+      "source_profile": "medium_pit_table",
+      "primary_key": ["ticker", "source_period_date", "source_available_date"],
+      "date_fields": {
+        "source_date": "annd_s"
+      },
+      "availability": {
+        "type": "source_available_date",
+        "field": "annd_s"
+      },
+      "partitioning": ["available_year"],
+      "pit_policy": "source_available_date"
+    },
+    {
+      "family_id": "financial_statement_raw",
+      "enabled": true,
+      "connection": "tej",
+      "collection": "AINVFINB",
+      "source_profile": "medium_pit_table",
+      "primary_key": [
+        "ticker",
+        "no",
+        "sem",
+        "curr",
+        "merg",
+        "period_end_date",
+        "source_available_date",
+        "revision_date"
+      ],
+      "date_fields": {
+        "source_date": "key3"
+      },
+      "availability": {
+        "type": "source_available_date",
+        "field": "key3"
+      },
+      "partitioning": ["available_year"],
+      "pit_policy": "source_available_date"
+    },
+    {
+      "family_id": "self_reported_numbers_raw",
+      "enabled": true,
+      "connection": "tej",
+      "collection": "AFESTM1",
+      "source_profile": "medium_pit_table",
+      "primary_key": [
+        "ticker",
+        "key3",
+        "sem",
+        "curr",
+        "merg",
+        "period_end_date",
+        "source_available_date",
+        "revision_date"
+      ],
+      "date_fields": {
+        "source_date": "annd"
+      },
+      "availability": {
+        "type": "source_available_date",
+        "field": "annd"
+      },
+      "partitioning": ["available_year"],
+      "pit_policy": "source_available_date"
+    },
+    {
+      "family_id": "taiwan_index_futures_near_month",
+      "enabled": true,
+      "connection": "futures_taifex_tx",
+      "collection": "TX_1",
+      "source_profile": "large_daily_panel",
+      "primary_key": ["date", "contract"],
+      "date_fields": {
+        "source_date": "日期"
+      },
+      "availability": {
+        "type": "source_available_date",
+        "field": "日期"
+      },
+      "partitioning": ["year"],
+      "pit_policy": "source_available_date"
+    },
+    {
+      "family_id": "director_supervisor_holdings",
+      "enabled": true,
+      "connection": "tej",
+      "collection": "APIBSTN1",
+      "source_profile": "medium_pit_table",
+      "primary_key": ["ticker", "source_date", "source_available_date"],
+      "date_fields": {
+        "source_date": "mdate"
+      },
+      "availability": {
+        "type": "source_available_date",
+        "field": "mdate"
+      },
+      "partitioning": ["available_year"],
+      "pit_policy": "source_available_date"
+    },
+    {
+      "family_id": "board_reelection_statistics",
+      "enabled": true,
+      "connection": "tej",
+      "collection": "APICHGSTAT",
+      "source_profile": "medium_pit_table",
+      "primary_key": ["ticker", "source_date", "source_available_date"],
+      "date_fields": {
+        "source_date": "mdate"
+      },
+      "availability": {
+        "type": "source_available_date",
+        "field": "mdate"
+      },
+      "partitioning": ["available_year"],
+      "pit_policy": "source_available_date"
+    },
+    {
+      "family_id": "executive_change_events",
+      "enabled": true,
+      "connection": "tej",
+      "collection": "APIDIRCHG",
+      "source_profile": "medium_pit_table",
+      "primary_key": ["ticker", "source_date", "source_available_date"],
+      "date_fields": {
+        "source_date": "mdate"
+      },
+      "availability": {
+        "type": "source_available_date",
+        "field": "mdate"
+      },
+      "partitioning": ["available_year"],
+      "pit_policy": "source_available_date"
+    },
+    {
+      "family_id": "merger_acquisition_events",
+      "enabled": true,
+      "connection": "tej",
+      "collection": "APIMA",
+      "source_profile": "medium_pit_table",
+      "primary_key": ["ticker", "source_date", "source_available_date"],
+      "date_fields": {
+        "source_date": "mdate"
+      },
+      "availability": {
+        "type": "source_available_date",
+        "field": "mdate"
+      },
+      "partitioning": ["available_year"],
+      "pit_policy": "source_available_date"
+    },
+    {
+      "family_id": "private_placement_relation_events",
+      "enabled": true,
+      "connection": "tej",
+      "collection": "APISTKPRV",
+      "source_profile": "medium_pit_table",
+      "primary_key": ["ticker", "source_date", "source_available_date"],
+      "date_fields": {
+        "source_date": "mdate"
+      },
+      "availability": {
+        "type": "source_available_date",
+        "field": "mdate"
+      },
+      "partitioning": ["available_year"],
+      "pit_policy": "source_available_date"
+    },
+    {
+      "family_id": "insider_transfer_completed",
+      "enabled": true,
+      "connection": "tej",
+      "collection": "APITRANS1",
+      "source_profile": "medium_pit_table",
+      "primary_key": ["ticker", "source_date", "source_available_date"],
+      "date_fields": {
+        "source_date": "mdate"
+      },
+      "availability": {
+        "type": "source_available_date",
+        "field": "mdate"
+      },
+      "partitioning": ["available_year"],
+      "pit_policy": "source_available_date"
+    },
+    {
+      "family_id": "insider_transfer_declared_not_completed",
+      "enabled": true,
+      "connection": "tej",
+      "collection": "APITRANS2",
+      "source_profile": "medium_pit_table",
+      "primary_key": ["ticker", "source_date", "source_available_date"],
+      "date_fields": {
+        "source_date": "mdate"
+      },
+      "availability": {
+        "type": "source_available_date",
+        "field": "mdate"
+      },
+      "partitioning": ["available_year"],
+      "pit_policy": "source_available_date"
+    },
+    {
+      "family_id": "treasury_stock_events",
+      "enabled": true,
+      "connection": "tej",
+      "collection": "APITRS",
+      "source_profile": "medium_pit_table",
+      "primary_key": ["ticker", "source_date", "source_available_date"],
+      "date_fields": {
+        "source_date": "mdate"
+      },
+      "availability": {
+        "type": "source_available_date",
+        "field": "mdate"
+      },
+      "partitioning": ["available_year"],
+      "pit_policy": "source_available_date"
+    }
+  ]
+}

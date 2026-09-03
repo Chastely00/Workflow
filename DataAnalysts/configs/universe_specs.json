@@ -1,0 +1,118 @@
+{
+  "schema_version": "1.0",
+  "universes": [
+    {
+      "universe_id": "tw_equity_all_listed",
+      "enabled": true,
+      "source": "security_panel",
+      "filters": [
+        {"field": "listed", "op": "eq", "value": true}
+      ],
+      "rank_by": [
+        {"field": "ticker", "direction": "asc"}
+      ]
+    },
+    {
+      "universe_id": "tw_common_stock_all",
+      "enabled": true,
+      "source": "security_panel",
+      "filters": [
+        {"field": "listed", "op": "eq", "value": true},
+        {"field": "security_type", "op": "eq", "value": "common_stock"}
+      ],
+      "rank_by": [
+        {"field": "ticker", "direction": "asc"}
+      ]
+    },
+    {
+      "universe_id": "tw_common_stock_tradable",
+      "enabled": true,
+      "source": "security_panel",
+      "filters": [
+        {"field": "listed", "op": "eq", "value": true},
+        {"field": "tradable", "op": "eq", "value": true},
+        {"field": "security_type", "op": "eq", "value": "common_stock"}
+      ],
+      "rank_by": [
+        {"field": "ticker", "direction": "asc"}
+      ]
+    },
+    {
+      "universe_id": "tw_equity_liquid_top100",
+      "enabled": true,
+      "source": "security_panel",
+      "filters": [
+        {"field": "listed", "op": "eq", "value": true},
+        {"field": "tradable", "op": "eq", "value": true},
+        {"field": "security_type", "op": "eq", "value": "common_stock"},
+        {"field": "market_cap", "op": "not_null"},
+        {"field": "adv20", "op": "gte", "value": 10000000}
+      ],
+      "rank_by": [
+        {"field": "market_cap", "direction": "desc"},
+        {"field": "ticker", "direction": "asc"}
+      ],
+      "limit": 100
+    },
+    {
+      "universe_id": "tw_equity_liquid_top300",
+      "enabled": true,
+      "source": "security_panel",
+      "filters": [
+        {"field": "listed", "op": "eq", "value": true},
+        {"field": "tradable", "op": "eq", "value": true},
+        {"field": "security_type", "op": "eq", "value": "common_stock"},
+        {"field": "market_cap", "op": "not_null"},
+        {"field": "adv20", "op": "gte", "value": 10000000}
+      ],
+      "rank_by": [
+        {"field": "market_cap", "direction": "desc"},
+        {"field": "ticker", "direction": "asc"}
+      ],
+      "limit": 300
+    },
+    {
+      "universe_id": "tw_equity_liquid_top500",
+      "enabled": true,
+      "source": "security_panel",
+      "filters": [
+        {"field": "listed", "op": "eq", "value": true},
+        {"field": "tradable", "op": "eq", "value": true},
+        {"field": "security_type", "op": "eq", "value": "common_stock"},
+        {"field": "market_cap", "op": "not_null"},
+        {"field": "adv20", "op": "gte", "value": 10000000}
+      ],
+      "rank_by": [
+        {"field": "market_cap", "direction": "desc"},
+        {"field": "ticker", "direction": "asc"}
+      ],
+      "limit": 500
+    },
+    {
+      "universe_id": "twse_common_stock",
+      "enabled": true,
+      "source": "security_panel",
+      "filters": [
+        {"field": "listed", "op": "eq", "value": true},
+        {"field": "security_type", "op": "eq", "value": "common_stock"},
+        {"field": "market", "op": "eq", "value": "TWSE"}
+      ],
+      "rank_by": [
+        {"field": "ticker", "direction": "asc"}
+      ]
+    },
+    {
+      "universe_id": "tpex_common_stock",
+      "enabled": true,
+      "source": "security_panel",
+      "filters": [
+        {"field": "listed", "op": "eq", "value": true},
+        {"field": "security_type", "op": "eq", "value": "common_stock"},
+        {"field": "market", "op": "eq", "value": "TPEX"}
+      ],
+      "rank_by": [
+        {"field": "ticker", "direction": "asc"}
+      ]
+    }
+  ]
+}

@@ -1,0 +1,30 @@
+{
+  "schema_version": "1.0",
+  "connections": {
+    "apiprcd": {
+      "uri_env": "DATA_ANALYSTS_MONGODB_URI",
+      "default_uri": "mongodb://localhost:27017/",
+      "database": "APIPRCD"
+    },
+    "tej": {
+      "uri_env": "DATA_ANALYSTS_MONGODB_URI",
+      "default_uri": "mongodb://localhost:27017/",
+      "database": "TEJ"
+    },
+    "apistkattr": {
+      "uri_env": "DATA_ANALYSTS_MONGODB_URI",
+      "default_uri": "mongodb://localhost:27017/",
+      "database": "APISTKATTR"
+    },
+    "apishract": {
+      "uri_env": "DATA_ANALYSTS_MONGODB_URI",
+      "default_uri": "mongodb://localhost:27017/",
+      "database": "APISHRACT"
+    },
+    "futures_taifex_tx": {
+      "uri_env": "DATA_ANALYSTS_MONGODB_URI",
+      "default_uri": "mongodb://localhost:27017/",
+      "database": "Futures_TAIFEX_TX"
+    }
+  }
+}
