@@ -67,15 +67,27 @@ def adf_start_vector(
     xx = suffix_xx[starts]
     xy = suffix_xy[starts]
     yy = suffix_yy[starts]
-    inverses = np.linalg.pinv(xx, hermitian=True)
-    coefficients = np.einsum("nij,nj->ni", inverses, xy)
+    # In normal ADF windows the design is full rank.  A batched solve avoids
+    # the SVD performed by ``pinv`` for every governed start.  Preserve the
+    # pseudo-inverse path for any degenerate batch, so numerical semantics do
+    # not silently change for rank-deficient histories.
+    try:
+        coefficients = np.linalg.solve(xx, xy[..., None])[..., 0]
+        beta_basis = np.zeros((len(xx), xx.shape[1]), dtype=float)
+        beta_basis[:, 1] = 1.0
+        beta_inverse_diagonal = np.linalg.solve(xx, beta_basis[..., None])[..., 1, 0]
+        ranks = np.full(len(xx), xx.shape[1], dtype=np.int64)
+    except np.linalg.LinAlgError:
+        inverses = np.linalg.pinv(xx, hermitian=True)
+        coefficients = np.einsum("nij,nj->ni", inverses, xy)
+        beta_inverse_diagonal = inverses[:, 1, 1]
+        ranks = np.linalg.matrix_rank(xx)
     residual_ss = (
         yy
         - 2.0 * np.einsum("ni,ni->n", coefficients, xy)
         + np.einsum("ni,nij,nj->n", coefficients, xx, coefficients)
     )
     residual_ss = np.maximum(residual_ss, 0.0)
-    ranks = np.linalg.matrix_rank(xx)
     observation_counts = len(row_times) - starts
     degrees_freedom = observation_counts - ranks
     variance = np.divide(
@@ -84,7 +96,7 @@ def adf_start_vector(
         out=np.full_like(residual_ss, np.nan),
         where=degrees_freedom > 0,
     )
-    beta_variance = variance * inverses[:, 1, 1]
+    beta_variance = variance * beta_inverse_diagonal
     beta_standard_error = np.sqrt(np.maximum(beta_variance, 0.0))
     statistics = np.divide(
         coefficients[:, 1],

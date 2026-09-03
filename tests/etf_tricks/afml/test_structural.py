@@ -71,6 +71,15 @@ def test_adf_start_vector_matches_statsmodels_for_every_governed_start():
     np.testing.assert_allclose(actual, expected, rtol=1e-9, atol=1e-9)
 
 
+def test_adf_start_vector_handles_rank_deficient_history():
+    starts, statistics = adf_start_vector(
+        np.ones(80), end=79, min_sample_length=30, lags=1
+    )
+
+    assert len(starts) == 51
+    assert np.isnan(statistics).all()
+
+
 def _structural_frame(size: int = 180) -> pd.DataFrame:
     rng = np.random.default_rng(41)
     dates = pd.bdate_range("2024-01-02", periods=size)
