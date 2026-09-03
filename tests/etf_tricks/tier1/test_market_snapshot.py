@@ -1,4 +1,5 @@
 import pandas as pd
+import json
 
 from etf_tricks.tier1.market_snapshot import ExecutionMarketSnapshot
 
@@ -50,3 +51,16 @@ def test_prepare_prices_derives_previous_close_and_requires_trading_state() -> N
     row = result.iloc[0]
     assert row["previous_close"] == 101.0
     assert row["is_legal_execution"]
+
+
+def test_loader_rejects_wrong_manifest_identity(tmp_path) -> None:
+    (tmp_path / "manifests").mkdir()
+    (tmp_path / "manifests" / "daily_price_volume.json").write_text(json.dumps({"artifact_id": "wrong", "artifact_paths": []}), encoding="utf-8")
+    (tmp_path / "manifests" / "daily_market_state.json").write_text(json.dumps({"artifact_id": "daily_market_state", "artifact_paths": []}), encoding="utf-8")
+
+    try:
+        ExecutionMarketSnapshot.read_canonical(tmp_path, [2024])
+    except ValueError as exc:
+        assert "manifest" in str(exc)
+    else:
+        raise AssertionError("expected manifest identity rejection")

@@ -2,10 +2,31 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+import json
+from pathlib import Path
 
 
 class ExecutionMarketSnapshot:
     """Derive an executable ETF raw-open proxy from prior realized holdings."""
+
+    @staticmethod
+    def read_canonical(data_store: str | Path, years: list[int]) -> tuple[pd.DataFrame, pd.DataFrame]:
+        root = Path(data_store)
+        manifests: dict[str, dict[str, object]] = {}
+        for artifact in ("daily_price_volume", "daily_market_state"):
+            path = root / "manifests" / f"{artifact}.json"
+            if not path.exists():
+                raise ValueError(f"missing manifest: {artifact}")
+            manifests[artifact] = json.loads(path.read_text(encoding="utf-8"))
+            if manifests[artifact].get("artifact_id") != artifact:
+                raise ValueError(f"invalid manifest identity: {artifact}")
+        def load(artifact: str) -> pd.DataFrame:
+            allowed = {str(item) for item in manifests[artifact].get("artifact_paths", [])}
+            paths = [item for item in allowed if any(f"year={year}/" in item for year in years)]
+            if not paths:
+                raise ValueError(f"manifest has no requested partitions: {artifact}")
+            return pd.concat([pd.read_parquet(root / item) for item in sorted(paths)], ignore_index=True)
+        return load("daily_price_volume"), load("daily_market_state")
 
     @staticmethod
     def prepare_prices(prices: pd.DataFrame, states: pd.DataFrame) -> pd.DataFrame:
