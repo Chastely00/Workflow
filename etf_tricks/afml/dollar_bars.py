@@ -360,6 +360,19 @@ class DollarBarBuilder:
                     pd.Timestamp(row["source_available_at"]),
                     pd.Timestamp(row["ix0001_source_available_at"]),
                 )
+                zero_authorized_count = pd.to_numeric(
+                    row.get("status_zero_authorized_count", 0), errors="coerce"
+                )
+                missing_traded_value_count = pd.to_numeric(
+                    row.get("missing_traded_value_count", 0), errors="coerce"
+                )
+                is_zero_authorized = bool(
+                    pd.notna(zero_authorized_count) and zero_authorized_count > 0
+                )
+                has_missing_traded_value = bool(
+                    pd.isna(missing_traded_value_count)
+                    or missing_traded_value_count != 0
+                )
                 current.append(
                     {
                         "etf_id": etf_id,
@@ -394,9 +407,13 @@ class DollarBarBuilder:
                             row.get("source_revision_status"),
                             row.get("ix0001_source_revision_status"),
                         ),
+                        # A PIT-authorized halt has zero ETF turnover by
+                        # construction. It remains an informative member of
+                        # the bar, rather than being conflated with a missing
+                        # source observation.
                         "source_quality_flag": bool(
-                            row.get("has_data_quality_flag", False)
-                            or row.get("missing_traded_value_count", 0)
+                            (row.get("has_data_quality_flag", False) and not is_zero_authorized)
+                            or has_missing_traded_value
                         ),
                         "calibration_version": active_calibration.calibration_version,
                     }

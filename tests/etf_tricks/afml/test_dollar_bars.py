@@ -128,6 +128,24 @@ def test_threshold_freezes_and_bar_amount_reconciles():
     assert tables.open_bar_checkpoints.empty
 
 
+def test_authorized_halted_member_does_not_flag_finalized_bar():
+    daily, ix, calendar, calibration = three_bar_fixture()
+    daily.loc[0, "has_data_quality_flag"] = True
+    daily.loc[0, "status_zero_authorized_count"] = 1
+    config = replace(
+        AFMLConfig().dollar_bar,
+        market_amount_lookback_days=2,
+        min_market_amount_observations=1,
+        min_completed_bars=1,
+    )
+
+    tables = DollarBarBuilder(config).transform(
+        daily, ix, calendar, calibration, role="CALIBRATION_HISTORY"
+    )
+
+    assert not bool(tables.dollar_bars.iloc[0]["source_quality_flag"])
+
+
 def test_membership_preserves_replay_lineage_and_marks_split_crossing():
     daily, ix, calendar, calibration = three_bar_fixture()
     config = replace(
