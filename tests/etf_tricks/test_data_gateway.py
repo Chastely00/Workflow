@@ -510,6 +510,36 @@ def test_scan_market_state_accepts_explicit_emerging_market_as_missing(tmp_path:
     assert result.loc[0, "market_state"] == "MISSING"
 
 
+def test_scan_market_state_accepts_explicit_lifecycle_conflict_as_missing(
+    tmp_path: Path,
+) -> None:
+    row = dict(_market_state_rows()[0])
+    row.update({
+        "date": "2025-01-02",
+        "ticker": "9999",
+        "market_state": "MISSING",
+        "state_reason": "LIFECYCLE_OUTSIDE_ACTIVE_INTERVAL",
+        "amount_state": "MISSING",
+        "authoritative_traded_value": None,
+        "amount_zero_authorized": False,
+        "exchange_tradable": None,
+        "instrument_kind": "OTHER",
+        "identity_source": "SECURITY_MASTER_SNAPSHOT",
+        "lifecycle_list_date": "2025-01-03",
+        "lifecycle_interval_start": "2025-01-03",
+        "lifecycle_active": False,
+        "lifecycle_conflict": True,
+    })
+    _write_market_state_artifact(tmp_path, rows=[row])
+
+    result = DataGateway.from_data_analysts(tmp_path).scan_market_state(
+        "2025-01-02", "2025-01-02", ["9999"]
+    )
+
+    assert result.loc[0, "market_state"] == "MISSING"
+    assert bool(result.loc[0, "lifecycle_conflict"])
+
+
 def test_market_state_authority_snapshot_is_byte_bound_and_immutable(
     tmp_path: Path,
 ) -> None:

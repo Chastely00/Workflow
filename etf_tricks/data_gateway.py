@@ -784,7 +784,11 @@ class DataGateway:
         DataGateway._validate_market_state_availability(row, manifest)
 
         suspended = DataGateway._active_flag(getattr(row, "susp_fg"))
-        if getattr(row, "state_reason") in {
+        if getattr(row, "state_reason") == "LIFECYCLE_OUTSIDE_ACTIVE_INTERVAL":
+            expected = (
+                "LIFECYCLE_OUTSIDE_ACTIVE_INTERVAL", "MISSING", "MISSING", False, None
+            )
+        elif getattr(row, "state_reason") in {
             "LIFECYCLE_MARKET_UNIDENTIFIED", "LIFECYCLE_EMERGING_BOARD"
         }:
             expected = (getattr(row, "state_reason"), "MISSING", "MISSING", False, None)
@@ -862,10 +866,28 @@ class DataGateway:
             raise DataContractError("daily_market_state has invalid instrument_kind")
         if type(lifecycle_active) is not bool:
             raise DataContractError("daily_market_state lifecycle_active must be boolean")
-        if type(getattr(row, "lifecycle_conflict")) is not bool or getattr(
-            row, "lifecycle_conflict"
-        ):
+        lifecycle_conflict = getattr(row, "lifecycle_conflict")
+        if type(lifecycle_conflict) is not bool:
             raise DataContractError("daily_market_state lifecycle_conflict must be false")
+        if lifecycle_conflict:
+            # A raw APIPRCD key can predate listing or survive past delisting.
+            # It is retained only as an explicit MISSING observation so the
+            # selection/execution layers exclude it rather than silently
+            # inventing a tradable lifecycle.
+            if (
+                getattr(row, "market_state") != "MISSING"
+                or getattr(row, "state_reason")
+                != "LIFECYCLE_OUTSIDE_ACTIVE_INTERVAL"
+                or lifecycle_active
+                or instrument_kind != "OTHER"
+                or identity_source != "SECURITY_MASTER_SNAPSHOT"
+                or type(getattr(row, "identity_conflict")) is not bool
+                or getattr(row, "identity_conflict")
+            ):
+                raise DataContractError(
+                    "daily_market_state has invalid lifecycle conflict representation"
+                )
+            return
         if type(getattr(row, "identity_conflict")) is not bool or getattr(
             row, "identity_conflict"
         ):
