@@ -213,10 +213,10 @@ def _flag_text(row: dict[str, Any] | None, name: str) -> str | None:
     value = row.get(name)
     if value is None:
         return "N"
-    text = str(value).strip().upper() or "N"
-    if text not in {"Y", "N"}:
-        raise ValueError(f"invalid APISKTATTR {name}: {value!r}")
-    return text
+    # TEJ flags are not uniformly boolean: e.g. limit_fg may be "+" or
+    # "-".  Preserve its canonical source token; boolean consumers use
+    # _flag(), which treats only Y as affirmative.
+    return str(value).strip().upper() or "N"
 
 
 def _market(attribute: dict[str, Any]) -> str:
