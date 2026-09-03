@@ -65,3 +65,32 @@ def test_upper_close_trigger_exits_at_following_open() -> None:
     assert row["trigger_date"] == pd.Timestamp("2024-01-30")
     assert row["exit_date"] == pd.Timestamp("2024-01-31")
     assert row["exit_raw_open"] == pytest.approx(102.0)
+
+
+def test_target_scope_keeps_warmup_bars_but_emits_only_requested_events() -> None:
+    bars = pd.DataFrame(
+        {
+            "etf_id": ["x"] * 24,
+            "bar_id": range(24),
+            "bar_end_date": pd.bdate_range("2024-01-01", periods=24),
+            "close_nav": [100.0 + (index % 3) for index in range(24)],
+            "feature_available_at": pd.date_range("2024-01-01", periods=24, tz="Asia/Taipei"),
+        }
+    )
+    opens = pd.DataFrame(
+        {
+            "etf_id": ["x", "x", "x"],
+            "date": [pd.Timestamp("2024-01-30"), pd.Timestamp("2024-01-31"), pd.Timestamp("2024-02-01")],
+            "raw_open_nav": [101.0, 102.0, 103.0],
+            "available_at": pd.to_datetime(["2024-01-30 13:30+08:00", "2024-01-31 13:30+08:00", "2024-02-01 13:30+08:00"]),
+            "is_legal_execution": [True, True, True],
+        }
+    )
+
+    result = Tier1TargetBuilder(
+        Tier1TargetConfig(volatility_span=20, min_obs=20, vertical_bars=1)
+    ).build(bars, opens, event_start_date="2024-01-29")
+
+    assert result["t0_date"].min() == pd.Timestamp("2024-01-29")
+    assert result["t0_bar_id"].tolist() == [20, 21, 22, 23]
+    assert result.loc[result["t0_bar_id"].eq(20), "target_volatility"].notna().all()

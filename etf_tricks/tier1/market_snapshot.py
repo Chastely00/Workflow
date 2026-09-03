@@ -65,26 +65,72 @@ class ExecutionMarketSnapshot:
         p["date"] = pd.to_datetime(p["date"]).dt.normalize()
         n["date"] = pd.to_datetime(n["date"]).dt.normalize()
         p["source_available_at"] = pd.to_datetime(p["source_available_at"])
-        rows: list[dict[str, object]] = []
-        for date, date_prices in p.groupby("date", sort=True):
-            previous = h[h["date"].lt(date)]
-            for etf_id, etf_holdings in previous.groupby("etf_id", sort=False):
-                latest = etf_holdings[etf_holdings["date"].eq(etf_holdings["date"].max())]
-                anchor = n[(n["etf_id"].eq(etf_id)) & (n["date"].eq(latest["date"].iloc[0]))]
-                joined = latest.merge(date_prices, on="ticker", how="left", validate="one_to_one")
-                weight = pd.to_numeric(joined["actual_weight"], errors="coerce")
-                valid = (
-                    weight.notna().all()
-                    and np.isclose(float(weight.sum()), 1.0)
-                    and joined["is_legal_execution"].eq(True).all()
-                    and pd.to_numeric(joined["open"], errors="coerce").gt(0).all()
-                    and pd.to_numeric(joined["previous_close"], errors="coerce").gt(0).all()
-                    and len(anchor) == 1 and float(anchor.iloc[0]["nav"]) > 0
-                )
-                raw_open_nav = np.nan
-                available_at = pd.NaT
-                if valid:
-                    raw_open_nav = float((weight * joined["open"] / joined["previous_close"]).sum() * float(anchor.iloc[0]["nav"]))
-                    available_at = joined["source_available_at"].max()
-                rows.append({"etf_id": etf_id, "date": date, "raw_open_nav": raw_open_nav, "available_at": available_at, "is_legal_execution": bool(valid), "holding_as_of": latest["date"].iloc[0]})
-        return pd.DataFrame(rows).sort_values(["etf_id", "date"], kind="stable").reset_index(drop=True)
+        if h.duplicated(["etf_id", "date", "ticker"]).any():
+            raise ValueError("holdings has duplicate etf/date/ticker keys")
+        if p.duplicated(["date", "ticker"]).any():
+            raise ValueError("prices has duplicate date/ticker keys")
+        if n.duplicated(["etf_id", "date"]).any():
+            raise ValueError("daily_nav has duplicate etf/date keys")
+
+        # Resolve one prior holdings date per ETF/market date first.  The prior
+        # implementation re-scanned every holdings row for every market date;
+        # this is equivalent but has O(ETF × dates) as-of joins instead.
+        market_dates = p[["date"]].drop_duplicates().sort_values("date", kind="stable")
+        holding_dates = h[["etf_id", "date"]].drop_duplicates().sort_values(["etf_id", "date"], kind="stable")
+        anchors: list[pd.DataFrame] = []
+        for etf_id, dates in holding_dates.groupby("etf_id", sort=False):
+            lookup = pd.merge_asof(
+                market_dates,
+                dates.rename(columns={"date": "holding_as_of"}).sort_values("holding_as_of", kind="stable"),
+                left_on="date",
+                right_on="holding_as_of",
+                direction="backward",
+                allow_exact_matches=False,
+            )
+            lookup["etf_id"] = etf_id
+            anchors.append(lookup)
+        if not anchors:
+            return pd.DataFrame(columns=["etf_id", "date", "raw_open_nav", "available_at", "is_legal_execution", "holding_as_of"])
+        anchor_dates = pd.concat(anchors, ignore_index=True).dropna(subset=["holding_as_of"])
+        joined = anchor_dates.merge(
+            h.rename(columns={"date": "holding_as_of"}),
+            on=["etf_id", "holding_as_of"],
+            how="left",
+            validate="one_to_many",
+        ).merge(
+            p,
+            on=["date", "ticker"],
+            how="left",
+            validate="many_to_one",
+        ).merge(
+            n.rename(columns={"date": "holding_as_of", "nav": "anchor_nav"}),
+            on=["etf_id", "holding_as_of"],
+            how="left",
+            validate="many_to_one",
+        )
+        weight = pd.to_numeric(joined["actual_weight"], errors="coerce")
+        is_constituent_legal = (
+            weight.notna()
+            & joined["is_legal_execution"].eq(True)
+            & pd.to_numeric(joined["open"], errors="coerce").gt(0)
+            & pd.to_numeric(joined["previous_close"], errors="coerce").gt(0)
+        )
+        joined["_weight"] = weight
+        joined["_open_factor"] = weight * pd.to_numeric(joined["open"], errors="coerce") / pd.to_numeric(joined["previous_close"], errors="coerce")
+        joined["_is_constituent_legal"] = is_constituent_legal
+        grouped = joined.groupby(["etf_id", "date", "holding_as_of"], sort=False, as_index=False).agg(
+            weight_sum=("_weight", "sum"),
+            open_factor=("_open_factor", "sum"),
+            all_constituents_legal=("_is_constituent_legal", "all"),
+            available_at=("source_available_at", "max"),
+            anchor_nav=("anchor_nav", "first"),
+        )
+        valid = (
+            np.isclose(grouped["weight_sum"], 1.0)
+            & grouped["all_constituents_legal"]
+            & pd.to_numeric(grouped["anchor_nav"], errors="coerce").gt(0)
+        )
+        grouped["is_legal_execution"] = valid
+        grouped["raw_open_nav"] = np.where(valid, grouped["open_factor"] * grouped["anchor_nav"], np.nan)
+        grouped.loc[~valid, "available_at"] = pd.NaT
+        return grouped[["etf_id", "date", "raw_open_nav", "available_at", "is_legal_execution", "holding_as_of"]].sort_values(["etf_id", "date"], kind="stable").reset_index(drop=True)

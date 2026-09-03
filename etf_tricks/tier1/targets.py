@@ -32,7 +32,13 @@ class Tier1TargetBuilder:
     def __init__(self, config: Tier1TargetConfig) -> None:
         self.config = config
 
-    def build(self, bars: pd.DataFrame, opens: pd.DataFrame) -> pd.DataFrame:
+    def build(
+        self,
+        bars: pd.DataFrame,
+        opens: pd.DataFrame,
+        event_start_date: str | pd.Timestamp | None = None,
+        event_end_date: str | pd.Timestamp | None = None,
+    ) -> pd.DataFrame:
         required_bars = {"etf_id", "bar_id", "bar_end_date", "close_nav", "feature_available_at"}
         required_opens = {"etf_id", "date", "raw_open_nav", "available_at", "is_legal_execution"}
         if missing := required_bars.difference(bars.columns):
@@ -44,6 +50,10 @@ class Tier1TargetBuilder:
         frame["close_nav"] = pd.to_numeric(frame["close_nav"], errors="coerce")
         frame["_log_return"] = frame.groupby("etf_id", sort=False)["close_nav"].transform(lambda x: np.log(x).diff())
         frame["target_volatility"] = frame.groupby("etf_id", sort=False)["_log_return"].transform(lambda x: x.ewm(span=self.config.volatility_span, adjust=False, min_periods=self.config.min_obs).std(bias=False))
+        start = pd.Timestamp(event_start_date).normalize() if event_start_date is not None else None
+        end = pd.Timestamp(event_end_date).normalize() if event_end_date is not None else None
+        if start is not None and end is not None and start > end:
+            raise ValueError("event_start_date must not exceed event_end_date")
         market = opens.copy()
         market["date"] = pd.to_datetime(market["date"]).dt.normalize()
         market["available_at"] = pd.to_datetime(market["available_at"])
@@ -53,6 +63,8 @@ class Tier1TargetBuilder:
             indexed = group.reset_index(drop=True)
             etf_market = market[market["etf_id"].eq(etf_id)]
             for position, row in indexed.iterrows():
+                if (start is not None and row.bar_end_date < start) or (end is not None and row.bar_end_date > end):
+                    continue
                 event = {"event_id": f"{etf_id}-{int(row.bar_id)}", "etf_id": etf_id, "t0_bar_id": int(row.bar_id), "t0_date": row.bar_end_date, "target_volatility": row.target_volatility, "target_status": "unresolved_tail", "y_direction": np.nan, "trigger_type": pd.NA, "trigger_date": pd.NaT, "entry_date": pd.NaT, "entry_raw_open": np.nan, "exit_date": pd.NaT, "exit_raw_open": np.nan, "net_log_return": np.nan}
                 if position + self.config.vertical_bars >= len(indexed):
                     output.append(event)
