@@ -53,7 +53,7 @@ class Tier1TargetBuilder:
             indexed = group.reset_index(drop=True)
             etf_market = market[market["etf_id"].eq(etf_id)]
             for position, row in indexed.iterrows():
-                event = {"etf_id": etf_id, "t0_bar_id": int(row.bar_id), "t0_date": row.bar_end_date, "target_volatility": row.target_volatility, "target_status": "unresolved_tail", "y_direction": np.nan, "trigger_type": pd.NA, "trigger_date": pd.NaT, "entry_date": pd.NaT, "entry_raw_open": np.nan, "exit_date": pd.NaT, "exit_raw_open": np.nan, "net_log_return": np.nan}
+                event = {"event_id": f"{etf_id}-{int(row.bar_id)}", "etf_id": etf_id, "t0_bar_id": int(row.bar_id), "t0_date": row.bar_end_date, "target_volatility": row.target_volatility, "target_status": "unresolved_tail", "y_direction": np.nan, "trigger_type": pd.NA, "trigger_date": pd.NaT, "entry_date": pd.NaT, "entry_raw_open": np.nan, "exit_date": pd.NaT, "exit_raw_open": np.nan, "net_log_return": np.nan}
                 if position + self.config.vertical_bars >= len(indexed):
                     output.append(event)
                     continue
