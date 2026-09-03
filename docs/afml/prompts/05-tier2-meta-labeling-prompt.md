@@ -1,6 +1,6 @@
 # Authoritative Prompt - Tier 2 Meta-Labeling
 
-Status: Approved authority as of 2026-09-03. Parent: `05-tiered-ml-strategy-master-prompt.md`.
+Status: Approved authority as of 2026-09-03. Parent: `03-tiered-ml-strategy-master-prompt.md`.
 
 ## 1. Single responsibility
 

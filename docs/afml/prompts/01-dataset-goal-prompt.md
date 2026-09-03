@@ -9,7 +9,7 @@ Status: Approved authority as of 2026-08-27.
 1. repository `AGENTS.md` 與更高層 runtime instructions；
 2. `docs/superpowers/specs/2026-08-26-etf-tricks-design.md`；
 3. `docs/etf_tricks/prompts/01-master-prompt.md`；
-4. `docs/etf_tricks/prompts/04-afml-dataset-master-prompt.md`；
+4. `docs/afml/prompts/02-dataset-master-prompt.md`；
 5. `docs/Marcos Lopez de Prado - Advances in Financial Machine Learning-Wiley (2018).pdf` 中第 2、3、5、17、19 章；
 6. 經使用者核准後才建立的 implementation plan。
 
