@@ -221,3 +221,32 @@ def test_market_state_publication_schema_is_stable_when_attribute_fields_are_nul
     assert table.schema == _DMS_SCHEMA
     assert table.schema.field("atten_fg").type == pa.string()
     assert table.schema.field("authoritative_traded_value").type == pa.float64()
+
+
+def test_build_daily_market_state_partition_scope_keeps_global_lifecycle_interval() -> None:
+    from data_analysts.daily_market_state import build_daily_market_state_rows
+
+    rows = build_daily_market_state_rows(
+        trading_calendar_rows=[
+            {"date": "2020-01-02", "market": "TWSE"},
+            {"date": "2021-01-04", "market": "TWSE"},
+            {"date": "2021-01-05", "market": "TWSE"},
+        ],
+        price_rows=[{"date": "2021-01-04", "ticker": "1101", "traded_value": 100.0}],
+        security_master_rows=[{
+            "ticker": "1101", "market": "TWSE", "list_date": "2000-01-01", "delist_date": None,
+        }],
+        attribute_rows=[],
+        manifest_hashes={
+            "security_master": "a" * 64, "trading_calendar": "b" * 64,
+            "daily_price_volume": "c" * 64, "daily_tradability": "d" * 64,
+        },
+        build_start="2020-01-02",
+        build_end="2021-01-04",
+        scope_start="2021-01-04",
+        scope_end="2021-01-04",
+        data_cutoff_at="2021-01-04T14:00:00Z",
+    )
+
+    assert [row["date"] for row in rows] == ["2021-01-04"]
+    assert rows[0]["lifecycle_interval_start"] == "2020-01-02"

@@ -22,6 +22,8 @@ def build_daily_market_state_rows(
     build_end: str,
     data_cutoff_at: str,
     certified_source_start: str | None = None,
+    scope_start: str | None = None,
+    scope_end: str | None = None,
 ) -> list[dict[str, Any]]:
     """Classify TEJ daily market states without using future price observations.
 
@@ -35,7 +37,11 @@ def build_daily_market_state_rows(
         for row in trading_calendar_rows
         if row.get("is_trading_day", True) is not False
     })
-    scoped_sessions = [day for day in sessions if build_start <= day <= build_end]
+    processing_start = scope_start or build_start
+    processing_end = scope_end or build_end
+    if not build_start <= processing_start <= processing_end <= build_end:
+        raise ValueError("daily_market_state processing scope must lie within build coverage")
+    scoped_sessions = [day for day in sessions if processing_start <= day <= processing_end]
     if not scoped_sessions:
         raise ValueError("daily_market_state requested scope has no trading sessions")
     session_index = {day: index for index, day in enumerate(sessions)}
@@ -44,7 +50,7 @@ def build_daily_market_state_rows(
     attributes = _unique_by_date_ticker(attribute_rows, "attribute")
     prices_by_day = _rows_by_day(prices)
     attributes_by_day = _rows_by_day(attributes)
-    attribute_identity = _attribute_identity_before(attributes, build_start)
+    attribute_identity = _attribute_identity_before(attributes, processing_start)
     rows: list[dict[str, Any]] = []
 
     for day in scoped_sessions:

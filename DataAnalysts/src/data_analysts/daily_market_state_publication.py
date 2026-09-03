@@ -6,7 +6,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Iterable, Mapping
 import uuid
 
 import pyarrow as pa
@@ -66,8 +66,29 @@ def publish_daily_market_state(
     certified_source_start: str,
 ) -> PublicationResult:
     """Publish immutable partitions, then atomically add DMS authority evidence."""
+    return publish_daily_market_state_partitions(
+        context,
+        config,
+        ((None, rows),),
+        build_start=build_start,
+        build_end=build_end,
+        certified_source_start=certified_source_start,
+    )
+
+
+def publish_daily_market_state_partitions(
+    context: DataAnalystsContext,
+    config: RuntimeConfig,
+    partitions: Iterable[tuple[str | None, list[dict[str, Any]]]],
+    *,
+    build_start: str,
+    build_end: str,
+    certified_source_start: str,
+) -> PublicationResult:
+    """Publish bounded DMS partitions without retaining every year in memory."""
+    del config
     dependencies = _dependency_evidence(context)
-    result = _publish_arrow_partitions(context, rows, build_start, build_end)
+    result = _publish_arrow_partition_stream(context, partitions, build_start, build_end)
     manifest = dict(result.manifest)
     inventory = [_inventory_item(context, path) for path in manifest["artifact_paths"]]
     schema_fingerprint = inventory[0]["schema_fingerprint"]
@@ -102,18 +123,47 @@ def publish_daily_market_state(
 def _publish_arrow_partitions(
     context: DataAnalystsContext, rows: list[dict[str, Any]], build_start: str, build_end: str
 ) -> PublicationResult:
-    if not rows:
-        raise ValueError("daily_market_state bounded publication cannot be empty")
-    keys = [(str(row["date"]), str(row["ticker"])) for row in rows]
-    if keys != sorted(keys) or any(left == right for left, right in zip(keys, keys[1:])):
-        raise ValueError("daily_market_state rows must be pre-sorted and unique")
+    return _publish_arrow_partition_stream(
+        context, ((None, rows),), build_start, build_end
+    )
+
+
+def _publish_arrow_partition_stream(
+    context: DataAnalystsContext,
+    partitions: Iterable[tuple[str | None, list[dict[str, Any]]]],
+    build_start: str,
+    build_end: str,
+) -> PublicationResult:
     version = uuid.uuid4().hex
-    grouped: dict[str, list[dict[str, Any]]] = {}
-    for row in rows:
-        grouped.setdefault(str(row["date"])[:4], []).append(row)
     paths: list[str] = []
     inventory: list[dict[str, Any]] = []
-    for year, partition_rows in sorted(grouped.items()):
+    total_row_count = 0
+    first_key: tuple[str, str] | None = None
+    last_key: tuple[str, str] | None = None
+    data_cutoff_at: str | None = None
+    for declared_year, partition_rows in partitions:
+        if not partition_rows:
+            continue
+        keys = [(str(row["date"]), str(row["ticker"])) for row in partition_rows]
+        if (
+            keys != sorted(keys)
+            or any(left == right for left, right in zip(keys, keys[1:]))
+            or (last_key is not None and keys[0] <= last_key)
+        ):
+            raise ValueError("daily_market_state rows must be globally sorted and unique")
+        years = {key[0][:4] for key in keys}
+        if len(years) != 1:
+            raise ValueError("daily_market_state stream partition must contain one calendar year")
+        year = years.pop()
+        if declared_year is not None and declared_year != year:
+            raise ValueError("daily_market_state stream partition year does not match row dates")
+        partition_cutoff = str(partition_rows[0]["data_cutoff_at"])
+        if any(str(row["data_cutoff_at"]) != partition_cutoff for row in partition_rows):
+            raise ValueError("daily_market_state partition has inconsistent data_cutoff_at")
+        if data_cutoff_at is None:
+            data_cutoff_at = partition_cutoff
+        elif partition_cutoff != data_cutoff_at:
+            raise ValueError("daily_market_state partitions have inconsistent data_cutoff_at")
         relative = f"canonical/derived/daily_market_state/versions/{version}/year={year}/part.parquet"
         target = context.artifact_path(relative)
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -123,6 +173,11 @@ def _publish_arrow_partitions(
         os.replace(staging, target)
         paths.append(relative)
         inventory.append(_inventory_item(context, relative))
+        total_row_count += len(partition_rows)
+        first_key = keys[0] if first_key is None else first_key
+        last_key = keys[-1]
+    if not paths or first_key is None or data_cutoff_at is None:
+        raise ValueError("daily_market_state bounded publication cannot be empty")
     schema_fingerprints = {item["schema_fingerprint"] for item in inventory}
     if len(schema_fingerprints) != 1:
         raise ValueError("daily_market_state yearly parquet schemas differ")
@@ -130,16 +185,16 @@ def _publish_arrow_partitions(
         "artifact_id": "daily_market_state", "contract_key": "daily_market_state",
         "variant": "default", "schema_version": "1.0", "layer": "derived",
         "source_families": ["security_master", "trading_calendar", "daily_price_volume", "daily_tradability"],
-        "source_collections": [], "row_count": len(rows),
+        "source_collections": [], "row_count": total_row_count,
         "date_range": [build_start, build_end], "availability_date_range": [build_start, build_end],
         "columns": list(_DMS_SCHEMA.names),
         "schema_fingerprint": schema_fingerprints.pop(), "partitioning": ["year"],
         "artifact_paths": paths, "pit_policy": "after_close_next_session",
-        "data_cutoff_at": str(rows[0]["data_cutoff_at"]), "duplicate_count": 0,
+        "data_cutoff_at": data_cutoff_at, "duplicate_count": 0,
         "omitted_row_count": 0, "status": "ready", "active_version": version,
-        "created_at": str(rows[0]["data_cutoff_at"]), "partition_inventory": inventory,
+        "created_at": data_cutoff_at, "partition_inventory": inventory,
     }
-    return PublicationResult(tuple(paths), len(rows), (build_start, build_end),
+    return PublicationResult(tuple(paths), total_row_count, (build_start, build_end),
                              context.store_path("manifests", "daily_market_state.json"), manifest)
 
 
