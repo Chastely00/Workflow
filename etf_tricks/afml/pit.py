@@ -184,6 +184,7 @@ class PITSourceAdapter:
             daily,
             expected_sessions,
             requested_etf_ids,
+            allow_late_inception=True,
         )
 
         nav = pd.to_numeric(daily["nav"], errors="coerce")
@@ -394,13 +395,20 @@ def _validate_panel_session_coverage(
     frame: pd.DataFrame,
     expected_sessions: pd.DatetimeIndex,
     requested_etf_ids: tuple[str, ...],
+    *,
+    allow_late_inception: bool = False,
 ) -> None:
     expected = set(expected_sessions)
     for etf_id in requested_etf_ids:
         observed = set(
             pd.DatetimeIndex(frame.loc[frame["etf_id"].eq(etf_id), "date"])
         )
-        missing = sorted(expected.difference(observed))
+        if allow_late_inception and observed:
+            inception = min(observed)
+            expected_for_etf = {day for day in expected if day >= inception}
+        else:
+            expected_for_etf = expected
+        missing = sorted(expected_for_etf.difference(observed))
         extra = sorted(observed.difference(expected))
         if missing or extra:
             details = ",".join(value.date().isoformat() for value in missing[:5])
