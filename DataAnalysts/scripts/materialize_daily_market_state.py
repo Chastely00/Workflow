@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import argparse
 from datetime import datetime, timezone
 from pathlib import Path
 from time import perf_counter
@@ -17,7 +18,15 @@ from pymongo import MongoClient
 
 
 def main() -> None:
-    start, end = "2024-01-01", "2026-07-07"
+    parser = argparse.ArgumentParser(
+        description="Materialize certified daily market state for a bounded date range."
+    )
+    parser.add_argument("--start", default="2024-01-01")
+    parser.add_argument("--end", default="2026-07-07")
+    args = parser.parse_args()
+    start, end = args.start, args.end
+    if start > end:
+        raise ValueError("--start must be on or before --end")
     context = DataAnalystsContext.from_paths("DataAnalysts", "data_store")
     root = context.data_store
     started = perf_counter()
@@ -31,7 +40,8 @@ def main() -> None:
             paths = [path for path in paths if any(f"year={year}/" in path.replace("\\", "/") for year in years)]
         return [row for path in paths for row in pq.read_table(root / path).to_pylist()]
     calendar, master = rows("trading_calendar"), rows("security_master")
-    prices, attributes = rows("daily_price_volume", {"2024", "2025", "2026"}), rows("daily_tradability", {"2024", "2025", "2026"})
+    years = {str(year) for year in range(int(start[:4]), int(end[:4]) + 1)}
+    prices, attributes = rows("daily_price_volume", years), rows("daily_tradability", years)
     seeds = extract_identity_seed_rows(MongoClient("mongodb://localhost:27017/", serverSelectionTimeoutMS=5000)["APISTKATTR"], before_date=start)
     attributes = [*seeds, *attributes]
     loaded = perf_counter()
