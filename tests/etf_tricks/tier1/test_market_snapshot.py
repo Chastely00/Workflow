@@ -39,3 +39,14 @@ def test_snapshot_fails_closed_when_a_constituent_is_not_executable() -> None:
 
     assert not result.iloc[0]["is_legal_execution"]
     assert result.iloc[0]["raw_open_nav"] != result.iloc[0]["raw_open_nav"]
+
+
+def test_prepare_prices_derives_previous_close_and_requires_trading_state() -> None:
+    prices = pd.DataFrame({"date": pd.to_datetime(["2024-01-02", "2024-01-03"]), "ticker": ["A", "A"], "open": [100.0, 110.0], "close": [101.0, 111.0]})
+    states = pd.DataFrame({"date": pd.to_datetime(["2024-01-03"]), "ticker": ["A"], "market_state": ["TRADING"], "exchange_tradable": [True], "source_available_date": pd.to_datetime(["2024-01-03"])})
+
+    result = ExecutionMarketSnapshot.prepare_prices(prices, states)
+
+    row = result.iloc[0]
+    assert row["previous_close"] == 101.0
+    assert row["is_legal_execution"]
