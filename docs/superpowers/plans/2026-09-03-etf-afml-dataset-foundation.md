@@ -8,7 +8,7 @@
 
 **Tech Stack:** Python 3.12, pandas, NumPy, SciPy/statsmodels, PyArrow/Parquet, pytest. No new dependency, \`mlfinlab\`, \`mlfinpy\`, broker code, or raw-market artifact.
 
-**Spec:** \`docs/etf_tricks/prompts/04-afml-dataset-master-prompt.md\`, \`docs/superpowers/specs/2026-08-26-etf-tricks-design.md\`
+**Spec:** \`docs/afml/prompts/02-dataset-master-prompt.md\`, \`docs/superpowers/specs/2026-08-26-etf-tricks-design.md\`
 
 ## Global Constraints
 

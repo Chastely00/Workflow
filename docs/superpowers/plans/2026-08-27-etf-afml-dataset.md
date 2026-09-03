@@ -8,7 +8,7 @@
 
 **Tech Stack:** Python 3.12, pandas 3, NumPy 2, PyArrow 25, SciPy 1.18, statsmodels 0.14, `fracdiff-modern==1.0.0` for parity only, pytest 9, project-local `.venv`.
 
-**Spec:** `docs/etf_tricks/prompts/04-afml-dataset-master-prompt.md`
+**Spec:** `docs/afml/prompts/02-dataset-master-prompt.md`
 
 ## Global Constraints
 

@@ -44,13 +44,13 @@ restart in the AFML namespace so their order is local and unambiguous.
 
 | Current path | Target path | Change |
 |---|---|---|
-| `docs/etf_tricks/prompts/03-afml-dataset-goal-prompt.md` | `docs/afml/prompts/01-dataset-goal-prompt.md` | Move and update internal references. |
-| `docs/etf_tricks/prompts/04-afml-dataset-master-prompt.md` | `docs/afml/prompts/02-dataset-master-prompt.md` | Move and update internal references. |
-| `docs/etf_tricks/prompts/05-tiered-ml-strategy-master-prompt.md` | `docs/afml/prompts/03-tiered-ml-strategy-master-prompt.md` | Move and update child references. |
-| `docs/etf_tricks/prompts/06-tier1-directional-label-and-model-prompt.md` | `docs/afml/prompts/04-tier1-directional-label-and-model-prompt.md` | Move and update parent reference. |
-| `docs/etf_tricks/prompts/07-tier2-meta-labeling-prompt.md` | `docs/afml/prompts/05-tier2-meta-labeling-prompt.md` | Move and update parent reference. |
-| `docs/etf_tricks/prompts/08-tier3-allocation-and-paper-execution-prompt.md` | `docs/afml/prompts/06-tier3-allocation-and-paper-execution-prompt.md` | Move and update parent reference. |
-| `docs/etf_tricks/prompts/09-strategy-governance-dsr-acceptance-prompt.md` | `docs/afml/prompts/07-strategy-governance-dsr-acceptance-prompt.md` | Move and update parent reference. |
+| former `03-afml-dataset-goal-prompt.md` | `docs/afml/prompts/01-dataset-goal-prompt.md` | Move and update internal references. |
+| former `04-afml-dataset-master-prompt.md` | `docs/afml/prompts/02-dataset-master-prompt.md` | Move and update internal references. |
+| former `05-tiered-ml-strategy-master-prompt.md` | `docs/afml/prompts/03-tiered-ml-strategy-master-prompt.md` | Move and update child references. |
+| former `06-tier1-directional-label-and-model-prompt.md` | `docs/afml/prompts/04-tier1-directional-label-and-model-prompt.md` | Move and update parent reference. |
+| former `07-tier2-meta-labeling-prompt.md` | `docs/afml/prompts/05-tier2-meta-labeling-prompt.md` | Move and update parent reference. |
+| former `08-tier3-allocation-and-paper-execution-prompt.md` | `docs/afml/prompts/06-tier3-allocation-and-paper-execution-prompt.md` | Move and update parent reference. |
+| former `09-strategy-governance-dsr-acceptance-prompt.md` | `docs/afml/prompts/07-strategy-governance-dsr-acceptance-prompt.md` | Move and update parent reference. |
 | none | `docs/afml/prompts/00-goal-prompt.md` | Create the persistent AFML Goal Prompt. |
 
 The upstream ETF Goal, master prompt, optimization prompt, ETF-specific prompt
@@ -80,7 +80,7 @@ the numbered AFML prompts.
 - Move tracked files with `git mv` to preserve history.
 - Update every repository Markdown reference found by `rg`, including plans and
   README authority lists.
-- Assert no `docs/etf_tricks/prompts/0[3-9]-` reference remains.
+- Assert no active ETF namespace reference to a former downstream file remains.
 - Assert the eight target files exist, each `Parent` reference resolves, and
   every README authority entry resolves to a file.
 - Run `git diff --check`; review staged paths to ensure no source data,

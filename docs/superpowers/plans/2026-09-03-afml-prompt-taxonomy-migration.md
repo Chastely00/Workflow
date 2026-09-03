@@ -28,17 +28,17 @@
 
 **Interfaces:** Consumes the approved taxonomy specification. Produces an AFML-local authority index and persistent resumption contract.
 
-- [ ] **Step 1: Assert the root files are absent**
+- [x] **Step 1: Assert the root files are absent**
 
 Run: `Test-Path docs\afml\prompts\00-goal-prompt.md; Test-Path docs\afml\prompts\README.md`
 
 Expected: both return `False`.
 
-- [ ] **Step 2: Create the root files**
+- [x] **Step 2: Create the root files**
 
 The Goal requires manifest/hash readiness, one active stage, bounded 2024--2026 tests before full history, PIT/OOF/execution/sealed-test gates, append-only evidence, and no live orders. The README states that ETF prompts are upstream only.
 
-- [ ] **Step 3: Validate and commit**
+- [x] **Step 3: Validate and commit**
 
 Run: `Test-Path docs\afml\prompts\00-goal-prompt.md; Test-Path docs\afml\prompts\README.md; git add docs/afml/prompts/README.md docs/afml/prompts/00-goal-prompt.md; git commit -m "docs: add AFML goal authority"`
 
@@ -48,27 +48,27 @@ Expected: paths return `True`; commit contains only the two root files.
 
 **Files:**
 
-- Move: `docs/etf_tricks/prompts/03-afml-dataset-goal-prompt.md` -> `docs/afml/prompts/01-dataset-goal-prompt.md`
-- Move: `docs/etf_tricks/prompts/04-afml-dataset-master-prompt.md` -> `docs/afml/prompts/02-dataset-master-prompt.md`
-- Move: `docs/etf_tricks/prompts/05-tiered-ml-strategy-master-prompt.md` -> `docs/afml/prompts/03-tiered-ml-strategy-master-prompt.md`
-- Move: `docs/etf_tricks/prompts/06-tier1-directional-label-and-model-prompt.md` -> `docs/afml/prompts/04-tier1-directional-label-and-model-prompt.md`
-- Move: `docs/etf_tricks/prompts/07-tier2-meta-labeling-prompt.md` -> `docs/afml/prompts/05-tier2-meta-labeling-prompt.md`
-- Move: `docs/etf_tricks/prompts/08-tier3-allocation-and-paper-execution-prompt.md` -> `docs/afml/prompts/06-tier3-allocation-and-paper-execution-prompt.md`
-- Move: `docs/etf_tricks/prompts/09-strategy-governance-dsr-acceptance-prompt.md` -> `docs/afml/prompts/07-strategy-governance-dsr-acceptance-prompt.md`
+- Move: former `03-afml-dataset-goal-prompt.md` -> `docs/afml/prompts/01-dataset-goal-prompt.md`
+- Move: former `04-afml-dataset-master-prompt.md` -> `docs/afml/prompts/02-dataset-master-prompt.md`
+- Move: former `05-tiered-ml-strategy-master-prompt.md` -> `docs/afml/prompts/03-tiered-ml-strategy-master-prompt.md`
+- Move: former `06-tier1-directional-label-and-model-prompt.md` -> `docs/afml/prompts/04-tier1-directional-label-and-model-prompt.md`
+- Move: former `07-tier2-meta-labeling-prompt.md` -> `docs/afml/prompts/05-tier2-meta-labeling-prompt.md`
+- Move: former `08-tier3-allocation-and-paper-execution-prompt.md` -> `docs/afml/prompts/06-tier3-allocation-and-paper-execution-prompt.md`
+- Move: former `09-strategy-governance-dsr-acceptance-prompt.md` -> `docs/afml/prompts/07-strategy-governance-dsr-acceptance-prompt.md`
 
 **Interfaces:** Consumes seven current downstream prompts. Produces a contiguous AFML-local authority sequence with resolving parent and child references.
 
-- [ ] **Step 1: Prove all sources exist**
+- [x] **Step 1: Prove all sources exist**
 
 Run: `Get-ChildItem docs\etf_tricks\prompts\0[3-9]-*.md | Select-Object -ExpandProperty Name`
 
 Expected: seven source prompts.
 
-- [ ] **Step 2: Move exactly the listed files with `git mv`**
+- [x] **Step 2: Move exactly the listed files with `git mv`**
 
 Update each moved prompt's local predecessor, parent, and child names to their new AFML-local filenames.
 
-- [ ] **Step 3: Validate and commit**
+- [x] **Step 3: Validate and commit**
 
 Run: `Get-ChildItem docs\afml\prompts\0[1-7]-*.md | Select-Object -ExpandProperty Name; git add docs/afml/prompts; git commit -m "docs: move AFML prompt authority"`
 
@@ -84,19 +84,19 @@ Expected: seven files numbered `01` through `07`; commit preserves moves and con
 
 **Interfaces:** Consumes the target paths from Tasks 1--2. Produces no stale `etf_tricks` references to downstream AFML prompts.
 
-- [ ] **Step 1: Replace only stale downstream paths**
+- [x] **Step 1: Replace only stale downstream paths**
 
 Run: `rg -n "docs/etf_tricks/prompts|etf_tricks/prompts" docs AGENTS.md --glob "*.md"`
 
 Keep upstream `00`, `01`, `02`, and `etfs/` references. Convert only former downstream `03`--`09` paths.
 
-- [ ] **Step 2: Run fail-closed checks**
+- [x] **Step 2: Run fail-closed checks**
 
 Run: `rg -n "docs/etf_tricks/prompts/0[3-9]-" docs AGENTS.md --glob "*.md"; git diff --check`
 
 Expected: no stale-path matches and no whitespace errors.
 
-- [ ] **Step 3: Stage documentation only, commit, and push**
+- [x] **Step 3: Stage documentation only, commit, and push**
 
 Run: `git status --short; git diff --cached --check; git add docs/etf_tricks/prompts docs/etf_tricks/performance docs/superpowers/plans; git commit -m "docs: link ETF prompts to AFML authority"; git push origin main`
 
