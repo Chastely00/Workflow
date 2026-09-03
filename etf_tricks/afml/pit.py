@@ -197,10 +197,21 @@ class PITSourceAdapter:
             daily["missing_traded_value_count"], errors="coerce"
         )
         quality_flag = daily["has_data_quality_flag"].fillna(True).astype(bool)
+        zero_authorized = pd.to_numeric(
+            daily.get("status_zero_authorized_count", 0), errors="coerce"
+        )
+        if not isinstance(zero_authorized, pd.Series):
+            zero_authorized = pd.Series(zero_authorized, index=daily.index)
+        zero_authorized = zero_authorized.fillna(0).gt(0)
+        # A controlled zero amount due to a PIT-classified halt is valid
+        # market information, not a missing-source quality failure.
+        unauthorized_quality_flag = quality_flag & ~zero_authorized
         if config.dollar_bar.quality_policy == "fail" and (
-            quality_flag | missing_amount.ne(0) | missing_amount.isna()
+            unauthorized_quality_flag | missing_amount.ne(0) | missing_amount.isna()
         ).any():
-            bad = int((quality_flag | missing_amount.ne(0) | missing_amount.isna()).sum())
+            bad = int(
+                (unauthorized_quality_flag | missing_amount.ne(0) | missing_amount.isna()).sum()
+            )
             raise PITContractError(
                 f"daily_etf amount quality policy failed for {bad} rows"
             )

@@ -144,6 +144,24 @@ def test_flagged_amount_fails_default_quality_policy(pit_fixture):
         pit_fixture.adapter.prepare(flagged, pit_fixture.boundaries, AFMLConfig())
 
 
+def test_pit_authorized_halt_zero_amount_is_valid(pit_fixture):
+    halted = copy.deepcopy(pit_fixture.base)
+    in_scope = halted.daily_etf.index[
+        halted.daily_etf["date"].ge(pd.Timestamp(pit_fixture.boundaries.train_start))
+    ][0]
+    halted.daily_etf.loc[in_scope, "has_data_quality_flag"] = True
+    halted.daily_etf.loc[in_scope, "status_zero_authorized_count"] = 1
+
+    inputs = pit_fixture.adapter.prepare(halted, pit_fixture.boundaries, AFMLConfig())
+
+    validated = inputs.daily_etf.loc[
+        inputs.daily_etf["date"].eq(halted.daily_etf.loc[in_scope, "date"])
+        & inputs.daily_etf["etf_id"].eq(halted.daily_etf.loc[in_scope, "etf_id"])
+    ]
+    assert len(validated) == 1
+    assert bool(validated.iloc[0]["has_data_quality_flag"])
+
+
 def test_execution_mapping_fails_when_no_future_twse_session(pit_fixture):
     last = pit_fixture.inputs.daily_etf.iloc[-1]
 
