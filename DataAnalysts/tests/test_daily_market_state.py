@@ -178,3 +178,31 @@ def test_build_daily_market_state_marks_unidentified_lifecycle_market_missing_an
     assert rows[0]["state_reason"] == "LIFECYCLE_EMERGING_BOARD"
     assert rows[0]["instrument_kind"] == "OTHER"
     assert rows[0]["exchange_tradable"] is None
+
+
+def test_build_daily_market_state_retains_price_key_outside_master_lifecycle() -> None:
+    from data_analysts.daily_market_state import build_daily_market_state_rows
+
+    rows = build_daily_market_state_rows(
+        trading_calendar_rows=[
+            {"date": "2024-01-02", "market": "TWSE"},
+            {"date": "2024-01-03", "market": "TWSE"},
+        ],
+        price_rows=[{"date": "2024-01-02", "ticker": "9999", "traded_value": 100.0}],
+        security_master_rows=[{
+            "ticker": "9999", "market": "TWSE", "list_date": "2024-01-03", "delist_date": None,
+        }],
+        attribute_rows=[],
+        manifest_hashes={
+            "security_master": "a" * 64, "trading_calendar": "b" * 64,
+            "daily_price_volume": "c" * 64, "daily_tradability": "d" * 64,
+        },
+        build_start="2024-01-02", build_end="2024-01-02",
+        data_cutoff_at="2024-01-02T14:00:00Z",
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["ticker"] == "9999"
+    assert rows[0]["market_state"] == "MISSING"
+    assert rows[0]["state_reason"] == "LIFECYCLE_OUTSIDE_ACTIVE_INTERVAL"
+    assert rows[0]["exchange_tradable"] is False

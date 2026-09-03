@@ -59,7 +59,11 @@ def build_daily_market_state_rows(
         tickers = set(active_equities)
         day_prices = prices_by_day.get(day, {})
         day_attributes = attributes_by_day.get(day, {})
-        tickers.update(ticker for ticker in day_prices if ticker not in master)
+        # Every daily_price_volume key must have an explicit state row.  A
+        # security-master member can still be outside its effective lifecycle
+        # (pre-list or on/after its exclusive delist date); omitting it breaks
+        # coverage validation and hides a source/lifecycle conflict.
+        tickers.update(day_prices)
         if not tickers:
             continue
         next_session = _next_session(day, sessions, session_index)
@@ -69,6 +73,13 @@ def build_daily_market_state_rows(
             lifecycle = active_equities.get(ticker)
             if lifecycle is None:
                 if price is None:
+                    continue
+                master_lifecycle = master.get(ticker)
+                if master_lifecycle is not None:
+                    rows.append(_outside_lifecycle_row(
+                        day, ticker, price, attribute, master_lifecycle,
+                        next_session, manifest_hashes, data_cutoff_at,
+                    ))
                     continue
                 rows.append(_index_row(day, ticker, price, attribute, next_session, manifest_hashes, data_cutoff_at))
                 continue
@@ -201,6 +212,35 @@ def _unidentified_lifecycle_row(
         "lifecycle_interval_start": interval_start,
         "lifecycle_interval_end_exclusive": interval_end, "lifecycle_active": True,
         "lifecycle_conflict": False, "identity_conflict": False,
+        "lifecycle_pit_status": "SNAPSHOT_EFFECTIVE_DATE_USER_AUTHORIZED",
+        "revision_pit_status": "PIT_REVISION_UNVERIFIED",
+    }
+
+
+def _outside_lifecycle_row(
+    day: str, ticker: str, price: dict[str, Any], attribute: dict[str, Any] | None,
+    lifecycle: dict[str, str | None], next_session: str, hashes: dict[str, str],
+    cutoff: str,
+) -> dict[str, Any]:
+    """Retain an observed price key that conflicts with the master lifecycle."""
+    return _base_row(day, ticker, price, attribute, next_session, hashes, cutoff) | {
+        "market": lifecycle.get("market") or "UNKNOWN",
+        "market_state": "MISSING",
+        "state_reason": "LIFECYCLE_OUTSIDE_ACTIVE_INTERVAL",
+        "amount_state": "MISSING",
+        "authoritative_traded_value": None,
+        "amount_zero_authorized": False,
+        "exchange_tradable": False,
+        "instrument_kind": "OTHER",
+        "identity_source": "SECURITY_MASTER_SNAPSHOT",
+        "security_master_market": lifecycle.get("market"),
+        "lifecycle_list_date": lifecycle["list_date"],
+        "lifecycle_delist_date": lifecycle["delist_date"],
+        "lifecycle_interval_start": lifecycle["list_date"],
+        "lifecycle_interval_end_exclusive": lifecycle["delist_date"],
+        "lifecycle_active": False,
+        "lifecycle_conflict": True,
+        "identity_conflict": False,
         "lifecycle_pit_status": "SNAPSHOT_EFFECTIVE_DATE_USER_AUTHORIZED",
         "revision_pit_status": "PIT_REVISION_UNVERIFIED",
     }
