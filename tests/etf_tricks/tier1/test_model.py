@@ -48,3 +48,12 @@ def test_oof_candidate_threshold_is_selected_inside_the_training_fold() -> None:
     assert oof["candidate_threshold"].notna().all()
     assert (oof["is_candidate"] == (oof["p1"] >= oof["candidate_threshold"])).all()
     assert set(oof["candidate_reason"]) <= {"p1_at_or_above_fold_threshold", "p1_below_fold_threshold"}
+
+
+def test_oof_supports_registered_hist_gradient_boosting_trial() -> None:
+    frame = pd.DataFrame({"f": [0.0, 1.0] * 6, "y_direction": [-1, 1] * 6, "t0": pd.date_range("2024-01-01", periods=12), "t1": pd.date_range("2024-01-01", periods=12)})
+
+    result = oof_logistic_predictions(frame, [([*range(8)], [8, 9, 10, 11])], ["f"], model_family="hist_gradient_boosting")
+
+    assert result.loc[[8, 9, 10, 11], "p1"].notna().all()
+    assert set(result.loc[[8, 9, 10, 11], "prediction_kind"]) == {"OOF_CALIBRATED"}

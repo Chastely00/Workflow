@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+from sklearn.ensemble import HistGradientBoostingClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.impute import SimpleImputer
 from sklearn.metrics import f1_score
@@ -10,7 +11,15 @@ from sklearn.preprocessing import StandardScaler
 from .splits import chronological_purged_folds
 
 
-def _fit_predict_probability(train: pd.DataFrame, valid: pd.DataFrame, feature_columns: list[str]) -> np.ndarray:
+def _make_model(model_family: str):
+    if model_family == "logistic_regression":
+        return LogisticRegression(random_state=0, max_iter=1000)
+    if model_family == "hist_gradient_boosting":
+        return HistGradientBoostingClassifier(learning_rate=0.05, max_iter=100, max_leaf_nodes=7, l2_regularization=1.0, random_state=0)
+    raise ValueError(f"unsupported model_family: {model_family}")
+
+
+def _fit_predict_probability(train: pd.DataFrame, valid: pd.DataFrame, feature_columns: list[str], model_family: str) -> np.ndarray:
     y = (train["y_direction"] == 1).astype(int)
     if y.nunique() != 2:
         raise ValueError("training fold requires both classes")
@@ -18,15 +27,15 @@ def _fit_predict_probability(train: pd.DataFrame, valid: pd.DataFrame, feature_c
     train_features = imputer.transform(train[feature_columns])
     valid_features = imputer.transform(valid[feature_columns])
     scaler = StandardScaler().fit(train_features)
-    model = LogisticRegression(random_state=0, max_iter=1000).fit(scaler.transform(train_features), y)
+    model = _make_model(model_family).fit(scaler.transform(train_features), y)
     return model.predict_proba(scaler.transform(valid_features))[:, 1]
 
 
-def _fold_local_calibrator(train: pd.DataFrame, feature_columns: list[str], n_splits: int) -> tuple[LogisticRegression, np.ndarray, np.ndarray]:
+def _fold_local_calibrator(train: pd.DataFrame, feature_columns: list[str], n_splits: int, model_family: str) -> tuple[LogisticRegression, np.ndarray, np.ndarray]:
     folds = chronological_purged_folds(train[["t0", "t1"]], n_splits=n_splits)
     probabilities = np.full(len(train), np.nan)
     for inner_train, inner_valid in folds:
-        probabilities[inner_valid] = _fit_predict_probability(train.iloc[inner_train], train.iloc[inner_valid], feature_columns)
+        probabilities[inner_valid] = _fit_predict_probability(train.iloc[inner_train], train.iloc[inner_valid], feature_columns, model_family)
     usable = np.isfinite(probabilities)
     target = (train.loc[usable, "y_direction"] == 1).astype(int)
     if target.nunique() != 2:
@@ -49,6 +58,7 @@ def oof_logistic_predictions(
     feature_columns: list[str],
     calibration_splits: int = 2,
     candidate_threshold_grid: tuple[float, ...] = (0.5, 0.55, 0.6, 0.65, 0.7),
+    model_family: str = "logistic_regression",
 ) -> pd.DataFrame:
     """Fit preprocessing/model on each supplied train fold and emit validation-only p1."""
     required = set(feature_columns) | {"y_direction", "t0", "t1"}
@@ -73,8 +83,8 @@ def oof_logistic_predictions(
             raise ValueError("train and validation rows overlap")
         if not (pd.to_datetime(train["t1"]) < pd.to_datetime(valid["t0"]).min()).all():
             raise ValueError("training events must resolve before validation begins")
-        raw_probability = _fit_predict_probability(train, valid, feature_columns)
-        calibrator, calibration_probability, calibration_target = _fold_local_calibrator(train.reset_index(drop=True), feature_columns, calibration_splits)
+        raw_probability = _fit_predict_probability(train, valid, feature_columns, model_family)
+        calibrator, calibration_probability, calibration_target = _fold_local_calibrator(train.reset_index(drop=True), feature_columns, calibration_splits, model_family)
         threshold = _select_candidate_threshold(calibration_probability, calibration_target, candidate_threshold_grid)
         logits = np.log(np.clip(raw_probability, 1e-6, 1 - 1e-6) / (1 - np.clip(raw_probability, 1e-6, 1 - 1e-6)))
         probability = calibrator.predict_proba(logits.reshape(-1, 1))[:, 1]
