@@ -148,7 +148,6 @@ def _validate_lifecycle_payload(value: object) -> dict[str, object]:
         value["lifecycle_active_row_count"]
         + value["lifecycle_inactive_row_count"]
         != value["state_row_count"]
-        or value["lifecycle_conflict_count"] != 0
         or value["identity_conflict_count"] != 0
     ):
         raise ResultMetadataError(

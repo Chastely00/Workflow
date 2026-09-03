@@ -7,7 +7,7 @@ import pandas as pd
 import pytest
 
 from etf_tricks.registry import ETF_IDS
-from etf_tricks.result import ETFTrickResult, attach_etf_amount
+from etf_tricks.result import ETFTrickResult, _validate_lifecycle_payload, attach_etf_amount
 from etf_tricks.lab import ETFTrickLab
 
 
@@ -113,6 +113,20 @@ def _state(market: pd.DataFrame) -> pd.DataFrame:
 
 def _master(tickers: list[str]) -> pd.DataFrame:
     return pd.DataFrame({"ticker": tickers, "delist_date": pd.NaT})
+
+
+def test_lifecycle_payload_retains_explicit_missing_lifecycle_conflicts():
+    payload = {
+        "state_row_count": 1,
+        "lifecycle_active_row_count": 0,
+        "lifecycle_inactive_row_count": 1,
+        "lifecycle_conflict_count": 1,
+        "identity_conflict_count": 0,
+        "formation_state_counts": {},
+        "formation_exclusion_reason_counts": {},
+    }
+
+    assert _validate_lifecycle_payload(payload) == payload
 
 
 def test_notebook_views_have_exactly_13_stably_ordered_columns():
