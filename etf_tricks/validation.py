@@ -7,7 +7,12 @@ import numpy as np
 import pandas as pd
 
 from .calendar import TradingCalendar
-from .result import ETFTrickResult
+from .result import (
+    ETFTrickResult,
+    ResultMetadataError,
+    market_state_identity_sha256,
+    validate_governed_result_metadata,
+)
 
 
 def build_selection_diagnostics(candidate_audit: pd.DataFrame) -> pd.DataFrame:
@@ -58,9 +63,48 @@ def validate_result(
     result: ETFTrickResult,
     calendar: TradingCalendar,
     expected_etf_ids: Iterable[str],
+    *,
+    expected_market_state_identity_sha256: str | None = None,
 ) -> ReadinessReport:
     expected = tuple(expected_etf_ids)
     hard: list[ValidationIssue] = []
+    try:
+        validate_governed_result_metadata(
+            result.metadata, result.candidate_audit, result.diagnostics
+        )
+    except ResultMetadataError as exc:
+        hard.append(ValidationIssue(exc.code, str(exc)))
+    if expected_market_state_identity_sha256 is None:
+        hard.append(
+            ValidationIssue(
+                "missing_market_state_identity_authority",
+                "READY requires an external market-state identity authority",
+            )
+        )
+    else:
+        try:
+            observed_identity_sha256 = market_state_identity_sha256(
+                result.metadata.get("market_state_identity")
+                if isinstance(result.metadata, dict)
+                else None
+            )
+        except ResultMetadataError:
+            observed_identity_sha256 = None
+        if (
+            not isinstance(expected_market_state_identity_sha256, str)
+            or len(expected_market_state_identity_sha256) != 64
+            or any(
+                character not in "0123456789abcdef"
+                for character in expected_market_state_identity_sha256
+            )
+            or observed_identity_sha256 != expected_market_state_identity_sha256
+        ):
+            hard.append(
+                ValidationIssue(
+                    "market_state_identity_authority_mismatch",
+                    "result market-state identity does not match external authority",
+                )
+            )
     warnings: list[ValidationIssue] = [
         ValidationIssue(
             "snapshot_industry_classification",
@@ -175,6 +219,62 @@ def validate_result(
             hard.append(
                 ValidationIssue(
                     "invalid_etf_amount", "ETF amount must be finite and non-negative"
+                )
+            )
+    amount_audit_columns = {
+        "missing_traded_value_count",
+        "status_missing_count",
+        "status_zero_authorized_count",
+        "amount_quality_state",
+    }
+    if not amount_audit_columns.issubset(daily.columns):
+        hard.append(
+            ValidationIssue(
+                "invalid_amount_audit",
+                "daily_etf lacks authoritative amount audit columns",
+            )
+        )
+    else:
+        integer_audits = {
+            column: daily[column].map(
+                lambda value: not isinstance(value, (bool, np.bool_))
+                and isinstance(value, (int, np.integer))
+                and int(value) >= 0
+            )
+            for column in (
+                "missing_traded_value_count",
+                "status_missing_count",
+                "status_zero_authorized_count",
+            )
+        }
+        missing_count = pd.to_numeric(
+            daily["status_missing_count"], errors="coerce"
+        )
+        legacy_missing = pd.to_numeric(
+            daily["missing_traded_value_count"], errors="coerce"
+        )
+        expected_quality = pd.Series(
+            np.where(missing_count.gt(0), "MISSING", "READY"),
+            index=daily.index,
+        )
+        audit_invalid = (
+            not all(mask.all() for mask in integer_audits.values())
+            or not legacy_missing.eq(missing_count).all()
+            or not daily["amount_quality_state"].isin({"READY", "MISSING"}).all()
+            or not daily["amount_quality_state"].eq(expected_quality).all()
+        )
+        if audit_invalid:
+            hard.append(
+                ValidationIssue(
+                    "invalid_amount_audit",
+                    "authoritative amount audit counts or quality state are inconsistent",
+                )
+            )
+        elif missing_count.gt(0).any():
+            hard.append(
+                ValidationIssue(
+                    "missing_authoritative_amount",
+                    "one or more held constituents lack authoritative market-state amount",
                 )
             )
     if "cash" not in daily.columns or (
@@ -626,6 +726,18 @@ def _report(
             )
         else:
             incomplete_count = 0
+
+        def amount_audit_total(column: str) -> int | float:
+            if group.empty or column not in group:
+                return 0
+            values = group[column]
+            valid = values.map(
+                lambda value: not isinstance(value, (bool, np.bool_))
+                and isinstance(value, (int, np.integer))
+                and int(value) >= 0
+            )
+            return int(values.sum()) if valid.all() else np.nan
+
         summaries.append(
             {
                 "etf_id": etf_id,
@@ -638,6 +750,8 @@ def _report(
                 "incomplete_transition_count": incomplete_count,
                 "forced_delisting_count": 0 if trade_group.empty or "is_forced_delist_liquidation" not in trade_group else int(trade_group["is_forced_delist_liquidation"].fillna(False).astype(bool).sum()),
                 "total_cost": np.nan if group.empty or "total_cost" not in group else pd.to_numeric(group["total_cost"], errors="coerce").sum(),
+                "status_missing_count": amount_audit_total("status_missing_count"),
+                "status_zero_authorized_count": amount_audit_total("status_zero_authorized_count"),
             }
         )
     status = "NOT_READY" if hard else "READY"

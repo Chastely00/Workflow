@@ -3,7 +3,9 @@ from __future__ import annotations
 import math
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import date, datetime
 from decimal import Decimal, ROUND_FLOOR, ROUND_HALF_UP
+from numbers import Number
 from types import MappingProxyType
 
 import numpy as np
@@ -16,6 +18,18 @@ from .models import CostPolicy, ETFSpec
 
 class ExecutionInvariantError(ValueError):
     pass
+
+
+_MARKET_STATE_TRADING = np.int8(1)
+_MARKET_STATE_HALTED = np.int8(2)
+_MARKET_STATE_MISSING = np.int8(3)
+_EXCHANGE_TRADABLE_TRUE = np.int8(1)
+_EXCHANGE_TRADABLE_FALSE = np.int8(0)
+_EXCHANGE_TRADABLE_UNKNOWN = np.int8(-1)
+
+
+def _is_boolean(value: object, expected: bool) -> bool:
+    return isinstance(value, (bool, np.bool_)) and bool(value) is expected
 
 
 @dataclass(frozen=True)
@@ -40,10 +54,12 @@ class PreparedExecutionMarket:
     close: np.ndarray
     adj_close: np.ndarray
     traded_value: np.ndarray
+    market_state: np.ndarray
+    exchange_tradable: np.ndarray
 
     def lookup(
         self, date: pd.Timestamp, ticker: str
-    ) -> tuple[np.float64, np.float64, np.float64] | None:
+    ) -> tuple[np.float64, np.float64, np.float64, np.int8, np.int8] | None:
         date_position = self.date_positions.get(pd.Timestamp(date))
         ticker_position = self.ticker_positions.get(str(ticker))
         if date_position is None or ticker_position is None:
@@ -52,6 +68,8 @@ class PreparedExecutionMarket:
             self.close[date_position, ticker_position],
             self.adj_close[date_position, ticker_position],
             self.traded_value[date_position, ticker_position],
+            self.market_state[date_position, ticker_position],
+            self.exchange_tradable[date_position, ticker_position],
         )
 
 
@@ -111,13 +129,15 @@ class PortfolioExecutionEngine:
         if not capital.is_finite() or capital <= 0:
             raise ExecutionInvariantError("initial_capital must be finite and positive")
         prepared_market = (
-            market
+            self._validate_prepared_market(market)
             if isinstance(market, PreparedExecutionMarket)
             else self.prepare_market(market)
         )
         target_frame = self._normalize_targets(targets, spec)
-        delist_dates = self._delist_dates(security_master)
         days = tuple(pd.Timestamp(day) for day in calendar.days)
+        effective_delist_sessions = self._effective_delist_sessions(
+            security_master, days
+        )
         days_by_month: dict[pd.Period, list[pd.Timestamp]] = {}
         for day in days:
             days_by_month.setdefault(day.to_period("M"), []).append(day)
@@ -140,6 +160,7 @@ class PortfolioExecutionEngine:
         schedule_start: dict[str, int] = {}
         schedule_target: dict[str, int] = {}
         target_weights: dict[str, float] = {}
+        lifecycle_blocked: set[str] = set()
         schedule_month: pd.Period | None = None
         schedule_n = 0
         inception: pd.Timestamp | None = None
@@ -152,13 +173,31 @@ class PortfolioExecutionEngine:
 
         for date in days:
             month, k, month_day_count = day_schedule[date]
+            lifecycle_blocked.update(
+                ticker
+                for ticker, effective_session in effective_delist_sessions.items()
+                if effective_session == date
+            )
+            for ticker in lifecycle_blocked:
+                schedule_start.pop(ticker, None)
+                schedule_target.pop(ticker, None)
+                backlog.pop(ticker, None)
+                target_weights.pop(ticker, None)
             current_tickers = {
                 ticker for ticker, quantity in shares.items() if quantity > 0
             }
             if schedule_month == month:
-                current_tickers.update(schedule_start)
-                current_tickers.update(schedule_target)
+                current_tickers.update(
+                    ticker for ticker in schedule_start if ticker not in lifecycle_blocked
+                )
+                current_tickers.update(
+                    ticker for ticker in schedule_target if ticker not in lifecycle_blocked
+                )
             month_targets = targets_by_month.get(month, empty_targets)
+            if lifecycle_blocked:
+                month_targets = month_targets[
+                    ~month_targets["ticker"].isin(lifecycle_blocked)
+                ]
             current_tickers |= set(month_targets["ticker"])
 
             ca_by_ticker: dict[str, CorporateActionConversion] = {}
@@ -198,10 +237,27 @@ class PortfolioExecutionEngine:
                 else:
                     price_state[ticker] = (None, None, 0)
 
+            for ticker in sorted(current_tickers):
+                if (
+                    self._market_state_code(prepared_market, date, ticker)
+                    == _MARKET_STATE_MISSING
+                ):
+                    diagnostic_records.append(
+                        {
+                            "date": date,
+                            "etf_id": spec.etf_id,
+                            "ticker": ticker,
+                            "diagnostic": "missing_market_state",
+                        }
+                    )
+
             forced_commission = Decimal("0")
             forced_tax = Decimal("0")
             for ticker in sorted(list(shares)):
-                if shares.get(ticker, 0) <= 0 or delist_dates.get(ticker) != date:
+                if (
+                    shares.get(ticker, 0) <= 0
+                    or effective_delist_sessions.get(ticker) != date
+                ):
                     continue
                 price, _, _ = price_state.get(ticker, (None, None, 0))
                 if price is None:
@@ -232,11 +288,17 @@ class PortfolioExecutionEngine:
                     for ticker, quantity in shares.items()
                     if quantity > 0 and price_state.get(ticker, (None, None, 0))[0] is not None
                 )
-                schedule_start = {ticker: quantity for ticker, quantity in shares.items() if quantity > 0}
+                schedule_start = {
+                    ticker: quantity
+                    for ticker, quantity in shares.items()
+                    if quantity > 0 and ticker not in lifecycle_blocked
+                }
                 schedule_target = {ticker: 0 for ticker in schedule_start}
                 target_weights = {}
                 for target in month_targets.sort_values("ticker", kind="stable").itertuples(index=False):
                     ticker = str(target.ticker)
+                    if ticker in lifecycle_blocked:
+                        continue
                     weight = float(target.target_weight)
                     target_weights[ticker] = weight
                     price = price_state.get(ticker, (None, None, 0))[0]
@@ -258,7 +320,9 @@ class PortfolioExecutionEngine:
 
             desired: dict[str, int] = {}
             if schedule_month == month:
-                for ticker in sorted(set(schedule_start) | set(schedule_target)):
+                for ticker in sorted(
+                    (set(schedule_start) | set(schedule_target)) - lifecycle_blocked
+                ):
                     scheduled = scheduled_position(
                         schedule_start.get(ticker, 0),
                         schedule_target.get(ticker, 0),
@@ -450,6 +514,32 @@ class PortfolioExecutionEngine:
             ).to_numpy(dtype=np.float64)
             matrix.setflags(write=False)
             matrices.append(matrix)
+        state_matrix = np.full(shape, _MARKET_STATE_MISSING, dtype=np.int8)
+        state_codes = frame["market_state"].map(
+            {
+                "TRADING": _MARKET_STATE_TRADING,
+                "HALTED": _MARKET_STATE_HALTED,
+                "MISSING": _MARKET_STATE_MISSING,
+            }
+        ).to_numpy(dtype=np.int8)
+        state_matrix[date_codes, ticker_codes] = state_codes
+        state_matrix.setflags(write=False)
+        tradability_matrix = np.full(
+            shape, _EXCHANGE_TRADABLE_UNKNOWN, dtype=np.int8
+        )
+        tradability_codes = np.array(
+            [
+                _EXCHANGE_TRADABLE_TRUE
+                if _is_boolean(value, True)
+                else _EXCHANGE_TRADABLE_FALSE
+                if _is_boolean(value, False)
+                else _EXCHANGE_TRADABLE_UNKNOWN
+                for value in frame["exchange_tradable"]
+            ],
+            dtype=np.int8,
+        )
+        tradability_matrix[date_codes, ticker_codes] = tradability_codes
+        tradability_matrix.setflags(write=False)
         return PreparedExecutionMarket(
             date_positions=MappingProxyType(
                 {pd.Timestamp(date): index for index, date in enumerate(dates)}
@@ -460,6 +550,8 @@ class PortfolioExecutionEngine:
             close=matrices[0],
             adj_close=matrices[1],
             traded_value=matrices[2],
+            market_state=state_matrix,
+            exchange_tradable=tradability_matrix,
         )
 
     @staticmethod
@@ -469,11 +561,132 @@ class PortfolioExecutionEngine:
         if missing:
             raise ExecutionInvariantError(f"market missing columns: {missing}")
         frame = market.copy()
+        has_market_state = "market_state" in frame.columns
+        has_exchange_tradable = "exchange_tradable" in frame.columns
+        if not has_market_state or not has_exchange_tradable:
+            raise ExecutionInvariantError(
+                "market requires market_state and exchange_tradable"
+            )
         frame["date"] = pd.to_datetime(frame["date"], errors="coerce")
         frame["ticker"] = frame["ticker"].astype(str)
         if frame.duplicated(["date", "ticker"]).any():
             raise ExecutionInvariantError("market contains duplicate date-ticker keys")
+        allowed_states = {"TRADING", "HALTED", "MISSING"}
+        if frame["market_state"].isna().any() or not set(
+            frame["market_state"]
+        ).issubset(allowed_states):
+            raise ExecutionInvariantError("market has invalid market_state")
+        for row in frame[["market_state", "exchange_tradable"]].itertuples(index=False):
+            if row.market_state == "TRADING" and not _is_boolean(
+                row.exchange_tradable, True
+            ):
+                raise ExecutionInvariantError(
+                    "TRADING market_state requires exchange_tradable=True"
+                )
+            if row.market_state == "HALTED" and not _is_boolean(
+                row.exchange_tradable, False
+            ):
+                raise ExecutionInvariantError(
+                    "HALTED market_state requires exchange_tradable=False"
+                )
+            if row.market_state == "MISSING" and not pd.isna(row.exchange_tradable):
+                raise ExecutionInvariantError(
+                    "MISSING market_state requires null exchange_tradable"
+                )
         return frame.sort_values(["date", "ticker"], kind="stable")
+
+    @staticmethod
+    def _validate_prepared_market(
+        market: PreparedExecutionMarket,
+    ) -> PreparedExecutionMarket:
+        matrices = {
+            "close": market.close,
+            "adj_close": market.adj_close,
+            "traded_value": market.traded_value,
+            "market_state": market.market_state,
+            "exchange_tradable": market.exchange_tradable,
+        }
+        if not isinstance(market.close, np.ndarray) or market.close.ndim != 2:
+            raise ExecutionInvariantError("prepared market matrix shape is invalid")
+        shape = market.close.shape
+        for name, matrix in matrices.items():
+            if not isinstance(matrix, np.ndarray) or matrix.ndim != 2 or matrix.shape != shape:
+                raise ExecutionInvariantError(
+                    f"prepared market matrix shape is invalid for {name}"
+                )
+        PortfolioExecutionEngine._validate_prepared_axis(
+            "date_positions", market.date_positions, shape[0], dates=True
+        )
+        PortfolioExecutionEngine._validate_prepared_axis(
+            "ticker_positions", market.ticker_positions, shape[1], dates=False
+        )
+        for name, matrix in (
+            ("market_state", market.market_state),
+            ("exchange_tradable", market.exchange_tradable),
+        ):
+            if not np.issubdtype(matrix.dtype, np.integer) or np.issubdtype(
+                matrix.dtype, np.bool_
+            ):
+                raise ExecutionInvariantError(
+                    f"prepared {name} must have an integer dtype"
+                )
+        if not np.issubdtype(market.traded_value.dtype, np.number) or np.isinf(
+            market.traded_value
+        ).any():
+            raise ExecutionInvariantError(
+                "prepared traded_value must contain only finite values or nulls"
+            )
+        allowed_states = {
+            _MARKET_STATE_TRADING,
+            _MARKET_STATE_HALTED,
+            _MARKET_STATE_MISSING,
+        }
+        allowed_tradability = {
+            _EXCHANGE_TRADABLE_TRUE,
+            _EXCHANGE_TRADABLE_FALSE,
+            _EXCHANGE_TRADABLE_UNKNOWN,
+        }
+        if not set(np.unique(market.market_state)).issubset(allowed_states):
+            raise ExecutionInvariantError("prepared market_state has invalid codes")
+        if not set(np.unique(market.exchange_tradable)).issubset(allowed_tradability):
+            raise ExecutionInvariantError("prepared exchange_tradable has invalid codes")
+        valid_pairs = (
+            ((market.market_state == _MARKET_STATE_TRADING) & (market.exchange_tradable == _EXCHANGE_TRADABLE_TRUE))
+            | ((market.market_state == _MARKET_STATE_HALTED) & (market.exchange_tradable == _EXCHANGE_TRADABLE_FALSE))
+            | ((market.market_state == _MARKET_STATE_MISSING) & (market.exchange_tradable == _EXCHANGE_TRADABLE_UNKNOWN))
+        )
+        if not valid_pairs.all():
+            raise ExecutionInvariantError("prepared market state/tradability pair is invalid")
+        return market
+
+    @staticmethod
+    def _validate_prepared_axis(
+        name: str,
+        positions: Mapping[object, object],
+        size: int,
+        *,
+        dates: bool,
+    ) -> None:
+        if not isinstance(positions, Mapping) or len(positions) != size:
+            raise ExecutionInvariantError(f"prepared {name} is invalid")
+        values = list(positions.values())
+        if any(
+            isinstance(value, bool) or not isinstance(value, (int, np.integer))
+            for value in values
+        ) or set(values) != set(range(size)):
+            raise ExecutionInvariantError(f"prepared {name} is invalid")
+        keys = list(positions)
+        if dates:
+            try:
+                normalized_keys = [pd.Timestamp(value) for value in keys]
+            except (TypeError, ValueError) as exc:
+                raise ExecutionInvariantError(f"prepared {name} is invalid") from exc
+            if any(value is pd.NaT for value in normalized_keys) or len(
+                set(normalized_keys)
+            ) != size:
+                raise ExecutionInvariantError(f"prepared {name} is invalid")
+        elif any(not isinstance(value, str) or not value for value in keys):
+            raise ExecutionInvariantError(f"prepared {name} is invalid")
 
     @staticmethod
     def _normalize_targets(targets: pd.DataFrame, spec: ETFSpec) -> pd.DataFrame:
@@ -506,15 +719,68 @@ class PortfolioExecutionEngine:
             raise ExecutionInvariantError("security_master requires ticker and delist_date")
         frame = security_master.copy()
         frame["ticker"] = frame["ticker"].astype(str)
-        frame["delist_date"] = pd.to_datetime(frame["delist_date"], errors="coerce")
         if frame["ticker"].duplicated().any():
             raise ExecutionInvariantError("security_master contains duplicate tickers")
-        return dict(zip(frame["ticker"], frame["delist_date"], strict=True))
+        delist_dates: dict[str, pd.Timestamp] = {}
+        for ticker, value in frame[["ticker", "delist_date"]].itertuples(
+            index=False
+        ):
+            normalized = PortfolioExecutionEngine._normalize_delist_date(value)
+            if normalized is not None:
+                delist_dates[str(ticker)] = normalized
+        return delist_dates
+
+    @staticmethod
+    def _normalize_delist_date(value: object) -> pd.Timestamp | None:
+        if value is None or value is pd.NaT or value is pd.NA:
+            return None
+        if isinstance(value, (bool, np.bool_)):
+            raise ExecutionInvariantError("security_master delist_date cannot be boolean")
+        if isinstance(value, Number):
+            raise ExecutionInvariantError("security_master delist_date cannot be numeric")
+        if isinstance(value, str):
+            try:
+                parsed = pd.Timestamp(datetime.fromisoformat(value))
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise ExecutionInvariantError(
+                    "security_master contains invalid delist_date"
+                ) from exc
+        elif isinstance(value, (pd.Timestamp, datetime, date)):
+            parsed = pd.Timestamp(value)
+        else:
+            raise ExecutionInvariantError("security_master contains invalid delist_date")
+        if parsed is pd.NaT or pd.isna(parsed):
+            raise ExecutionInvariantError("security_master contains invalid delist_date")
+        if parsed.tz is not None:
+            parsed = parsed.tz_convert("Asia/Taipei").tz_localize(None)
+        return parsed.normalize()
+
+    @classmethod
+    def _effective_delist_sessions(
+        cls,
+        security_master: pd.DataFrame | None,
+        days: tuple[pd.Timestamp, ...],
+    ) -> dict[str, pd.Timestamp]:
+        delist_dates = cls._delist_dates(security_master)
+        if not delist_dates:
+            return {}
+        sessions = pd.DatetimeIndex(days)
+        if sessions.empty:
+            raise ExecutionInvariantError("delist date is outside governed calendar")
+        effective_sessions: dict[str, pd.Timestamp] = {}
+        for ticker, delist_date in delist_dates.items():
+            position = int(sessions.searchsorted(delist_date, side="left"))
+            if position >= len(sessions):
+                raise ExecutionInvariantError(
+                    f"delist date is outside governed calendar: {ticker}"
+                )
+            effective_sessions[ticker] = pd.Timestamp(sessions[position])
+        return effective_sessions
 
     @staticmethod
     def _market_row(
         market: PreparedExecutionMarket, date: pd.Timestamp, ticker: str
-    ) -> tuple[np.float64, np.float64, np.float64] | None:
+    ) -> tuple[np.float64, np.float64, np.float64, np.int8, np.int8] | None:
         return market.lookup(date, ticker)
 
     @staticmethod
@@ -527,7 +793,7 @@ class PortfolioExecutionEngine:
 
     @classmethod
     def _valid_pair(
-        cls, row: tuple[np.float64, np.float64, np.float64] | None
+        cls, row: tuple[np.float64, np.float64, np.float64, np.int8, np.int8] | None
     ) -> tuple[Decimal | None, Decimal | None]:
         if row is None:
             return None, None
@@ -540,7 +806,20 @@ class PortfolioExecutionEngine:
         cls, market: PreparedExecutionMarket, date: pd.Timestamp, ticker: str
     ) -> Decimal | None:
         row = cls._market_row(market, date, ticker)
-        return None if row is None else cls._valid_decimal(row[0])
+        if (
+            row is None
+            or row[3] != _MARKET_STATE_TRADING
+            or row[4] != _EXCHANGE_TRADABLE_TRUE
+        ):
+            return None
+        return cls._valid_decimal(row[0])
+
+    @classmethod
+    def _market_state_code(
+        cls, market: PreparedExecutionMarket, date: pd.Timestamp, ticker: str
+    ) -> np.int8 | None:
+        row = cls._market_row(market, date, ticker)
+        return None if row is None else row[3]
 
     def _cost_or_zero(
         self, side: str, quantity: int, price: Decimal | None

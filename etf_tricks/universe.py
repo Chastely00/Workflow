@@ -41,12 +41,15 @@ class UniverseEngine:
         features: pd.DataFrame,
         security_master: pd.DataFrame,
         ix0001: pd.DataFrame,
+        market_state: pd.DataFrame,
     ) -> SelectionResult:
         if spec.signal_name not in features.columns:
             raise UniverseContractError(
                 f"features missing columns: {[spec.signal_name]}"
             )
-        context = self.prepare(formation_date, features, security_master, ix0001)
+        context = self.prepare(
+            formation_date, features, security_master, ix0001, market_state
+        )
         return self.select_prepared(spec, context)
 
     def prepare(
@@ -55,10 +58,12 @@ class UniverseEngine:
         features: pd.DataFrame,
         security_master: pd.DataFrame,
         ix0001: pd.DataFrame,
+        market_state: pd.DataFrame,
     ) -> PreparedUniverseContext:
         formation = pd.Timestamp(formation_date)
         feature_frame = self._validate_features(features, formation)
         master = self._validate_master(security_master)
+        formation_state = self._validate_formation_state(market_state, formation)
         denominator = self._ix0001_sum20(ix0001, formation)
         base_audit = feature_frame.merge(
             master,
@@ -66,8 +71,25 @@ class UniverseEngine:
             how="left",
             validate="one_to_one",
         )
+        base_audit = base_audit.merge(
+            formation_state,
+            on="ticker",
+            how="left",
+            validate="one_to_one",
+        )
         base_audit["exclusion_reason"] = ""
         self._apply_base_eligibility(base_audit, formation)
+        self._exclude(
+            base_audit,
+            base_audit["formation_market_state"].eq("HALTED"),
+            "formation_market_halted",
+        )
+        self._exclude(
+            base_audit,
+            base_audit["formation_market_state"].isna()
+            | base_audit["formation_market_state"].eq("MISSING"),
+            "formation_market_state_missing",
+        )
         base_audit = base_audit.rename(
             columns={"exclusion_reason": "_base_exclusion_reason"}
         )
@@ -222,6 +244,40 @@ class UniverseEngine:
         master["list_date"] = pd.to_datetime(master["list_date"], errors="coerce")
         master["delist_date"] = pd.to_datetime(master["delist_date"], errors="coerce")
         return master
+
+    @staticmethod
+    def _validate_formation_state(
+        market_state: pd.DataFrame, formation: pd.Timestamp
+    ) -> pd.DataFrame:
+        required = {"date", "ticker", "market_state", "full_delivery"}
+        missing = sorted(required.difference(market_state.columns))
+        if missing:
+            raise UniverseContractError(
+                f"market_state missing formation columns: {missing}"
+            )
+        state = market_state.loc[:, sorted(required)].copy()
+        state["date"] = pd.to_datetime(state["date"], errors="coerce")
+        state = state[state["date"].eq(formation)].copy()
+        state["ticker"] = state["ticker"].astype(str)
+        state["full_delivery"] = state["full_delivery"].astype("boolean")
+        if state["ticker"].duplicated().any():
+            raise UniverseContractError(
+                "market_state contains duplicate formation-date tickers"
+            )
+        invalid_states = sorted(
+            set(state["market_state"].dropna().astype(str))
+            .difference({"TRADING", "HALTED", "MISSING"})
+        )
+        if invalid_states:
+            raise UniverseContractError(
+                f"market_state contains invalid formation states: {invalid_states}"
+            )
+        return state.loc[:, ["ticker", "market_state", "full_delivery"]].rename(
+            columns={
+                "market_state": "formation_market_state",
+                "full_delivery": "formation_full_delivery",
+            }
+        )
 
     def _ix0001_sum20(
         self, ix0001: pd.DataFrame, formation: pd.Timestamp

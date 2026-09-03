@@ -4,7 +4,11 @@ import pandas as pd
 import pytest
 
 from etf_tricks.calendar import TradingCalendar
-from etf_tricks.result import ETFTrickResult
+from etf_tricks.result import (
+    ETFTrickResult,
+    append_lifecycle_evidence,
+    market_state_identity_sha256,
+)
 from etf_tricks.validation import build_selection_diagnostics, validate_result
 
 
@@ -32,6 +36,9 @@ def _valid_result() -> ETFTrickResult:
             "tax": [0.0, 0.0],
             "total_cost": [0.0, 0.0],
             "missing_traded_value_count": [0, 0],
+            "status_missing_count": [0, 0],
+            "status_zero_authorized_count": [0, 1],
+            "amount_quality_state": ["READY", "READY"],
         }
     )
     holdings = pd.DataFrame(
@@ -62,10 +69,32 @@ def _valid_result() -> ETFTrickResult:
             "formation_date": pd.Timestamp("2024-12-31"),
             "etf_id": "momentum",
             "ticker": ["1101"],
+            "formation_market_state": ["TRADING"],
             "liquidity_ratio_vs_ix0001_20d": [0.002],
             "r18_source_available_date": [pd.Timestamp("2024-12-30")],
         }
     )
+    lifecycle = {
+        "state_row_count": 1,
+        "lifecycle_active_row_count": 1,
+        "lifecycle_inactive_row_count": 0,
+        "lifecycle_conflict_count": 0,
+        "identity_conflict_count": 0,
+        "formation_state_counts": {"TRADING": 1},
+        "formation_exclusion_reason_counts": {},
+    }
+    manifest_hashes = {
+        artifact_id: "a" * 64
+        for artifact_id in (
+            "trading_calendar",
+            "daily_price_volume",
+            "daily_chip",
+            "monthly_sales",
+            "financial_statement_raw",
+            "security_master",
+            "daily_market_state",
+        )
+    }
     return ETFTrickResult(
         daily_etf=daily,
         daily_holdings=holdings,
@@ -86,13 +115,32 @@ def _valid_result() -> ETFTrickResult:
         ),
         monthly_targets=targets,
         candidate_audit=candidates,
-        diagnostics=pd.DataFrame(),
+        diagnostics=append_lifecycle_evidence(pd.DataFrame(), lifecycle),
         metadata={
             "run_config": {
                 "start_date": "2025-01-02",
                 "end_date": "2025-01-03",
                 "initial_capital": "1000",
-            }
+            },
+            "manifest_hashes": manifest_hashes,
+            "spec_hash": "b" * 64,
+            "market_state_identity": {
+                "artifact_id": "daily_market_state",
+                "manifest_sha256": "a" * 64,
+                "active_version": "market-state-v3",
+                "classification_policy_version": "daily_market_state_v3",
+                "state_lattice_policy_version": "daily_market_state_lattice_v5",
+                "market_identity_policy_version": "daily_market_identity_v3",
+                "dependency_certification_fingerprint": "b" * 64,
+            },
+            "market_state_config": {
+                "scan_start_date": "2024-12-31",
+                "scan_end_date": "2025-01-03",
+                "formation_admission": "TRADING_ONLY",
+                "execution_admission": "SAME_SESSION_TRADING_AND_EXCHANGE_TRADABLE",
+                "amount_source": "PRIOR_SESSION_HOLDINGS_AUTHORITATIVE_TRADED_VALUE",
+            },
+            "lifecycle_diagnostics": lifecycle,
         },
     )
 
@@ -101,8 +149,19 @@ def _codes(report) -> set[str]:
     return {issue.code for issue in report.hard_failures}
 
 
+def _validate(result: ETFTrickResult, expected_etf_ids=("momentum",)):
+    return validate_result(
+        result,
+        _calendar(),
+        expected_etf_ids,
+        expected_market_state_identity_sha256=market_state_identity_sha256(
+            result.metadata["market_state_identity"]
+        ),
+    )
+
+
 def test_valid_result_is_ready_and_has_explicit_availability_sections():
-    report = validate_result(_valid_result(), _calendar(), ["momentum"])
+    report = _validate(_valid_result())
     assert report.status == "READY"
     assert report.目前可用
     assert isinstance(report.目前缺失限制, tuple)
@@ -111,13 +170,30 @@ def test_valid_result_is_ready_and_has_explicit_availability_sections():
     assert report.per_etf.iloc[0]["candidate_shortage_count"] == 0
 
 
+def test_ready_requires_external_market_state_identity_authority():
+    result = _valid_result()
+
+    missing = validate_result(result, _calendar(), ["momentum"])
+    assert missing.status == "NOT_READY"
+    assert "missing_market_state_identity_authority" in _codes(missing)
+
+    wrong = validate_result(
+        result,
+        _calendar(),
+        ["momentum"],
+        expected_market_state_identity_sha256="c" * 64,
+    )
+    assert wrong.status == "NOT_READY"
+    assert "market_state_identity_authority_mismatch" in _codes(wrong)
+
+
 def test_missing_etf_and_post_inception_calendar_date_are_hard_failures():
-    missing_etf = validate_result(_valid_result(), _calendar(), ["momentum", "roe"])
+    missing_etf = _validate(_valid_result(), ["momentum", "roe"])
     assert "missing_etf" in _codes(missing_etf)
 
     result = _valid_result()
     result.daily_etf = result.daily_etf.iloc[:1].copy()
-    missing_date = validate_result(result, _calendar(), ["momentum"])
+    missing_date = _validate(result)
     assert "missing_post_inception_date" in _codes(missing_date)
 
 
@@ -144,7 +220,7 @@ def test_missing_etf_and_post_inception_calendar_date_are_hard_failures():
 def test_each_accounting_and_pit_gate_fails_closed(mutation, expected: str):
     result = _valid_result()
     mutation(result)
-    report = validate_result(result, _calendar(), ["momentum"])
+    report = _validate(result)
     assert report.status == "NOT_READY"
     assert expected in _codes(report)
 
@@ -154,7 +230,6 @@ def test_operational_limitations_remain_warnings_not_hidden_failures():
     result.monthly_targets = result.monthly_targets.iloc[:3].copy()
     result.daily_holdings.loc[1, "stale_price_days"] = 2
     result.daily_etf.loc[1, "target_completion_ratio"] = 0.8
-    result.daily_etf.loc[1, "missing_traded_value_count"] = 1
     result.trades = pd.concat([result.trades, pd.DataFrame(
         {
             "date": [DATES[1]],
@@ -171,11 +246,16 @@ def test_operational_limitations_remain_warnings_not_hidden_failures():
             "is_forced_delist_liquidation": [True],
         }
     )], ignore_index=True)
-    result.diagnostics = pd.DataFrame(
-        {"diagnostic": ["zero_candidate_carry_forward"]}
+    result.diagnostics = pd.concat(
+        [
+            result.diagnostics,
+            pd.DataFrame({"diagnostic": ["zero_candidate_carry_forward"]}),
+        ],
+        ignore_index=True,
+        sort=False,
     )
 
-    report = validate_result(result, _calendar(), ["momentum"])
+    report = _validate(result)
     warning_codes = {issue.code for issue in report.warnings}
     assert report.status == "READY"
     assert {
@@ -184,11 +264,47 @@ def test_operational_limitations_remain_warnings_not_hidden_failures():
         "backlog",
         "incomplete_transition",
         "forced_delisting",
-        "missing_traded_amount",
         "zero_candidate_carry_forward",
         "snapshot_industry_classification",
         "synthetic_corporate_action_model",
     }.issubset(warning_codes)
+
+
+def test_missing_authoritative_amount_audit_blocks_ready():
+    result = _valid_result()
+    result.daily_etf.loc[1, "missing_traded_value_count"] = 1
+    result.daily_etf.loc[1, "status_missing_count"] = 1
+    result.daily_etf.loc[1, "amount_quality_state"] = "MISSING"
+    result.daily_etf.loc[1, "has_data_quality_flag"] = True
+
+    report = _validate(result)
+
+    assert report.status == "NOT_READY"
+    assert "missing_authoritative_amount" in _codes(report)
+    assert report.per_etf.iloc[0]["status_missing_count"] == 1
+    assert report.per_etf.iloc[0]["status_zero_authorized_count"] == 1
+
+
+@pytest.mark.parametrize(
+    "updates",
+    [
+        {"status_missing_count": [0, -1]},
+        {"status_missing_count": [0, 0.5]},
+        {"status_missing_count": [0, float("inf")]},
+        {"status_zero_authorized_count": [0, True]},
+        {"missing_traded_value_count": [0, 1], "status_missing_count": [0, 0]},
+        {"amount_quality_state": ["READY", "MISSING"]},
+    ],
+)
+def test_amount_audit_dtype_and_cross_field_mismatches_fail_ready(updates):
+    result = _valid_result()
+    for column, values in updates.items():
+        result.daily_etf[column] = values
+
+    report = _validate(result)
+
+    assert report.status == "NOT_READY"
+    assert "invalid_amount_audit" in _codes(report)
 
 
 def test_zero_execution_with_missing_price_has_zero_notional() -> None:
@@ -208,7 +324,7 @@ def test_zero_execution_with_missing_price_has_zero_notional() -> None:
         }
     )], ignore_index=True)
 
-    report = validate_result(result, _calendar(), ["momentum"])
+    report = _validate(result)
 
     assert "broken_trade_reconciliation" not in _codes(report)
 
@@ -226,7 +342,7 @@ def test_coordinated_wealth_injection_fails_share_and_cash_ledger() -> None:
         0.1,
     ]
 
-    report = validate_result(result, _calendar(), ["momentum"])
+    report = _validate(result)
 
     assert "broken_share_ledger" in _codes(report)
 
@@ -254,7 +370,7 @@ def test_fractional_share_ledger_values_fail_closed(mutation) -> None:
     result = _valid_result()
     mutation(result)
 
-    report = validate_result(result, _calendar(), ["momentum"])
+    report = _validate(result)
 
     assert "non_integer_share_ledger" in _codes(report)
 

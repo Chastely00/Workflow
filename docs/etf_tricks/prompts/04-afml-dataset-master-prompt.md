@@ -262,7 +262,7 @@ FFD_d[x_t] = sum(k=0..width, w[k] * x[t-k])
 
 不得靜默選 `d=1`、放寬 alpha、降低最低樣本、把不同檢定中最有利的結果拼成通過，或只因更高 `d` 能拒絕單根就忽略記憶損失與過度差分。所有嘗試、被拒 config 與停止理由都要寫入 `ffd_search`/diagnostics。
 
-ADF 是必要但非充分證據。可額外保存 KPSS diagnostic；若啟用 `strict_dual_gate`，其規則必須在 run 前固定，不能事後挑選。
+ADF 必須同時通過預先固定的 p-value 與 5% critical-value gate。可額外保存 KPSS diagnostic，但不得在結果出爐後改變 stationarity gate。
 
 ### 7.3 Full-history FFD and leakage boundary
 
@@ -498,6 +498,8 @@ Runtime artifacts 寫入 git-ignored `.artifacts/etf_tricks/afml/<run_id>/`，�
 - `python -O` 下 validation 仍有效，不依賴 `assert`。
 
 ## 14. Fail-closed readiness
+
+記憶體內計算只能產生 `CORE_*` readiness。只有 canonical tables 原子寫入後，重新讀回並通過 manifest、schema、dtype、key、SHA-256 與 PIT cross-table availability reconciliation，才可投影為 finalized `READY*`；未 finalized 的 artifact 不得由 `AFMLDataset.read()` 接受。
 
 下列任一成立即 `NOT READY`：
 
