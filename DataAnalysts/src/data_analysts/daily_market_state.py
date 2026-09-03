@@ -30,7 +30,11 @@ def build_daily_market_state_rows(
     authorized halt with zero traded value; a delisted date is exclusive.
     """
     _require_manifest_hashes(manifest_hashes)
-    sessions = sorted({_date_text(row["date"], "calendar.date") for row in trading_calendar_rows})
+    sessions = sorted({
+        _date_text(row["date"], "calendar.date")
+        for row in trading_calendar_rows
+        if row.get("is_trading_day", True) is not False
+    })
     scoped_sessions = [day for day in sessions if build_start <= day <= build_end]
     if not scoped_sessions:
         raise ValueError("daily_market_state requested scope has no trading sessions")

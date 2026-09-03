@@ -4,14 +4,17 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 from typing import Any, Mapping
+import uuid
 
+import pyarrow as pa
 import pyarrow.parquet as pq
 
 from data_analysts.artifacts import atomic_write_text
 from data_analysts.config import RuntimeConfig
-from data_analysts.dataset_publication import PublicationResult, publish_dataset
+from data_analysts.dataset_publication import PublicationResult
 from data_analysts.paths import DataAnalystsContext
 
 
@@ -26,9 +29,7 @@ def publish_daily_market_state(
 ) -> PublicationResult:
     """Publish immutable partitions, then atomically add DMS authority evidence."""
     dependencies = _dependency_evidence(context)
-    result = publish_dataset(
-        context, config.artifact_contracts["daily_market_state"], rows, "bounded_backfill"
-    )
+    result = _publish_arrow_partitions(context, rows, build_start, build_end)
     manifest = dict(result.manifest)
     inventory = [_inventory_item(context, path) for path in manifest["artifact_paths"]]
     schema_fingerprint = inventory[0]["schema_fingerprint"]
@@ -58,6 +59,50 @@ def publish_daily_market_state(
         result.touched_paths, result.total_row_count, result.date_range, manifest_path, manifest,
         result.cleanup_diagnostics,
     )
+
+
+def _publish_arrow_partitions(
+    context: DataAnalystsContext, rows: list[dict[str, Any]], build_start: str, build_end: str
+) -> PublicationResult:
+    if not rows:
+        raise ValueError("daily_market_state bounded publication cannot be empty")
+    keys = [(str(row["date"]), str(row["ticker"])) for row in rows]
+    if keys != sorted(keys) or any(left == right for left, right in zip(keys, keys[1:])):
+        raise ValueError("daily_market_state rows must be pre-sorted and unique")
+    version = uuid.uuid4().hex
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        grouped.setdefault(str(row["date"])[:4], []).append(row)
+    paths: list[str] = []
+    inventory: list[dict[str, Any]] = []
+    for year, partition_rows in sorted(grouped.items()):
+        relative = f"canonical/derived/daily_market_state/versions/{version}/year={year}/part.parquet"
+        target = context.artifact_path(relative)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        staging = target.with_name(f".{target.name}.{uuid.uuid4().hex}.staging")
+        table = pa.Table.from_pylist(partition_rows)
+        pq.write_table(table, staging, compression="zstd")
+        os.replace(staging, target)
+        paths.append(relative)
+        inventory.append(_inventory_item(context, relative))
+    schema_fingerprints = {item["schema_fingerprint"] for item in inventory}
+    if len(schema_fingerprints) != 1:
+        raise ValueError("daily_market_state yearly parquet schemas differ")
+    manifest = {
+        "artifact_id": "daily_market_state", "contract_key": "daily_market_state",
+        "variant": "default", "schema_version": "1.0", "layer": "derived",
+        "source_families": ["security_master", "trading_calendar", "daily_price_volume", "daily_tradability"],
+        "source_collections": [], "row_count": len(rows),
+        "date_range": [build_start, build_end], "availability_date_range": [build_start, build_end],
+        "columns": list(pa.Table.from_pylist(rows[:1]).column_names),
+        "schema_fingerprint": schema_fingerprints.pop(), "partitioning": ["year"],
+        "artifact_paths": paths, "pit_policy": "after_close_next_session",
+        "data_cutoff_at": str(rows[0]["data_cutoff_at"]), "duplicate_count": 0,
+        "omitted_row_count": 0, "status": "ready", "active_version": version,
+        "created_at": str(rows[0]["data_cutoff_at"]), "partition_inventory": inventory,
+    }
+    return PublicationResult(tuple(paths), len(rows), (build_start, build_end),
+                             context.store_path("manifests", "daily_market_state.json"), manifest)
 
 
 def _dependency_evidence(context: DataAnalystsContext) -> dict[str, dict[str, str]]:
