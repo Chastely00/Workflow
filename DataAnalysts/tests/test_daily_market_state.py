@@ -205,4 +205,4 @@ def test_build_daily_market_state_retains_price_key_outside_master_lifecycle() -
     assert rows[0]["ticker"] == "9999"
     assert rows[0]["market_state"] == "MISSING"
     assert rows[0]["state_reason"] == "LIFECYCLE_OUTSIDE_ACTIVE_INTERVAL"
-    assert rows[0]["exchange_tradable"] is False
+    assert rows[0]["exchange_tradable"] is None

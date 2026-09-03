@@ -230,7 +230,10 @@ def _outside_lifecycle_row(
         "amount_state": "MISSING",
         "authoritative_traded_value": None,
         "amount_zero_authorized": False,
-        "exchange_tradable": False,
+        # A lifecycle conflict is not an exchange-state observation.  Keep this
+        # null so consumers cannot mistake an unverified historical key for a
+        # confirmed exchange halt.
+        "exchange_tradable": None,
         "instrument_kind": "OTHER",
         "identity_source": "SECURITY_MASTER_SNAPSHOT",
         "security_master_market": lifecycle.get("market"),
