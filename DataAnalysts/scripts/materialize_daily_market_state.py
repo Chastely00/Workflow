@@ -12,6 +12,8 @@ from data_analysts.config import load_runtime_config
 from data_analysts.daily_market_state import build_daily_market_state_rows
 from data_analysts.daily_market_state_publication import publish_daily_market_state
 from data_analysts.paths import DataAnalystsContext
+from data_analysts.tej_tradability import extract_identity_seed_rows
+from pymongo import MongoClient
 
 
 def main() -> None:
@@ -30,6 +32,8 @@ def main() -> None:
         return [row for path in paths for row in pq.read_table(root / path).to_pylist()]
     calendar, master = rows("trading_calendar"), rows("security_master")
     prices, attributes = rows("daily_price_volume", {"2024", "2025", "2026"}), rows("daily_tradability", {"2024", "2025", "2026"})
+    seeds = extract_identity_seed_rows(MongoClient("mongodb://localhost:27017/", serverSelectionTimeoutMS=5000)["APISTKATTR"], before_date=start)
+    attributes = [*seeds, *attributes]
     loaded = perf_counter()
     hashes = {name: hashlib.sha256((root / "manifests" / f"{name}.json").read_bytes()).hexdigest() for name in manifests}
     cutoff = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")

@@ -61,6 +61,32 @@ def extract_bounded_tradability_rows(
     }
 
 
+def extract_identity_seed_rows(
+    database: Any, *, before_date: str, workers: int = 8
+) -> list[dict[str, Any]]:
+    """Read at most one final APISKTATTR identity row per ticker before a bound."""
+    names = sorted(name for name in database.list_collection_names() if not name.startswith("system."))
+    bound = datetime.fromisoformat(before_date)
+    def one(name: str) -> dict[str, Any] | None:
+        source = database[name].find(
+            {"$or": [{"mdate": {"$lt": bound}}, {"mdate": {"$lt": before_date}}]}, _PROJECTION
+        ).sort("mdate", -1).limit(1)
+        values = list(source)
+        if not values:
+            return None
+        row = values[0]
+        raw_date = row.get("mdate")
+        day = raw_date.date().isoformat() if isinstance(raw_date, datetime) else str(raw_date)[:10]
+        return {
+            **{key: row.get(key) for key in _PROJECTION if key != "_id"},
+            "date": day, "ticker": name, "source_available_date": day,
+            "source_collection": name, "source_row_id": f"{name}:{day}",
+            "source_dataset_id": "daily_tradability",
+        }
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="tej-attr-seed") as pool:
+        return sorted((row for row in pool.map(one, names) if row is not None), key=lambda row: (row["date"], row["ticker"]))
+
+
 def publish_bounded_tradability_rows(
     context: DataAnalystsContext,
     rows: list[dict[str, Any]],
