@@ -1,7 +1,7 @@
 # ETF Tricks AFML Dataset 2026-09-03 驗收
 
-權威目標：`GOAL-ETF-AFML-DATASET-001`  
-驗證日期：2026-09-03  
+權威目標：`GOAL-ETF-AFML-DATASET-001`<br>
+驗證日期：2026-09-03<br>
 範圍：資料、PIT 對齊、Dollar bars、FFD、結構特徵與 triple-barrier labels；**不含模型訓練、績效或 production 宣告**。
 
 ## 結論
