@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from pathlib import Path
 from typing import Any
 
@@ -62,3 +63,24 @@ class TrialRegistry:
                 continue
             records.append(json.loads(line))
         return records
+
+
+def write_tier1_gate_report(report: dict[str, Any], output_dir: str | Path) -> dict[str, Any]:
+    """Persist an immutable Tier 1 gate decision before downstream work begins."""
+    output = Path(output_dir)
+    if output.exists():
+        raise FileExistsError(f"Tier 1 gate output already exists: {output}")
+    if report.get("status") not in {"PASSED", "FAILED"}:
+        raise ValueError("Tier 1 gate report requires status PASSED or FAILED")
+    if report["status"] == "FAILED" and (report.get("tier2_permitted") or report.get("tier3_permitted")):
+        raise ValueError("a failed Tier 1 gate cannot permit downstream layers")
+    try:
+        encoded = json.dumps(report, sort_keys=True, ensure_ascii=False, allow_nan=False)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Tier 1 gate report must be canonical JSON serializable") from exc
+    output.mkdir(parents=True)
+    path = output / "report.json"
+    path.write_text(encoded, encoding="utf-8")
+    manifest = {"schema_version": "tier1-gate-v1", "report": {"path": path.name, "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}}
+    (output / "manifest.json").write_text(json.dumps(manifest, sort_keys=True, ensure_ascii=False), encoding="utf-8")
+    return manifest

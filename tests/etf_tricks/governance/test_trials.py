@@ -1,6 +1,6 @@
 import json
 
-from etf_tricks.governance.trials import TrialRegistry
+from etf_tricks.governance.trials import TrialRegistry, write_tier1_gate_report
 
 
 def test_trial_registry_appends_a_complete_immutable_record(tmp_path) -> None:
@@ -39,3 +39,19 @@ def test_trial_registry_appends_a_complete_immutable_record(tmp_path) -> None:
         assert "duplicate" in str(exc)
     else:
         raise AssertionError("trial registry must reject a duplicate trial id")
+
+
+def test_tier1_gate_report_is_immutable_and_explicitly_blocks_downstream_layers(tmp_path) -> None:
+    output = tmp_path / "tier1-gate"
+    report = {"status": "FAILED", "tier2_permitted": False, "tier3_permitted": False, "reasons": ["no economic OOF candidate"]}
+
+    manifest = write_tier1_gate_report(report, output)
+
+    assert manifest["schema_version"] == "tier1-gate-v1"
+    assert json.loads((output / "report.json").read_text(encoding="utf-8"))["tier2_permitted"] is False
+    try:
+        write_tier1_gate_report(report, output)
+    except FileExistsError:
+        pass
+    else:
+        raise AssertionError("gate report must be immutable")
