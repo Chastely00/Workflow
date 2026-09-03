@@ -206,3 +206,18 @@ def test_build_daily_market_state_retains_price_key_outside_master_lifecycle() -
     assert rows[0]["market_state"] == "MISSING"
     assert rows[0]["state_reason"] == "LIFECYCLE_OUTSIDE_ACTIVE_INTERVAL"
     assert rows[0]["exchange_tradable"] is None
+
+
+def test_market_state_publication_schema_is_stable_when_attribute_fields_are_null() -> None:
+    import pyarrow as pa
+
+    from data_analysts.daily_market_state_publication import _DMS_SCHEMA
+
+    table = pa.Table.from_pylist(
+        [{"date": "2020-01-02", "ticker": "1101", "attr_row_present": False}],
+        schema=_DMS_SCHEMA,
+    )
+
+    assert table.schema == _DMS_SCHEMA
+    assert table.schema.field("atten_fg").type == pa.string()
+    assert table.schema.field("authoritative_traded_value").type == pa.float64()

@@ -18,6 +18,44 @@ from data_analysts.dataset_publication import PublicationResult
 from data_analysts.paths import DataAnalystsContext
 
 
+_DMS_SCHEMA = pa.schema(
+    [
+        pa.field("date", pa.string()),
+        pa.field("ticker", pa.string()),
+        pa.field("price_row_present", pa.bool_()),
+        pa.field("attr_row_present", pa.bool_()),
+        pa.field("full_delivery", pa.bool_()),
+        pa.field("observation_date", pa.string()),
+        pa.field("source_available_date", pa.string()),
+        pa.field("availability_precision", pa.string()),
+        pa.field("earliest_execution_session", pa.string()),
+        pa.field("security_master_manifest_sha256", pa.string()),
+        pa.field("calendar_manifest_sha256", pa.string()),
+        pa.field("price_manifest_sha256", pa.string()),
+        pa.field("tradability_manifest_sha256", pa.string()),
+        pa.field("classification_policy_version", pa.string()),
+        pa.field("data_cutoff_at", pa.string()),
+        *[pa.field(name, pa.string()) for name in (
+            "atten_fg", "disp_fg", "full_fg", "limit_fg", "limo_fg",
+            "sbadt_fg", "ssadt_fg", "susp_fg", "market", "market_state",
+            "state_reason", "amount_state",
+        )],
+        pa.field("authoritative_traded_value", pa.float64()),
+        pa.field("amount_zero_authorized", pa.bool_()),
+        pa.field("exchange_tradable", pa.bool_()),
+        *[pa.field(name, pa.string()) for name in (
+            "instrument_kind", "identity_source", "security_master_market",
+            "lifecycle_list_date", "lifecycle_delist_date",
+            "lifecycle_interval_start", "lifecycle_interval_end_exclusive",
+        )],
+        pa.field("lifecycle_active", pa.bool_()),
+        pa.field("lifecycle_conflict", pa.bool_()),
+        pa.field("identity_conflict", pa.bool_()),
+        pa.field("lifecycle_pit_status", pa.string()),
+        pa.field("revision_pit_status", pa.string()),
+    ]
+)
+
 def publish_daily_market_state(
     context: DataAnalystsContext,
     config: RuntimeConfig,
@@ -80,7 +118,7 @@ def _publish_arrow_partitions(
         target = context.artifact_path(relative)
         target.parent.mkdir(parents=True, exist_ok=True)
         staging = target.with_name(f".{target.name}.{uuid.uuid4().hex}.staging")
-        table = pa.Table.from_pylist(partition_rows)
+        table = pa.Table.from_pylist(partition_rows, schema=_DMS_SCHEMA)
         pq.write_table(table, staging, compression="zstd")
         os.replace(staging, target)
         paths.append(relative)
@@ -94,7 +132,7 @@ def _publish_arrow_partitions(
         "source_families": ["security_master", "trading_calendar", "daily_price_volume", "daily_tradability"],
         "source_collections": [], "row_count": len(rows),
         "date_range": [build_start, build_end], "availability_date_range": [build_start, build_end],
-        "columns": list(pa.Table.from_pylist(rows[:1]).column_names),
+        "columns": list(_DMS_SCHEMA.names),
         "schema_fingerprint": schema_fingerprints.pop(), "partitioning": ["year"],
         "artifact_paths": paths, "pit_policy": "after_close_next_session",
         "data_cutoff_at": str(rows[0]["data_cutoff_at"]), "duplicate_count": 0,
