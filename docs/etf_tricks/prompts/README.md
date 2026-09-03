@@ -13,9 +13,10 @@ When two instructions conflict, apply this order and report the conflict explici
 3. `docs/etf_tricks/prompts/01-master-prompt.md` — operational implementation and validation prompt.
 4. `docs/etf_tricks/prompts/02-performance-optimization-prompt.md` — result-equivalent profiling and performance-optimization contract.
 5. `docs/etf_tricks/prompts/04-afml-dataset-master-prompt.md` — approved downstream Dollar bar, FFD, feature, label, PIT, and validation contract; applies only after the upstream outputs are validated.
-6. The relevant file under `docs/etf_tricks/prompts/etfs/` — one ETF's unique contract.
-7. `docs/superpowers/plans/2026-08-26-etf-tricks-implementation.md` — task ordering and file-level implementation plan.
-8. Later implementation notes that do not amend an authority above.
+6. `docs/etf_tricks/prompts/05-tiered-ml-strategy-master-prompt.md` — proposed Tier 1/Tier 2/Tier 3, paper-execution, DSR, and final strategy-validation contract; applies only after user approval.
+7. The relevant file under `docs/etf_tricks/prompts/etfs/` — one ETF's unique contract.
+8. `docs/superpowers/plans/2026-08-26-etf-tricks-implementation.md` — task ordering and file-level implementation plan.
+9. Later implementation notes that do not amend an authority above.
 
 The Goal Prompt coordinates progress but does not override the approved design.
 
@@ -26,6 +27,7 @@ The Goal Prompt coordinates progress but does not override the approved design.
 - `02-performance-optimization-prompt.md`: representative-window profiling, mathematical audit, optimization, equivalence validation, and one-time full-history acceptance prompt.
 - `03-afml-dataset-goal-prompt.md`: approved downstream Goal for Dollar bars, FFD, structural features, features, and labels.
 - `04-afml-dataset-master-prompt.md`: approved downstream authoritative research contract.
+- `05-tiered-ml-strategy-master-prompt.md`: proposed three-tier strategy, execution, DSR, and acceptance contract.
 - `etfs/01-market-cap.md` through `etfs/13-sortino-60d.md`: bounded ETF-specific prompts.
 
 ## Approved downstream authority
