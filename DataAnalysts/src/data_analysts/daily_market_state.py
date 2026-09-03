@@ -71,6 +71,12 @@ def build_daily_market_state_rows(
                 continue
             identity = attribute_identity.get(ticker)
             if identity is None:
+                if price is None:
+                    # No price and no identity as-of evidence: emitting an
+                    # equity state would require inventing market/type or
+                    # reading a later APISKTATTR row.  It cannot be selected
+                    # or traded, so exclude it from physical coverage.
+                    continue
                 raise ValueError(
                     f"active lifecycle ticker lacks APISKTATTR identity at or before {day}: {ticker}"
                 )
