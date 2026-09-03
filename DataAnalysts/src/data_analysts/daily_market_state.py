@@ -102,13 +102,12 @@ def build_daily_market_state_rows(
                 continue
             identity = attribute_identity.get(ticker)
             if identity is None:
-                if price is None:
-                    # No price and no identity as-of evidence: emitting an
-                    # equity state would require inventing market/type or
-                    # reading a later APISKTATTR row.  It cannot be selected
-                    # or traded, so exclude it from physical coverage.
-                    continue
                 if lifecycle.get("market") not in {"TWSE", "TPEX"}:
+                    if price is None:
+                        # No listed-market lifecycle evidence and no price:
+                        # do not invent an exchange halt for an unidentified
+                        # or emerging-board instrument.
+                        continue
                     # The user-authorized lifecycle snapshot has no listed
                     # market and the as-of attribute has no identity.  Do not
                     # manufacture a tradeable TWSE/TPEX row, but retain a

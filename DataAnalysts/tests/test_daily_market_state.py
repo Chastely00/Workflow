@@ -120,6 +120,35 @@ def test_build_daily_market_state_keeps_listing_day_without_future_attribute_ide
     assert row["attr_row_present"] is False
 
 
+def test_build_daily_market_state_authorizes_active_listed_dual_absence_from_master() -> None:
+    from data_analysts.daily_market_state import build_daily_market_state_rows
+
+    rows = build_daily_market_state_rows(
+        trading_calendar_rows=[
+            {"date": "2010-10-01", "market": "TWSE"},
+            {"date": "2010-10-04", "market": "TWSE"},
+        ],
+        price_rows=[],
+        security_master_rows=[{
+            "ticker": "9157", "market": "TWSE", "list_date": "2009-12-11", "delist_date": "2019-11-12",
+        }],
+        attribute_rows=[],
+        manifest_hashes={
+            "security_master": "a" * 64, "trading_calendar": "b" * 64,
+            "daily_price_volume": "c" * 64, "daily_tradability": "d" * 64,
+        },
+        build_start="2010-10-01", build_end="2010-10-01",
+        data_cutoff_at="2010-10-01T14:00:00Z",
+    )
+
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["market_state"] == "HALTED"
+    assert row["authoritative_traded_value"] == 0.0
+    assert row["amount_zero_authorized"] is True
+    assert row["identity_source"] == "SECURITY_MASTER_SNAPSHOT"
+
+
 def test_build_daily_market_state_uses_master_market_when_attribute_market_is_blank() -> None:
     from data_analysts.daily_market_state import build_daily_market_state_rows
 
