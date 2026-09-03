@@ -458,6 +458,58 @@ def test_scan_market_state_returns_exact_governed_contract(tmp_path: Path) -> No
         assert pd.api.types.is_datetime64_any_dtype(result[column])
 
 
+def test_scan_market_state_accepts_unclassified_listing_day_with_master_identity(tmp_path: Path) -> None:
+    row = dict(_market_state_rows()[0])
+    row.update({
+        "ticker": "6906",
+        "instrument_kind": "OTHER",
+        "identity_source": "SECURITY_MASTER_SNAPSHOT",
+        "attr_row_present": False,
+        "atten_fg": None,
+        "disp_fg": None,
+        "full_fg": None,
+        "limit_fg": None,
+        "limo_fg": None,
+        "sbadt_fg": None,
+        "ssadt_fg": None,
+        "susp_fg": None,
+        "full_delivery": None,
+    })
+    _write_market_state_artifact(tmp_path, rows=[row])
+
+    result = DataGateway.from_data_analysts(tmp_path).scan_market_state(
+        "2025-01-02", "2025-01-02", ["6906"]
+    )
+
+    assert result.loc[0, "instrument_kind"] == "OTHER"
+    assert result.loc[0, "identity_source"] == "SECURITY_MASTER_SNAPSHOT"
+
+
+def test_scan_market_state_accepts_explicit_emerging_market_as_missing(tmp_path: Path) -> None:
+    row = dict(_market_state_rows()[0])
+    row.update({
+        "ticker": "7415",
+        "market": "EMERGING",
+        "market_state": "MISSING",
+        "state_reason": "LIFECYCLE_EMERGING_BOARD",
+        "amount_state": "MISSING",
+        "authoritative_traded_value": None,
+        "amount_zero_authorized": False,
+        "exchange_tradable": None,
+        "instrument_kind": "OTHER",
+        "identity_source": "SECURITY_MASTER_SNAPSHOT",
+        "security_master_market": "EMERGING",
+    })
+    _write_market_state_artifact(tmp_path, rows=[row])
+
+    result = DataGateway.from_data_analysts(tmp_path).scan_market_state(
+        "2025-01-02", "2025-01-02", ["7415"]
+    )
+
+    assert result.loc[0, "market"] == "EMERGING"
+    assert result.loc[0, "market_state"] == "MISSING"
+
+
 def test_market_state_authority_snapshot_is_byte_bound_and_immutable(
     tmp_path: Path,
 ) -> None:

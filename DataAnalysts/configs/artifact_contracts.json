@@ -3,7 +3,7 @@
   "artifacts": [
     {
       "artifact_id": "security_master", "layer": "raw", "base_path": "canonical/raw/security_master", "file_name": "security_master.parquet",
-      "required_columns": ["ticker", "data_cutoff_at"], "logical_key": ["ticker"], "publication_mode": "full_replace",
+      "required_columns": ["ticker", "market", "data_cutoff_at"], "logical_key": ["ticker"], "publication_mode": "full_replace",
       "partition_name": null, "partition_field": null, "date_field": null, "availability_field": null,
       "pit_policy": "snapshot_cutoff", "source_families": ["security_master"]
     },

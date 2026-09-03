@@ -784,7 +784,11 @@ class DataGateway:
         DataGateway._validate_market_state_availability(row, manifest)
 
         suspended = DataGateway._active_flag(getattr(row, "susp_fg"))
-        if price_row_present and market_state == "MISSING":
+        if getattr(row, "state_reason") in {
+            "LIFECYCLE_MARKET_UNIDENTIFIED", "LIFECYCLE_EMERGING_BOARD"
+        }:
+            expected = (getattr(row, "state_reason"), "MISSING", "MISSING", False, None)
+        elif price_row_present and market_state == "MISSING":
             expected = ("APIPRCD_INVALID_AMOUNT", "MISSING", "MISSING", False, None)
         elif price_row_present and suspended:
             expected = (
@@ -878,18 +882,32 @@ class DataGateway:
         )
         if instrument_kind != "INDEX":
             valid_identity_sources = {"SECURITY_MASTER_SNAPSHOT"}
-            if instrument_kind != "EQUITY":
+            if instrument_kind in {"ETF", "ETN"}:
                 valid_identity_sources = {"SECURITY_MASTER_SNAPSHOT_APISTKATTR_IDENTITY"}
             else:
                 valid_identity_sources.add("SECURITY_MASTER_SNAPSHOT_APISTKATTR_IDENTITY")
             if identity_source not in valid_identity_sources or not lifecycle_active:
                 raise DataContractError("daily_market_state has invalid lifecycle identity")
-            if pd.isna(getattr(row, "security_master_market")) or any(
-                pd.isna(getattr(row, column)) for column in lifecycle_dates
-            ):
+            non_listed_market = getattr(row, "market") in {"UNKNOWN", "EMERGING"}
+            if any(pd.isna(getattr(row, column)) for column in lifecycle_dates):
                 raise DataContractError("daily_market_state lifecycle fields are incomplete")
-            if (
-                getattr(row, "market") not in {"TWSE", "TPEX"}
+            if non_listed_market:
+                expected_master_market = (
+                    None if getattr(row, "market") == "UNKNOWN" else "EMERGING"
+                )
+                if (
+                    instrument_kind != "OTHER"
+                    or identity_source != "SECURITY_MASTER_SNAPSHOT"
+                    or (
+                        pd.isna(getattr(row, "security_master_market"))
+                        if expected_master_market is None
+                        else getattr(row, "security_master_market") != expected_master_market
+                    )
+                ):
+                    raise DataContractError("daily_market_state non-listed market identity is invalid")
+            elif (
+                pd.isna(getattr(row, "security_master_market"))
+                or getattr(row, "market") not in {"TWSE", "TPEX"}
                 or getattr(row, "security_master_market") != getattr(row, "market")
             ):
                 raise DataContractError("daily_market_state lifecycle market identity is invalid")

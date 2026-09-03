@@ -42,27 +42,30 @@ def build_daily_market_state_rows(
     master = _security_master_by_ticker(security_master_rows)
     prices = _unique_by_date_ticker(price_rows, "price")
     attributes = _unique_by_date_ticker(attribute_rows, "attribute")
+    prices_by_day = _rows_by_day(prices)
+    attributes_by_day = _rows_by_day(attributes)
     attribute_identity = _attribute_identity_before(attributes, build_start)
     rows: list[dict[str, Any]] = []
 
     for day in scoped_sessions:
         # APISKTATTR identity is strictly as-of: retain the latest observation
         # at or before this session, never back-fill from a later session.
-        for (observed_day, ticker), attribute in attributes.items():
-            if observed_day == day:
-                attribute_identity[ticker] = attribute
+        for ticker, attribute in attributes_by_day.get(day, {}).items():
+            attribute_identity[ticker] = _merge_identity(attribute_identity.get(ticker), attribute)
         active_equities = {
             ticker: item for ticker, item in master.items()
             if item["list_date"] <= day and (item["delist_date"] is None or day < item["delist_date"])
         }
         tickers = set(active_equities)
-        tickers.update(ticker for observed_day, ticker in prices if observed_day == day and ticker not in master)
+        day_prices = prices_by_day.get(day, {})
+        day_attributes = attributes_by_day.get(day, {})
+        tickers.update(ticker for ticker in day_prices if ticker not in master)
         if not tickers:
             continue
         next_session = _next_session(day, sessions, session_index)
         for ticker in sorted(tickers):
-            price = prices.get((day, ticker))
-            attribute = attributes.get((day, ticker))
+            price = day_prices.get(ticker)
+            attribute = day_attributes.get(ticker)
             lifecycle = active_equities.get(ticker)
             if lifecycle is None:
                 if price is None:
@@ -77,12 +80,38 @@ def build_daily_market_state_rows(
                     # reading a later APISKTATTR row.  It cannot be selected
                     # or traded, so exclude it from physical coverage.
                     continue
-                raise ValueError(
-                    f"active lifecycle ticker lacks APISKTATTR identity at or before {day}: {ticker}"
-                )
+                if lifecycle.get("market") not in {"TWSE", "TPEX"}:
+                    # The user-authorized lifecycle snapshot has no listed
+                    # market and the as-of attribute has no identity.  Do not
+                    # manufacture a tradeable TWSE/TPEX row, but retain a
+                    # non-tradeable state so price/DMS key coverage is exact.
+                    rows.append(_unidentified_lifecycle_row(
+                        day, ticker, price, attribute, lifecycle, next_session,
+                        manifest_hashes, build_start, build_end,
+                        certified_source_start or build_start, data_cutoff_at,
+                    ))
+                    continue
+                identity = {"mkt": lifecycle["market"], "stktp_e": "UNCLASSIFIED"}
+            elif not str(identity.get("mkt") or "").strip():
+                if lifecycle.get("market") not in {"TWSE", "TPEX"}:
+                    # The attribute identifies a product type but not an
+                    # exchange; retain a non-tradeable state rather than
+                    # inventing a listed market.
+                    rows.append(_unidentified_lifecycle_row(
+                        day, ticker, price, attribute, lifecycle, next_session,
+                        manifest_hashes, build_start, build_end,
+                        certified_source_start or build_start, data_cutoff_at,
+                    ))
+                    continue
+                identity = {**identity, "mkt": lifecycle["market"]}
             rows.append(_equity_row(
                 day, ticker, price, attribute, identity, lifecycle, next_session, manifest_hashes,
                 build_start, build_end, certified_source_start or build_start, data_cutoff_at,
+                identity_source=(
+                    "SECURITY_MASTER_SNAPSHOT"
+                    if attribute_identity.get(ticker) is None
+                    else "SECURITY_MASTER_SNAPSHOT_APISTKATTR_IDENTITY"
+                ),
             ))
     return rows
 
@@ -90,7 +119,8 @@ def build_daily_market_state_rows(
 def _equity_row(day: str, ticker: str, price: dict[str, Any] | None, attribute: dict[str, Any] | None,
                 identity: dict[str, Any],
                 lifecycle: dict[str, str | None], next_session: str, hashes: dict[str, str],
-                build_start: str, build_end: str, certified_source_start: str, cutoff: str) -> dict[str, Any]:
+                build_start: str, build_end: str, certified_source_start: str, cutoff: str,
+                identity_source: str = "SECURITY_MASTER_SNAPSHOT_APISTKATTR_IDENTITY") -> dict[str, Any]:
     present = price is not None
     amount = _amount(price) if present else None
     suspended = _flag(attribute, "susp_fg")
@@ -120,7 +150,7 @@ def _equity_row(day: str, ticker: str, price: dict[str, Any] | None, attribute: 
         "amount_state": amount_state, "authoritative_traded_value": value,
         "amount_zero_authorized": zero, "exchange_tradable": tradable,
         "instrument_kind": _instrument_kind(identity),
-        "identity_source": "SECURITY_MASTER_SNAPSHOT_APISTKATTR_IDENTITY",
+        "identity_source": identity_source,
         "security_master_market": _market(identity), "lifecycle_list_date": lifecycle["list_date"],
         "lifecycle_delist_date": delist, "lifecycle_interval_start": interval_start,
         "lifecycle_interval_end_exclusive": interval_end, "lifecycle_active": True,
@@ -143,6 +173,34 @@ def _index_row(day: str, ticker: str, price: dict[str, Any], attribute: dict[str
         "security_master_market": None, "lifecycle_list_date": None, "lifecycle_delist_date": None,
         "lifecycle_interval_start": None, "lifecycle_interval_end_exclusive": None,
         "lifecycle_active": False, "lifecycle_conflict": False, "identity_conflict": False,
+        "lifecycle_pit_status": "SNAPSHOT_EFFECTIVE_DATE_USER_AUTHORIZED",
+        "revision_pit_status": "PIT_REVISION_UNVERIFIED",
+    }
+
+
+def _unidentified_lifecycle_row(
+    day: str, ticker: str, price: dict[str, Any] | None, attribute: dict[str, Any] | None,
+    lifecycle: dict[str, str | None], next_session: str, hashes: dict[str, str],
+    build_start: str, build_end: str, certified_source_start: str, cutoff: str,
+) -> dict[str, Any]:
+    interval_start = max(str(lifecycle["list_date"]), build_start, certified_source_start)
+    delist = lifecycle["delist_date"]
+    interval_end = min(str(delist), _day_after(build_end)) if delist else _day_after(build_end)
+    lifecycle_market = lifecycle.get("market") or "UNKNOWN"
+    is_emerging = lifecycle_market == "EMERGING"
+    return _base_row(day, ticker, price, attribute, next_session, hashes, cutoff) | {
+        "market": lifecycle_market, "market_state": "MISSING",
+        "state_reason": (
+            "LIFECYCLE_EMERGING_BOARD" if is_emerging else "LIFECYCLE_MARKET_UNIDENTIFIED"
+        ), "amount_state": "MISSING",
+        "authoritative_traded_value": None, "amount_zero_authorized": False,
+        "exchange_tradable": None, "instrument_kind": "OTHER",
+        "identity_source": "SECURITY_MASTER_SNAPSHOT",
+        "security_master_market": lifecycle_market if is_emerging else None,
+        "lifecycle_list_date": lifecycle["list_date"], "lifecycle_delist_date": delist,
+        "lifecycle_interval_start": interval_start,
+        "lifecycle_interval_end_exclusive": interval_end, "lifecycle_active": True,
+        "lifecycle_conflict": False, "identity_conflict": False,
         "lifecycle_pit_status": "SNAPSHOT_EFFECTIVE_DATE_USER_AUTHORIZED",
         "revision_pit_status": "PIT_REVISION_UNVERIFIED",
     }
@@ -173,7 +231,8 @@ def _security_master_by_ticker(rows: list[dict[str, Any]]) -> dict[str, dict[str
         ticker = str(row["ticker"])
         if ticker in result:
             raise ValueError(f"duplicate security_master ticker: {ticker}")
-        result[ticker] = {"list_date": _date_text(row["list_date"], "list_date"),
+        market = str(row.get("market") or "").upper()
+        result[ticker] = {"market": market, "list_date": _date_text(row["list_date"], "list_date"),
                           "delist_date": _optional_date(row.get("delist_date"), "delist_date")}
     return result
 
@@ -188,6 +247,15 @@ def _unique_by_date_ticker(rows: list[dict[str, Any]], source: str) -> dict[tupl
     return result
 
 
+def _rows_by_day(
+    rows: dict[tuple[str, str], dict[str, Any]]
+) -> dict[str, dict[str, dict[str, Any]]]:
+    result: dict[str, dict[str, dict[str, Any]]] = {}
+    for (day, ticker), row in rows.items():
+        result.setdefault(day, {})[ticker] = row
+    return result
+
+
 def _attribute_identity_before(
     attributes: dict[tuple[str, str], dict[str, Any]], build_start: str
 ) -> dict[str, dict[str, Any]]:
@@ -198,8 +266,20 @@ def _attribute_identity_before(
             continue
         current = result.get(ticker)
         if current is None or day > current[0]:
-            result[ticker] = (day, row)
+            prior = None if current is None else current[1]
+            result[ticker] = (day, _merge_identity(prior, row))
     return {ticker: value[1] for ticker, value in result.items()}
+
+
+def _merge_identity(
+    prior: dict[str, Any] | None, current: dict[str, Any]
+) -> dict[str, Any]:
+    """Keep a prior as-of market only when the current TEJ market token is blank."""
+    if str(current.get("mkt") or "").strip():
+        return current
+    if prior is None or not str(prior.get("mkt") or "").strip():
+        return current
+    return {**current, "mkt": prior["mkt"]}
 
 
 def _amount(row: dict[str, Any] | None) -> float | None:
