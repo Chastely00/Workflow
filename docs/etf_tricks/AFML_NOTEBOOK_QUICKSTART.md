@@ -17,9 +17,12 @@ Notebook 應建立／保留在 repository root：
 
 目前 canonical schema 為 `etf-afml-dataset-v2`。新建資料會先完成記憶體內 core checks，再原子寫入並讀回驗證 table hash、schema、dtype、key 與 PIT cross-table clocks；只有讀回成功的 artifact 才會標示 finalized READY。舊版 v1 artifact 必須重建，不會被靜默升級。
 
-預設上游結果路徑：
+目前已驗收 artifact 的預設路徑：
 
-`.artifacts/etf_tricks/performance/optimized-final-20240101-20260707`
+- ETF Trick base：`.artifacts/etf_tricks/full-history-20050103-20260707-v8`
+- AFML dataset：`.artifacts/etf_afml/full-history-20050103-20260707-v5`
+
+預設會直接以 `AFMLDataset.read()` 驗證並讀取 AFML artifact。只有你將 `ETF_AFML_DATASET_DIR` 改成一個尚未建立的新位置、要自行重建時，才必須同時設定 `ETF_TRICK_RESULT_MANIFEST_SHA256` 與 `ETF_TRICK_MARKET_STATE_IDENTITY_SHA256`；這是避免 Notebook 靜默讀入未驗證 ETF Trick result 的 PIT gate。
 
 可用以下環境變數覆寫，而不必改 Notebook：
 

@@ -144,7 +144,7 @@ def test_quickstart_is_output_free_and_uses_public_api():
     assert "ETFTrickResult.read" in source
     assert "ETF_TRICK_RESULT_MANIFEST_SHA256" in source
     assert "ETF_TRICK_MARKET_STATE_IDENTITY_SHA256" in source
-    assert "expected_handle=RESULT_HANDLE" in source
+    assert "expected_handle=result_handle" in source
     assert "dataset.for_ml" in source
     assert "dataset.for_trading" in source
     assert all(
