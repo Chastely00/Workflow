@@ -812,7 +812,7 @@ class DataGateway:
                 False,
                 None,
             )
-        elif getattr(row, "instrument_kind") == "EQUITY" and getattr(row, "lifecycle_active"):
+        elif getattr(row, "instrument_kind") != "INDEX" and getattr(row, "lifecycle_active"):
             expected = (
                 "ACTIVE_LIFECYCLE_DUAL_SOURCE_ABSENCE",
                 "HALTED",
@@ -854,7 +854,7 @@ class DataGateway:
         instrument_kind = getattr(row, "instrument_kind")
         identity_source = getattr(row, "identity_source")
         lifecycle_active = getattr(row, "lifecycle_active")
-        if instrument_kind not in {"EQUITY", "INDEX"}:
+        if instrument_kind not in {"EQUITY", "ETF", "ETN", "OTHER", "INDEX"}:
             raise DataContractError("daily_market_state has invalid instrument_kind")
         if type(lifecycle_active) is not bool:
             raise DataContractError("daily_market_state lifecycle_active must be boolean")
@@ -876,18 +876,23 @@ class DataGateway:
             "lifecycle_interval_start",
             "lifecycle_interval_end_exclusive",
         )
-        if instrument_kind == "EQUITY":
-            if identity_source != "SECURITY_MASTER_SNAPSHOT" or not lifecycle_active:
-                raise DataContractError("daily_market_state has invalid equity lifecycle identity")
+        if instrument_kind != "INDEX":
+            valid_identity_sources = {"SECURITY_MASTER_SNAPSHOT"}
+            if instrument_kind != "EQUITY":
+                valid_identity_sources = {"SECURITY_MASTER_SNAPSHOT_APISTKATTR_IDENTITY"}
+            else:
+                valid_identity_sources.add("SECURITY_MASTER_SNAPSHOT_APISTKATTR_IDENTITY")
+            if identity_source not in valid_identity_sources or not lifecycle_active:
+                raise DataContractError("daily_market_state has invalid lifecycle identity")
             if pd.isna(getattr(row, "security_master_market")) or any(
                 pd.isna(getattr(row, column)) for column in lifecycle_dates
             ):
-                raise DataContractError("daily_market_state equity lifecycle fields are incomplete")
+                raise DataContractError("daily_market_state lifecycle fields are incomplete")
             if (
                 getattr(row, "market") not in {"TWSE", "TPEX"}
                 or getattr(row, "security_master_market") != getattr(row, "market")
             ):
-                raise DataContractError("daily_market_state equity market identity is invalid")
+                raise DataContractError("daily_market_state lifecycle market identity is invalid")
             row_date = pd.Timestamp(getattr(row, "date"))
             list_date = pd.Timestamp(getattr(row, "lifecycle_list_date"))
             interval_start = pd.Timestamp(getattr(row, "lifecycle_interval_start"))
@@ -897,13 +902,13 @@ class DataGateway:
             certified_source_start = pd.Timestamp(manifest["certified_source_start"])
             build_end_exclusive = build_end + pd.Timedelta(days=1)
             if not list_date <= row_date < interval_end:
-                raise DataContractError("daily_market_state equity lifecycle interval is invalid")
+                raise DataContractError("daily_market_state lifecycle interval is invalid")
             delist_date = getattr(row, "lifecycle_delist_date")
             if not pd.isna(delist_date):
                 delist = pd.Timestamp(delist_date)
                 if delist <= list_date or row_date >= delist:
                     raise DataContractError(
-                        "daily_market_state equity delist boundary is not exclusive"
+                        "daily_market_state lifecycle delist boundary is not exclusive"
                     )
                 expected_end = min(delist, build_end_exclusive)
             else:
@@ -911,14 +916,14 @@ class DataGateway:
             expected_start = max(list_date, build_start, certified_source_start)
             if interval_start != expected_start:
                 raise DataContractError(
-                    "daily_market_state equity lifecycle_interval_start is not manifest-bound"
+                    "daily_market_state lifecycle_interval_start is not manifest-bound"
                 )
             if interval_end != expected_end:
                 raise DataContractError(
-                    "daily_market_state equity lifecycle_interval_end_exclusive is not manifest-bound"
+                    "daily_market_state lifecycle_interval_end_exclusive is not manifest-bound"
                 )
             if not interval_start <= row_date < interval_end:
-                raise DataContractError("daily_market_state equity lifecycle interval is invalid")
+                raise DataContractError("daily_market_state lifecycle interval is invalid")
         else:
             index_null_fields = (
                 "security_master_market",

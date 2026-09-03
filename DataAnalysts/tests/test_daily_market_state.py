@@ -22,7 +22,9 @@ def test_build_daily_market_state_marks_active_dual_source_absence_as_halted_and
                 "delist_date": "2024-01-04",
             }
         ],
-        attribute_rows=[],
+        attribute_rows=[
+            {"date": "2024-01-02", "ticker": "1101", "mkt": "TWSE", "stktp_e": "Common Stock"}
+        ],
         manifest_hashes={
             "security_master": "a" * 64,
             "trading_calendar": "b" * 64,
@@ -47,3 +49,42 @@ def test_build_daily_market_state_marks_active_dual_source_absence_as_halted_and
     assert index_row["instrument_kind"] == "INDEX"
     assert index_row["market_state"] == "TRADING"
     assert index_row["attr_row_present"] is False
+
+
+def test_build_daily_market_state_uses_attribute_identity_when_master_has_lifecycle_only() -> None:
+    from data_analysts.daily_market_state import build_daily_market_state_rows
+
+    rows = build_daily_market_state_rows(
+        trading_calendar_rows=[
+            {"date": "2024-01-02", "market": "TWSE"},
+            {"date": "2024-01-03", "market": "TWSE"},
+        ],
+        price_rows=[{"date": "2024-01-02", "ticker": "1101", "traded_value": 100.0}],
+        security_master_rows=[
+            {"ticker": "1101", "list_date": "2000-01-01", "delist_date": None},
+            {"ticker": "0050", "list_date": "2003-01-01", "delist_date": None},
+        ],
+        attribute_rows=[
+            {
+                "date": "2024-01-02", "ticker": "1101", "mkt": "TSE",
+                "stktp_e": "Common Stock", "susp_fg": "",
+            },
+            {
+                "date": "2024-01-02", "ticker": "0050", "mkt": "TWSE",
+                "stktp_e": "ETF", "susp_fg": "",
+            },
+        ],
+        manifest_hashes={
+            "security_master": "a" * 64, "trading_calendar": "b" * 64,
+            "daily_price_volume": "c" * 64, "daily_tradability": "d" * 64,
+        },
+        build_start="2024-01-02", build_end="2024-01-02",
+        data_cutoff_at="2024-01-02T14:00:00Z",
+    )
+
+    stock = next(row for row in rows if row["ticker"] == "1101")
+    assert stock["market"] == "TWSE"
+    assert stock["instrument_kind"] == "EQUITY"
+    assert stock["identity_source"] == "SECURITY_MASTER_SNAPSHOT_APISTKATTR_IDENTITY"
+    etf = next(row for row in rows if row["ticker"] == "0050")
+    assert etf["instrument_kind"] == "ETF"

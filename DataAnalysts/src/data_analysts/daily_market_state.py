@@ -38,9 +38,15 @@ def build_daily_market_state_rows(
     master = _security_master_by_ticker(security_master_rows)
     prices = _unique_by_date_ticker(price_rows, "price")
     attributes = _unique_by_date_ticker(attribute_rows, "attribute")
+    attribute_identity: dict[str, dict[str, Any]] = {}
     rows: list[dict[str, Any]] = []
 
     for day in scoped_sessions:
+        # APISKTATTR identity is strictly as-of: retain the latest observation
+        # at or before this session, never back-fill from a later session.
+        for (observed_day, ticker), attribute in attributes.items():
+            if observed_day == day:
+                attribute_identity[ticker] = attribute
         active_equities = {
             ticker: item for ticker, item in master.items()
             if item["list_date"] <= day and (item["delist_date"] is None or day < item["delist_date"])
@@ -59,14 +65,20 @@ def build_daily_market_state_rows(
                     continue
                 rows.append(_index_row(day, ticker, price, attribute, next_session, manifest_hashes, data_cutoff_at))
                 continue
+            identity = attribute_identity.get(ticker)
+            if identity is None:
+                raise ValueError(
+                    f"active lifecycle ticker lacks APISKTATTR identity at or before {day}: {ticker}"
+                )
             rows.append(_equity_row(
-                day, ticker, price, attribute, lifecycle, next_session, manifest_hashes,
+                day, ticker, price, attribute, identity, lifecycle, next_session, manifest_hashes,
                 build_start, build_end, certified_source_start or build_start, data_cutoff_at,
             ))
     return rows
 
 
 def _equity_row(day: str, ticker: str, price: dict[str, Any] | None, attribute: dict[str, Any] | None,
+                identity: dict[str, Any],
                 lifecycle: dict[str, str | None], next_session: str, hashes: dict[str, str],
                 build_start: str, build_end: str, certified_source_start: str, cutoff: str) -> dict[str, Any]:
     present = price is not None
@@ -94,11 +106,12 @@ def _equity_row(day: str, ticker: str, price: dict[str, Any] | None, attribute: 
     delist = lifecycle["delist_date"]
     interval_end = min(str(delist), _day_after(build_end)) if delist else _day_after(build_end)
     return _base_row(day, ticker, price, attribute, next_session, hashes, cutoff) | {
-        "market": lifecycle["market"], "market_state": state, "state_reason": reason,
+        "market": _market(identity), "market_state": state, "state_reason": reason,
         "amount_state": amount_state, "authoritative_traded_value": value,
         "amount_zero_authorized": zero, "exchange_tradable": tradable,
-        "instrument_kind": "EQUITY", "identity_source": "SECURITY_MASTER_SNAPSHOT",
-        "security_master_market": lifecycle["market"], "lifecycle_list_date": lifecycle["list_date"],
+        "instrument_kind": _instrument_kind(identity),
+        "identity_source": "SECURITY_MASTER_SNAPSHOT_APISTKATTR_IDENTITY",
+        "security_master_market": _market(identity), "lifecycle_list_date": lifecycle["list_date"],
         "lifecycle_delist_date": delist, "lifecycle_interval_start": interval_start,
         "lifecycle_interval_end_exclusive": interval_end, "lifecycle_active": True,
         "lifecycle_conflict": False, "identity_conflict": False,
@@ -150,10 +163,7 @@ def _security_master_by_ticker(rows: list[dict[str, Any]]) -> dict[str, dict[str
         ticker = str(row["ticker"])
         if ticker in result:
             raise ValueError(f"duplicate security_master ticker: {ticker}")
-        market = str(row.get("market") or "").upper()
-        if market not in {"TWSE", "TPEX"}:
-            continue
-        result[ticker] = {"market": market, "list_date": _date_text(row["list_date"], "list_date"),
+        result[ticker] = {"list_date": _date_text(row["list_date"], "list_date"),
                           "delist_date": _optional_date(row.get("delist_date"), "delist_date")}
     return result
 
@@ -185,10 +195,30 @@ def _flag_text(row: dict[str, Any] | None, name: str) -> str | None:
     value = row.get(name)
     if value is None:
         return "N"
-    text = str(value).strip().upper()
+    text = str(value).strip().upper() or "N"
     if text not in {"Y", "N"}:
         raise ValueError(f"invalid APISKTATTR {name}: {value!r}")
     return text
+
+
+def _market(attribute: dict[str, Any]) -> str:
+    raw = str(attribute.get("mkt") or "").strip().upper()
+    mapping = {"TSE": "TWSE", "TWSE": "TWSE", "OTC": "TPEX", "TPEX": "TPEX"}
+    market = mapping.get(raw)
+    if market is None:
+        raise ValueError(f"invalid APISKTATTR market identity: {raw!r}")
+    return market
+
+
+def _instrument_kind(attribute: dict[str, Any]) -> str:
+    text = str(attribute.get("stktp_e") or "").strip().upper()
+    if "COMMON STOCK" in text:
+        return "EQUITY"
+    if text == "ETF":
+        return "ETF"
+    if text == "ETN":
+        return "ETN"
+    return "OTHER"
 
 
 def _next_session(day: str, sessions: list[str], index: dict[str, int]) -> str:
