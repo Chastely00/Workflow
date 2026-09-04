@@ -29,6 +29,8 @@ immutable AFML PIT state
 - No feature, calibration, imputer, scaler, threshold, covariance estimate, label, or model may read data unavailable at its decision time.
 - Cross-ETF values join backward by availability time, never by bar id or a future observation.
 - Entry and actual exits use each constituent’s raw OPEN on the next legal executable session. A daily-close trigger cannot fill at that same close.
+- Tier 1's capital-neutral target uses only registered proportional friction `buy_cost_rate=0.001425` and `sell_cost_rate=0.003`; the constituent ledger additionally applies actual integer shares and the one-NTD minimum commission after Tier 3 allocates capital.
+- ETF Trick has no tradable synthetic OHLC. `close_path_*` values are not execution prices or Tier 1 OHLC features; horizontal barriers are confirmed solely from the daily NAV close path.
 - Reuse the shared allocation/execution engine for integer shares, commission, sale tax, minimum one-NTD commission, cash, delays, delisting, and verified corporate actions. No child may create a competing cost model.
 - Every output is versioned and manifest-backed with code/config/input hashes. Future append may not rewrite finalized historical evidence.
 

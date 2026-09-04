@@ -1,6 +1,6 @@
 # Authoritative Prompt - Tier 1 Directional Label and Long-Opportunity Model
 
-Status: Approved authority as of 2026-09-03. Parent: `03-tiered-ml-strategy-master-prompt.md`.
+Status: Approved authority as of 2026-09-04. Parent: `03-tiered-ml-strategy-master-prompt.md`.
 
 ## 1. Single responsibility
 
@@ -16,13 +16,15 @@ Do not build Tier 2, HRP, portfolio allocation, broker integration, or final str
 
 Read finalized AFML artifact tables and their manifests/hashes. Because AFML v5 does not retain constituent raw OPEN, construct a read-only, versioned execution-market snapshot from manifest-declared canonical `daily_price_volume` raw OPEN, `daily_market_state`, governed calendar, and the upstream ETF holdings lineage. The snapshot may supply only actual entry/exit feasibility and raw prices; it must preserve source availability/revision/hash evidence and never become a model feature source or alter AFML labels. Write only versioned Tier 1 target/event extensions, model/fold artifacts, out-of-fold predictions, diagnostics, and manifests. Never rewrite AFML labels, canonical source artifacts, MongoDB, or shared cost code.
 
-Allowed inputs are PIT-safe FFD state, amount/activity, liquidity, portfolio state, IX0001/regime, and other available canonical AFML features. Unavailable VPIN, Kyle lambda, ATR, ADX, and VIX remain unavailable; do not rename a proxy as one of them.
+Allowed inputs are PIT-safe FFD state, amount/activity, liquidity, portfolio state, IX0001/regime, and other available canonical AFML features. A versioned feature extension may add `IR0001` 20/60-session annualized realised-volatility features, with each value backward as-of aligned to the decision time and marked `PIT_REVISION_UNVERIFIED` until revision/vintage evidence exists. `IR0001` realised volatility is not VIX and must never be named implied volatility. Unavailable VPIN, Kyle lambda, ATR, ADX, and VIX remain unavailable; do not rename a proxy as one of them.
+
+Do not select `close_path_open_nav`, `close_path_high_nav`, `close_path_low_nav`, or `close_path_range` as a Tier 1 feature or execution price. They are daily-close-path bookkeeping fields, not tradable ETF Trick OHLC. The only permitted short-horizon replacement for ATR is a clearly named past-only Dollar-bar log-return standard deviation, for example `bar_log_return_std_14`; it is not ATR and is not annualized by `sqrt(252)` because Dollar-bar duration is irregular.
 
 ## 3. Directional target
 
 Use each ETF’s past-only 60-bar EWMA log-return volatility, at least 20 valid observations. Defaults are configurable: `pt_mult=2`, `sl_mult=2`, `vertical_bars=60`.
 
-The target uses declared proportional buy/sell friction only, so it is independent of Tier 3 capital. Minimum commissions, integer shares, residual cash, and exact external basket costs belong to `08`, because they cannot be known before allocation without circularity.
+The Tier 1 target uses exactly these declared proportional frictions: `buy_cost_rate=0.001425` and `sell_cost_rate=0.003`. They are rate costs for this capital-neutral research target, not the one-NTD minimum commission. Minimum commissions, integer shares, residual cash, and exact external basket costs belong to `08`, because they cannot be known before allocation without circularity. Do not silently add a second sell-side commission rate to `sell_cost_rate`; any change requires a new registered configuration and trial.
 
 ```text
 r_net = log(exit_value_after_rate_costs / entry_value_including_rate_costs)
@@ -34,20 +36,9 @@ Use daily-close path only for horizontal barrier detection. Entry is the next le
 
 At vertical horizon, label by actual executable net return. Events without full horizon, valid volatility, legal path, or source evidence stay unresolved and are excluded.
 
-### 3.1 Same-session double-touch policy
+### 3.1 Barrier observation policy
 
-The daily-close baseline cannot double-touch: one close cannot be both above upper and below lower. Do not silently switch to OHLC logic.
-
-If a future explicitly enabled PIT-safe daily OHLC path is used:
-
-```text
-open >= upper: upper first
-open <= lower: lower first
-open inside barriers AND high >= upper AND low <= lower:
-    AMBIGUOUS_SAME_SESSION_DOUBLE_TOUCH
-```
-
-The ambiguous case receives no `+1/-1` target and is excluded from fitting. Preserve OHLC, barriers, availability, and reason. It may enter separately named optimistic/pessimistic stress bounds, never inferred label truth. Only tick/intraday sequence data can resolve its order.
+The authoritative path is daily-close-only. One daily close cannot double-touch, so the first daily close satisfying either horizontal boundary is the trigger. A bar's `close_path_high_nav`/`close_path_low_nav`, constituent high/low aggregates, and any reconstructed OHLC path are prohibited for this target. Do not silently upgrade to an OHLC/double-touch policy; only a separately evidenced PIT-safe intraday source and a newly registered trial could introduce one.
 
 ## 4. Fitting and hand-off
 
@@ -57,4 +48,4 @@ Use `t0/t1`, concurrency, and average uniqueness for sample weights, purging, an
 
 The candidate threshold is selected only on training/CPCV/validation evidence. Output `side=+1`, `p1`, diagnostics, and candidate reason—never NTD allocation or an order.
 
-Test hand-calculated costs/barriers, raw-OPEN timing, daily-close trigger timing, unresolved tails, double-touch statuses, future append invariance, source delay, purging/embargo, and absence of future columns. The hand-off to `07` contains only PIT features, OOF/walk-forward `p1`, candidate indicator, decision time, event identifiers, and immutable lineage. In-sample Tier 1 predictions are forbidden in this hand-off.
+Test hand-calculated `0.001425/0.003` costs/barriers, raw-OPEN timing, daily-close trigger timing, prohibited close-path-OHLC feature exclusion, unresolved tails, future append invariance, source delay, purging/embargo, and absence of future columns. The hand-off to `07` contains only PIT features, OOF/walk-forward `p1`, candidate indicator, decision time, event identifiers, and immutable lineage. In-sample Tier 1 predictions are forbidden in this hand-off.

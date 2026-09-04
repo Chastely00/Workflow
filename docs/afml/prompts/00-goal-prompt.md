@@ -31,7 +31,7 @@
 - 特徵、scaler、imputer、threshold、calibration、volatility、covariance、模型與標籤一律只可讀決策時已可得資料；跨 ETF 依 availability time 向後 join，禁止以未來 bar id 對齊。
 - 模型驗證使用事件 `t0/t1`、purging、embargo、concurrency/uniqueness；禁止 IID random CV。Tier 2 只接收 Tier 1 OOF 或嚴格 walk-forward 預測。
 - 先以 2024–2026 的最小足夠區間驗證正確性、效能與 schema；不足時才擴至 2020–2026。小區間通過後，才允許一次可追蹤的 13 ETF 全歷史驗收。不得把全歷史當日常測試捷徑。
-- 日線 OHLC 無法知道同日雙觸及順序時，必須保存 `AMBIGUOUS_SAME_SESSION_DOUBLE_TOUCH` 並排除訓練；不可猜測。只有 PIT-safe 逐筆/日內序列可決定先後。
+- 現行 ETF Trick 沒有可交易、同步的 High/Low/Open，Tier 1 horizontal barrier 只能以每日 NAV 收盤路徑確認；`close_path_*` 欄位不得作為 OHLC、特徵或成交價。故 daily-close path 不存在同日雙觸及；只有未來另有 PIT-safe 逐筆/日內序列且新 trial 已登錄時，才可建立 double-touch 規則。
 - 未通過 gate 時，停止該分支的績效結論並明確寫出污染/失敗路徑、已驗證事實、未驗證假設與下一個合理修復方向。模型可自主搜尋合理且預先記錄的設定範圍，但任何看過績效後的候選都必須登錄 trial registry。
 
 ## 試驗治理與完成定義
