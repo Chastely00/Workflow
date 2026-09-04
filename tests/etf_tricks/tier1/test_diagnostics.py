@@ -1,7 +1,7 @@
 import pandas as pd
 import pytest
 
-from etf_tricks.tier1.diagnostics import evaluate_etf_local_gate, summarize_per_etf_oof
+from etf_tricks.tier1.diagnostics import evaluate_etf_local_gate, summarize_oof_handoff_outcomes, summarize_per_etf_oof
 
 
 def test_per_etf_oof_summary_keeps_fold_and_all_metrics() -> None:
@@ -91,3 +91,30 @@ def test_etf_local_gate_has_local_scope_and_never_uses_pooled_metrics() -> None:
     assert report["etf_scope"] == "momentum"
     assert report["model_scope"] == "ETF_LOCAL"
     assert "pooled_auc" not in report["metrics"]
+
+
+def test_summarize_oof_handoff_outcomes_joins_only_resolved_matching_etf_targets() -> None:
+    handoff = pd.DataFrame(
+        {
+            "event_id": ["x-1", "x-2"],
+            "etf_id": ["x", "x"],
+            "p1": [0.8, 0.2],
+            "candidate_indicator": [True, False],
+        }
+    )
+    targets = pd.DataFrame(
+        {
+            "event_id": ["x-1", "x-2"],
+            "etf_id": ["x", "x"],
+            "target_status": ["resolved_upper", "resolved_lower"],
+            "y_direction": [1, -1],
+            "net_log_return": [0.03, -0.02],
+        }
+    )
+
+    metrics = summarize_oof_handoff_outcomes(handoff, targets, etf_id="x")
+
+    assert metrics["oof_rows"] == 2
+    assert metrics["candidate_count"] == 1
+    assert metrics["candidate_positive_rate"] == pytest.approx(1.0)
+    assert metrics["base_positive_rate"] == pytest.approx(0.5)

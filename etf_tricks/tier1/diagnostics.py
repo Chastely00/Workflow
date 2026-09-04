@@ -85,6 +85,47 @@ def _metrics(group: pd.DataFrame) -> dict[str, float | int]:
     }
 
 
+def summarize_oof_handoff_outcomes(
+    handoff: pd.DataFrame,
+    targets: pd.DataFrame,
+    *,
+    etf_id: str,
+) -> dict[str, float | int]:
+    """Evaluate existing ETF-local OOF predictions against resolved targets only.
+
+    This is a post-OOF reporting helper.  It is deliberately not usable by a
+    model or candidate policy: target outcomes are joined only after the
+    immutable hand-off has been written.
+    """
+    required_handoff = {"event_id", "etf_id", "p1", "candidate_indicator"}
+    required_targets = {"event_id", "etf_id", "target_status", "y_direction", "net_log_return"}
+    if missing := required_handoff.difference(handoff.columns):
+        raise ValueError(f"OOF handoff missing columns: {sorted(missing)}")
+    if missing := required_targets.difference(targets.columns):
+        raise ValueError(f"targets missing columns: {sorted(missing)}")
+    local_handoff = handoff.loc[handoff["etf_id"].eq(etf_id)].copy()
+    if local_handoff.empty or not local_handoff["etf_id"].eq(etf_id).all():
+        raise ValueError("OOF handoff must contain the requested ETF-local rows")
+    if local_handoff["event_id"].duplicated().any():
+        raise ValueError("OOF handoff event ids must be unique per ETF")
+    local_targets = targets.loc[targets["etf_id"].eq(etf_id)].copy()
+    if local_targets["event_id"].duplicated().any():
+        raise ValueError("target event ids must be unique per ETF")
+    joined = local_handoff.merge(
+        local_targets[["event_id", "target_status", "y_direction", "net_log_return"]],
+        on="event_id",
+        how="left",
+        validate="one_to_one",
+    )
+    if joined["target_status"].isna().any() or ~joined["target_status"].astype(str).str.startswith("resolved_").all():
+        raise ValueError("OOF outcome reporting requires resolved matching ETF-local targets")
+    if joined[["p1", "candidate_indicator", "y_direction", "net_log_return"]].isna().any().any():
+        raise ValueError("OOF outcome reporting requires complete predictions and outcomes")
+    metrics = _metrics(joined.rename(columns={"candidate_indicator": "is_candidate"}))
+    metrics["base_positive_rate"] = metrics.pop("positive_rate")
+    return metrics
+
+
 def summarize_per_etf_oof(
     frame: pd.DataFrame,
     predictions: pd.DataFrame,

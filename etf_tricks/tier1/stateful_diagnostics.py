@@ -2,8 +2,38 @@
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
+
+
+def load_barrier_diagnostic(
+    root: Path,
+    *,
+    etf_id: str,
+    parent_stateful_manifest_sha256: str,
+) -> pd.DataFrame:
+    """Load only a v2 barrier extension whose lineage matches one ledger."""
+    manifest_path = Path(root) / "manifest.json"
+    if not manifest_path.is_file():
+        raise ValueError(f"missing barrier diagnostic manifest: {root}")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if manifest.get("schema_version") != "tier1-stateful-barrier-diagnostics-v2":
+        raise ValueError("barrier diagnostic must use immutable v2 schema")
+    if manifest.get("etf_id") != etf_id:
+        raise ValueError("barrier diagnostic ETF does not match stateful ledger")
+    if manifest.get("parent_stateful_manifest_sha256") != parent_stateful_manifest_sha256:
+        raise ValueError("barrier diagnostic parent stateful manifest does not match ledger")
+    table_spec = manifest.get("tables", {}).get("barrier_diagnostics", {})
+    table_path = Path(root) / str(table_spec.get("path", ""))
+    if not table_path.is_file():
+        raise ValueError("barrier diagnostic table is missing")
+    diagnostic = pd.read_parquet(table_path)
+    if set(diagnostic.get("scope", pd.Series(dtype=str))) != {"ALL_EVENTS", "CANDIDATES"}:
+        raise ValueError("barrier diagnostic scopes invalid")
+    return diagnostic
 
 
 def summarize_stateful_ledger(daily_nav: pd.DataFrame, trades: pd.DataFrame) -> pd.DataFrame:
