@@ -55,6 +55,8 @@ class Tier1Lab:
         outer_splits: int = 3,
         model_family: str = "logistic_regression",
         categorical_columns: tuple[str, ...] = (),
+        candidate_threshold_objective: str = "f1",
+        minimum_candidate_weight_share: float = 0.10,
     ) -> Tier1OOFRun:
         targets = pd.read_parquet(self.target_root / "targets.parquet")
         features = pd.read_parquet(self.afml_root / "tables" / "features.parquet")
@@ -101,5 +103,7 @@ class Tier1Lab:
             feature_columns,
             model_family=model_family,
             categorical_columns=categorical_columns,
+            candidate_threshold_objective=candidate_threshold_objective,
+            minimum_candidate_weight_share=minimum_candidate_weight_share,
         )
         return Tier1OOFRun(training_frame=frame, predictions=predictions, handoff=build_tier1_handoff(frame, predictions), folds=folds)

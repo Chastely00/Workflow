@@ -27,6 +27,7 @@ def test_lab_reads_immutable_artifacts_and_produces_oof_handoff(tmp_path) -> Non
             "t0_date": dates,
             "exit_date": dates + pd.Timedelta(days=1),
             "y_direction": [-1, 1] * 12,
+            "net_log_return": [-0.01, 0.02] * 12,
             "target_status": ["resolved_upper", "resolved_lower"] * 12,
         }
     ).to_parquet(targets / "targets.parquet", index=False)

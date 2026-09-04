@@ -48,6 +48,6 @@ Estimate `p1 = P(y_direction=+1 | PIT state)`. Begin with calibrated regularized
 
 Use `t0/t1`, concurrency, and average uniqueness for sample weights, purging, and embargo. Random IID CV is prohibited. Produce fold-local and walk-forward/OOF predictions with model, feature, data, and availability lineage.
 
-The candidate threshold is selected only on training/CPCV/validation evidence. Output `side=+1`, `p1`, diagnostics, and candidate reason—never NTD allocation or an order.
+The candidate threshold is selected only on training/CPCV/validation evidence. Its objective must match the promotion metric: an economic threshold may use only realised `net_log_return` from already-resolved training-fold calibration events, never the outer validation fold, and must record its fixed grid and minimum weighted support. F1 is a classification diagnostic, not an implicit economic-selection objective. Output `side=+1`, `p1`, diagnostics, and candidate reason—never NTD allocation or an order.
 
 Test hand-calculated `0.001425/0.003` costs/barriers, raw-OPEN timing, daily-close trigger timing, prohibited close-path-OHLC feature exclusion, unresolved tails, future append invariance, source delay, purging/embargo, and absence of future columns. The hand-off to `07` contains only PIT features, OOF/walk-forward `p1`, candidate indicator, decision time, event identifiers, and immutable lineage. In-sample Tier 1 predictions are forbidden in this hand-off.

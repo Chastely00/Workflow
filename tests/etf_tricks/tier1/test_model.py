@@ -1,6 +1,6 @@
 import pandas as pd
 
-from etf_tricks.tier1.model import oof_logistic_predictions
+from etf_tricks.tier1.model import _select_economic_candidate_threshold, oof_logistic_predictions
 
 
 def test_oof_predictions_are_only_emitted_for_validation_rows() -> None:
@@ -65,3 +65,15 @@ def test_oof_supports_fold_local_static_etf_categories() -> None:
     result = oof_logistic_predictions(frame, [([*range(8)], [8, 9, 10, 11])], ["f"], categorical_columns=("etf_id",))
 
     assert result.loc[[8, 9, 10, 11], "p1"].notna().all()
+
+
+def test_economic_threshold_prefers_higher_supported_training_net_return() -> None:
+    threshold = _select_economic_candidate_threshold(
+        probabilities=[0.51, 0.55, 0.61, 0.67],
+        net_log_returns=[-0.10, 0.01, 0.02, 0.20],
+        grid=(0.5, 0.6),
+        sample_weight=[1.0, 1.0, 1.0, 1.0],
+        minimum_candidate_weight_share=0.25,
+    )
+
+    assert threshold == 0.6

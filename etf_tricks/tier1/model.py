@@ -50,7 +50,7 @@ def _fold_local_calibrator(
     n_splits: int,
     model_family: str,
     categorical_columns: tuple[str, ...],
-) -> tuple[LogisticRegression, np.ndarray, np.ndarray, np.ndarray]:
+) -> tuple[LogisticRegression, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     folds = chronological_purged_folds(train[["t0", "t1"]], n_splits=n_splits)
     probabilities = np.full(len(train), np.nan)
     calibration_weights = average_uniqueness(train[["t0", "t1"]]).to_numpy()
@@ -73,7 +73,7 @@ def _fold_local_calibrator(
         logits.reshape(-1, 1), target, sample_weight=calibration_weights[usable]
     )
     calibrated = calibrator.predict_proba(logits.reshape(-1, 1))[:, 1]
-    return calibrator, calibrated, target.to_numpy(), calibration_weights[usable]
+    return calibrator, calibrated, target.to_numpy(), calibration_weights[usable], usable
 
 
 def _select_candidate_threshold(
@@ -93,6 +93,49 @@ def _select_candidate_threshold(
     )[1]
 
 
+def _select_economic_candidate_threshold(
+    probabilities: np.ndarray | list[float],
+    net_log_returns: np.ndarray | list[float],
+    grid: tuple[float, ...],
+    sample_weight: np.ndarray | list[float],
+    minimum_candidate_weight_share: float,
+) -> float:
+    """Select a training-only probability threshold by supported net return."""
+    probabilities_array = np.asarray(probabilities, dtype=float)
+    returns_array = np.asarray(net_log_returns, dtype=float)
+    weights_array = np.asarray(sample_weight, dtype=float)
+    if not grid or any(not 0 < value < 1 for value in grid):
+        raise ValueError("candidate threshold grid must be within (0, 1)")
+    if not 0 < minimum_candidate_weight_share <= 1:
+        raise ValueError("minimum candidate weight share must be within (0, 1]")
+    if not (
+        len(probabilities_array) == len(returns_array) == len(weights_array)
+    ) or not len(probabilities_array):
+        raise ValueError("economic threshold inputs must be nonempty and aligned")
+    if not (
+        np.isfinite(probabilities_array).all()
+        and np.isfinite(returns_array).all()
+        and np.isfinite(weights_array).all()
+    ) or (weights_array < 0).any() or weights_array.sum() <= 0:
+        raise ValueError("economic threshold inputs must be finite with positive total weight")
+    total_weight = weights_array.sum()
+    candidates: list[tuple[float, float]] = []
+    for value in grid:
+        selected = probabilities_array >= value
+        selected_weight = weights_array[selected].sum()
+        if selected_weight / total_weight < minimum_candidate_weight_share:
+            continue
+        candidates.append(
+            (
+                float(np.average(returns_array[selected], weights=weights_array[selected])),
+                value,
+            )
+        )
+    if not candidates:
+        raise ValueError("no candidate threshold meets minimum weighted support")
+    return max(candidates)[1]
+
+
 def oof_logistic_predictions(
     frame: pd.DataFrame,
     folds: list[tuple[list[int], list[int]]],
@@ -101,9 +144,15 @@ def oof_logistic_predictions(
     candidate_threshold_grid: tuple[float, ...] = (0.5, 0.55, 0.6, 0.65, 0.7),
     model_family: str = "logistic_regression",
     categorical_columns: tuple[str, ...] = (),
+    candidate_threshold_objective: str = "f1",
+    minimum_candidate_weight_share: float = 0.10,
 ) -> pd.DataFrame:
     """Fit preprocessing/model on each supplied train fold and emit validation-only p1."""
     required = set(feature_columns) | set(categorical_columns) | {"y_direction", "t0", "t1"}
+    if candidate_threshold_objective == "economic_net_log_return":
+        required.add("net_log_return")
+    elif candidate_threshold_objective != "f1":
+        raise ValueError("unsupported candidate threshold objective")
     if missing := required.difference(frame.columns):
         raise ValueError(f"frame missing columns: {sorted(missing)}")
     if calibration_splits <= 0:
@@ -134,19 +183,29 @@ def oof_logistic_predictions(
             categorical_columns,
             train_weights,
         )
-        calibrator, calibration_probability, calibration_target, calibration_weights = _fold_local_calibrator(
+        calibrator, calibration_probability, calibration_target, calibration_weights, calibration_usable = _fold_local_calibrator(
             train.reset_index(drop=True),
             feature_columns,
             calibration_splits,
             model_family,
             categorical_columns,
         )
-        threshold = _select_candidate_threshold(
-            calibration_probability,
-            calibration_target,
-            candidate_threshold_grid,
-            calibration_weights,
-        )
+        if candidate_threshold_objective == "economic_net_log_return":
+            calibration_returns = train.loc[calibration_usable, "net_log_return"]
+            threshold = _select_economic_candidate_threshold(
+                calibration_probability,
+                calibration_returns.to_numpy(dtype=float),
+                candidate_threshold_grid,
+                calibration_weights,
+                minimum_candidate_weight_share,
+            )
+        else:
+            threshold = _select_candidate_threshold(
+                calibration_probability,
+                calibration_target,
+                candidate_threshold_grid,
+                calibration_weights,
+            )
         logits = np.log(np.clip(raw_probability, 1e-6, 1 - 1e-6) / (1 - np.clip(raw_probability, 1e-6, 1 - 1e-6)))
         probability = calibrator.predict_proba(logits.reshape(-1, 1))[:, 1]
         candidate = probability >= threshold

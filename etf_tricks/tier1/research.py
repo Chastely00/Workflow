@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 
 
@@ -9,7 +10,7 @@ def build_directional_training_frame(
     feature_columns: list[str],
 ) -> pd.DataFrame:
     """Join resolved Tier 1 targets to the matching PIT feature row."""
-    target_required = {"event_id", "etf_id", "t0_bar_id", "t0_date", "exit_date", "y_direction", "target_status"}
+    target_required = {"event_id", "etf_id", "t0_bar_id", "t0_date", "exit_date", "y_direction", "net_log_return", "target_status"}
     feature_required = {"etf_id", "bar_id", "feature_available_at", *feature_columns}
     if missing := target_required.difference(targets.columns):
         raise ValueError(f"targets missing columns: {sorted(missing)}")
@@ -37,7 +38,9 @@ def build_directional_training_frame(
         raise ValueError("resolved targets require an executable future exit")
     if frame["y_direction"].isna().any() or ~frame["y_direction"].isin([-1, 1]).all():
         raise ValueError("resolved targets require y_direction in {-1, +1}")
-    return frame[["event_id", "etf_id", "t0_bar_id", "t0", "t1", "y_direction", "decision_available_at", *feature_columns]].sort_values(
+    if ~np.isfinite(pd.to_numeric(frame["net_log_return"], errors="coerce")).all():
+        raise ValueError("resolved targets require finite net_log_return")
+    return frame[["event_id", "etf_id", "t0_bar_id", "t0", "t1", "y_direction", "net_log_return", "decision_available_at", *feature_columns]].sort_values(
         ["t0", "etf_id", "t0_bar_id"], kind="stable"
     ).reset_index(drop=True)
 

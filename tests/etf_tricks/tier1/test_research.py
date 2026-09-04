@@ -12,6 +12,7 @@ def test_training_frame_joins_only_resolved_targets_to_pit_features() -> None:
             "t0_date": pd.to_datetime(["2024-01-02", "2024-01-03"]),
             "exit_date": pd.to_datetime(["2024-01-04", "2024-01-05"]),
             "y_direction": [1, -1],
+            "net_log_return": [0.02, -0.01],
             "target_status": ["resolved_upper", "unresolved_tail"],
         }
     )
@@ -26,12 +27,12 @@ def test_training_frame_joins_only_resolved_targets_to_pit_features() -> None:
 
     result = research.build_directional_training_frame(targets, features, ["f"])
 
-    assert result.columns.tolist() == ["event_id", "etf_id", "t0_bar_id", "t0", "t1", "y_direction", "decision_available_at", "f"]
+    assert result.columns.tolist() == ["event_id", "etf_id", "t0_bar_id", "t0", "t1", "y_direction", "net_log_return", "decision_available_at", "f"]
     assert result[["event_id", "y_direction", "f"]].to_dict("records") == [{"event_id": "x-1", "y_direction": 1, "f": 0.1}]
 
 
 def test_training_frame_rejects_features_available_after_decision_date() -> None:
-    targets = pd.DataFrame({"event_id": ["x-1"], "etf_id": ["x"], "t0_bar_id": [1], "t0_date": pd.to_datetime(["2024-01-02"]), "exit_date": pd.to_datetime(["2024-01-03"]), "y_direction": [1], "target_status": ["resolved_upper"]})
+    targets = pd.DataFrame({"event_id": ["x-1"], "etf_id": ["x"], "t0_bar_id": [1], "t0_date": pd.to_datetime(["2024-01-02"]), "exit_date": pd.to_datetime(["2024-01-03"]), "y_direction": [1], "net_log_return": [0.02], "target_status": ["resolved_upper"]})
     features = pd.DataFrame({"etf_id": ["x"], "bar_id": [1], "feature_available_at": pd.to_datetime(["2024-01-03 13:30+08:00"]), "f": [0.1]})
 
     try:
