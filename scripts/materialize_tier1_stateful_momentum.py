@@ -47,6 +47,8 @@ def _args() -> argparse.Namespace:
     parser.add_argument("--output-root", required=True)
     parser.add_argument("--registry-path", default=".artifacts/afml_governance/tier1_trials.jsonl")
     parser.add_argument("--trial-id", default="tier1-stateful-momentum-oof-v1")
+    parser.add_argument("--etf-id", default="momentum")
+    parser.add_argument("--parent-trial-id", default="tier1-etf-local-hgb-base15-longhistory-2005-2024-v1-momentum-result")
     parser.add_argument("--effective-trial-count-base", required=True, type=float)
     parser.add_argument("--initial-capital", type=float, default=10_000_000.0)
     parser.add_argument("--entry-score", type=float, default=0.20)
@@ -54,12 +56,12 @@ def _args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _barrier_inputs(targets: pd.DataFrame, membership: pd.DataFrame, event_ids: pd.Series) -> tuple[pd.DataFrame, pd.DataFrame]:
+def _barrier_inputs(targets: pd.DataFrame, membership: pd.DataFrame, event_ids: pd.Series, etf_id: str) -> tuple[pd.DataFrame, pd.DataFrame]:
     selected = targets.loc[targets["event_id"].isin(event_ids)].copy()
     selected = selected.loc[selected["target_status"].astype(str).str.startswith("resolved_")].copy()
     if selected.empty:
         raise ValueError("Momentum OOF has no mature target rows for barrier diagnostics")
-    members = membership.loc[membership["etf_id"].eq("momentum"), ["bar_id", "date", "nav"]].copy()
+    members = membership.loc[membership["etf_id"].eq(etf_id), ["bar_id", "date", "nav"]].copy()
     members["date"] = pd.to_datetime(members["date"]).dt.normalize()
     selected["trigger_date"] = pd.to_datetime(selected["trigger_date"]).dt.normalize()
     trigger_bar = members.rename(columns={"bar_id": "first_touch_bar_id", "date": "trigger_date"})[["trigger_date", "first_touch_bar_id"]].drop_duplicates()
@@ -84,19 +86,21 @@ def main() -> int:
     manifest_paths = {name: root / "manifest.json" for name, root in roots.items()} | {"etf": etf_root / "result_manifest.json"}
     if missing := [str(path) for path in manifest_paths.values() if not path.is_file()]:
         raise ValueError(f"missing immutable input manifest: {missing}")
-    config = {"etf_id": "momentum", "policy": "one_sided_cusum_p1_minus_half_v1", "entry_score": args.entry_score, "exit_score": args.exit_score, "execution": {"price": "next_legal_raw_open", "buy_cost_rate": 0.001425, "sell_cost_rate": 0.003, "minimum_ticket_fee": 1.0}, "diagnostics": "outcome_only_barrier_path_v1"}
+    config = {"etf_id": args.etf_id, "policy": "one_sided_cusum_p1_minus_half_v1", "entry_score": args.entry_score, "exit_score": args.exit_score, "execution": {"price": "next_legal_raw_open", "buy_cost_rate": 0.001425, "sell_cost_rate": 0.003, "minimum_ticket_fee": 1.0}, "diagnostics": "outcome_only_barrier_path_v1"}
     upstream = {name: _sha256(path) for name, path in manifest_paths.items()}
     trial_id = args.trial_id
     registry = TrialRegistry(args.registry_path)
-    registered = {"trial_id": trial_id, "parent_trial_id": "tier1-etf-local-hgb-base15-longhistory-2005-2024-v1-momentum-result", "created_at": _now(), "completed_at": None, "research_question": "Does a pre-registered non-overlapping state policy improve executable Momentum Tier 1 OOF economics?", "hypothesis": "Accumulating calibrated OOF directional evidence and charging only real state changes removes the artificial per-event round-trip penalty.", "code_commit": _commit(), "upstream_artifact_hashes": upstream, "feature_set_hash": _hash("hgb_base_15_v1"), "label_config_hash": _hash(json.loads((roots["target"] / "manifest.json").read_text(encoding="utf-8"))["metadata"]["target_config"]), "tier1_config_hash": _hash(config), "tier2_config_hash": None, "allocation_config_hash": None, "execution_cost_policy_hash": _hash(config["execution"]), "fold_definition_hash": _hash("existing_etf_local_expanding_event_end_purged_oof"), "train_validation_test_boundaries": {"research_t0_start": "2005-01-01", "research_t0_end": "2024-12-31", "oof_only": True}, "etf_scope": "momentum", "model_scope": "ETF_LOCAL", "raw_trial_count": int(args.effective_trial_count_base + 1), "effective_independent_trial_count": float(args.effective_trial_count_base + 1), "validation_metrics": {}, "selection_status": "REGISTERED", "selection_reason": "State-policy configuration registered before its OOF ledger outcomes are materialized."}
+    registered = {"trial_id": trial_id, "parent_trial_id": args.parent_trial_id, "created_at": _now(), "completed_at": None, "research_question": "Does a pre-registered non-overlapping state policy improve this ETF-local Tier 1 OOF economics?", "hypothesis": "Accumulating calibrated OOF directional evidence and charging only real state changes removes the artificial per-event round-trip penalty.", "code_commit": _commit(), "upstream_artifact_hashes": upstream, "feature_set_hash": _hash("hgb_base_15_v1"), "label_config_hash": _hash(json.loads((roots["target"] / "manifest.json").read_text(encoding="utf-8"))["metadata"]["target_config"]), "tier1_config_hash": _hash(config), "tier2_config_hash": None, "allocation_config_hash": None, "execution_cost_policy_hash": _hash(config["execution"]), "fold_definition_hash": _hash("existing_etf_local_expanding_event_end_purged_oof"), "train_validation_test_boundaries": {"research_t0_start": "2005-01-01", "research_t0_end": "2024-12-31", "oof_only": True}, "etf_scope": args.etf_id, "model_scope": "ETF_LOCAL", "raw_trial_count": int(args.effective_trial_count_base + 1), "effective_independent_trial_count": float(args.effective_trial_count_base + 1), "validation_metrics": {}, "selection_status": "REGISTERED", "selection_reason": "State-policy configuration registered before its OOF ledger outcomes are materialized."}
     registry.append(registered)
 
     oof = pd.read_parquet(roots["oof"] / "oof_handoff.parquet")
+    if oof.empty or not oof["etf_id"].eq(args.etf_id).all():
+        raise ValueError("OOF hand-off must contain exactly the requested ETF-local lineage")
     transitions = build_stateful_transitions(oof, entry_score=args.entry_score, exit_score=args.exit_score)
     holdings = pd.read_parquet(etf_root / "daily_holdings.parquet")
     daily_nav = pd.read_parquet(etf_root / "daily_etf.parquet")
-    holdings = holdings.loc[holdings["etf_id"].eq("momentum")]
-    daily_nav = daily_nav.loc[daily_nav["etf_id"].eq("momentum")]
+    holdings = holdings.loc[holdings["etf_id"].eq(args.etf_id)]
+    daily_nav = daily_nav.loc[daily_nav["etf_id"].eq(args.etf_id)]
     oof_dates = pd.to_datetime(oof["decision_available_at"], utc=True).dt.tz_localize(None).dt.normalize()
     daily_nav = daily_nav.loc[daily_nav["date"].between(oof_dates.min(), oof_dates.max())]
     years = list(range(int(pd.to_datetime(oof["decision_available_at"]).min().year), int(pd.to_datetime(oof["decision_available_at"]).max().year) + 1))
@@ -105,7 +109,7 @@ def main() -> int:
     ledger_tables = materialize_etf_ledger(transitions.loc[transitions["transition"].notna()], opens, daily_nav, initial_capital=args.initial_capital)
     targets = pd.read_parquet(roots["target"] / "targets.parquet")
     membership = pd.read_parquet(roots["afml"] / "tables" / "bar_daily_membership.parquet")
-    events, paths = _barrier_inputs(targets, membership, oof["event_id"])
+    events, paths = _barrier_inputs(targets, membership, oof["event_id"], args.etf_id)
     barrier = summarize_barriers(events, oof[["event_id", "candidate_indicator"]], paths)
     output.mkdir(parents=True)
     for name, frame in {"transitions": transitions, "daily_nav": ledger_tables.daily_nav, "trades": ledger_tables.trades, "barrier_diagnostics": barrier}.items():
