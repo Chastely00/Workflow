@@ -27,6 +27,6 @@ Triple barrier 預設使用截至事件時點的 60-bar EWMA log-return volatili
 
 實作第一階段必須先產出 VPIN、Kyle、ATR、ADX、VIX 的 source-capability matrix，驗證來源粒度、schema、PIT availability、coverage、manifest/hash 與缺口。不得把能力不足的估計冒充正式特徵：沒有 aggressor side/等量 volume buckets 時 VPIN 不可用；沒有 signed order flow 時 Kyle lambda 不可用；沒有同步且真實的 ETF OHLC 時 ATR/ADX 不可用。VIX 只有在 manifest-declared PIT artifact 存在時可啟用；proxy 必須另名、分欄、分狀態。
 
-測試必須依序使用：手算 fixture -> 1 至 2 個 ETF 的 2024-01-01 至 2026-07-07 -> 13 ETF 同一短區間；只有受觀察數限制的測試才可延伸到 2020-01-01 至 2026-07-07。所有 bounded gates 通過後，才可用明確 `full_history_acceptance` 執行一次 13 ETF 完整歷史驗收；一般測試不得直接讀取 13 ETF 全歷史。逐日 replay 與 future append 不得改變 finalized bars、thresholds、`train` mode 已選參數、features 或已結束 labels。禁止安裝 `mlfinlab`、`mlfinpy` 或未核准替代品；`fracdiff-modern` 只能作為經 parity test 驗證的計算工具。
+測試必須依序使用：手算 fixture -> 1 至 2 個 ETF 的 2024-01-01 至 2026-07-07 smoke -> 13 ETF 的 2020-01-01 至 2026-07-07 正式 bounded dataset 驗收。2024–2026 不可用來判斷 60 根 Dollar-bar event 的樣本充分性。所有 bounded gates 通過後，才可用明確 `full_history_acceptance` 執行一次 13 ETF 完整歷史資料驗收；一般測試不得直接讀取 13 ETF 全歷史。Tier 1 若需作長期訊號否定診斷，須依其 Prompt 以 2005–2026 expanding OOF 執行，這不放寬資料工程測試範圍。逐日 replay 與 future append 不得改變 finalized bars、thresholds、`train` mode 已選參數、features 或已結束 labels。禁止安裝 `mlfinlab`、`mlfinpy` 或未核准替代品；`fracdiff-modern` 只能作為經 parity test 驗證的計算工具。
 
 只有 fresh artifacts 同時證明 13 個 ETF 都有可對帳 Dollar bars、有效 FFD、可重現 `d*` 搜尋證據、PIT-safe structural features、feature/label schema、完整 lineage/hash、Notebook 快速匯入介面、無前視偏誤測試及明確的 `目前可用`／`目前缺失／限制` 時，才可將本目標標記完成。任何一檔資料不足、stationarity gate 未通過、來源品質不合格或時間對齊不明，都必須 fail closed，保留證據並繼續改善。

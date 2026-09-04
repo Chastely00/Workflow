@@ -430,7 +430,7 @@ Runtime artifacts 寫入 git-ignored `.artifacts/etf_tricks/afml/<run_id>/`，�
 - FFD 可使用 convolution/matrix operation；相同 `d,width` 的 ETF 可批次處理，但 NaN mask、valid window 與 output index 必須完全一致。
 - SADF/QADF/CADF 共用每個 endpoint 的 ADF vector；優先 sufficient-statistics、NumPy/SciPy 線性代數與可重用 matrix slices，禁止三套巢狀 pandas loops。
 - 只優化 profiler 證明的瓶頸；數學等價前不得 JIT/GPU/多程序化。
-- 測試順序固定為：手算／synthetic fixtures；1 至 2 個 ETF 的 `2024-01-01` 至 `2026-07-07`；13 ETF 的同一短區間。只有因有效 bar/FFD/window observations 不足的測試，才可把所需範圍延伸到 `2020-01-01` 至 `2026-07-07`，並記錄延伸原因；不得直接跳至全歷史。
+- 測試順序固定為：手算／synthetic fixtures；1 至 2 個 ETF 的 `2024-01-01` 至 `2026-07-07` smoke；13 ETF 的 `2020-01-01` 至 `2026-07-07` 正式 bounded 驗收。Dollar-bar 的 60-bar horizon 使 2024–2026 不足以判定標籤／策略樣本量；它不得被當作失敗證據。資料工程測試不得直接跳至全歷史；Tier 1 若要做長期訊號否定診斷，依 `04` 以獨立的 2005–2026 expanding OOF protocol 執行。
 - 所有短區間 correctness、PIT replay、schema/key/hash、數學 parity、效能與 peak-memory gates 通過後，才能以顯式 `full_history_acceptance=True` 執行一次 13 ETF 完整歷史驗收。一般 unit/integration/profile command 必須拒絕 13 ETF 全歷史 scope。
 - profiling 先 warm-up，逐 stage 報 wall time、peak memory、rows 與 hashes；短區間未證明等價前不得以全歷史測試發現基本錯誤。
 - 不新增依賴，除非使用者另行核准；沿用 project `.venv`。禁止安裝 `mlfinlab`、`mlfinpy` 或 fork。
@@ -528,7 +528,7 @@ Warnings 必須保留：bar count 過少、overshoot 過高、duration drift、c
 - feature/label row counts、class balance、unresolved events；
 - source-capability matrix 與 PIT availability evidence；
 - replay/prefix invariance、backward as-of、split/label containment、execution timing、hand fixture、schema/key/hash 與 Notebook smoke tests；
-- 2024-2026 各階段 timings；若有延伸，另列 2020-2026 的原因與 timings；
+- 2024-2026 smoke timings 與 2020-2026 正式 bounded 各階段 timings；若 Tier 1 執行長期診斷，另列其獨立 2005-2026 expanding OOF 的 range、成熟 event 數、fold 邊界與 timings；
 - full-history acceptance command/config 與證明其只在 bounded gates 通過後執行；
 - 所有 canonical artifact paths/hashes 與 code/config identity；
 - 明確標題 `目前可用` 與 `目前缺失／限制`。

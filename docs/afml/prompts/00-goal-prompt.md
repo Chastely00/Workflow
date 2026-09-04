@@ -30,7 +30,8 @@
 
 - 特徵、scaler、imputer、threshold、calibration、volatility、covariance、模型與標籤一律只可讀決策時已可得資料；跨 ETF 依 availability time 向後 join，禁止以未來 bar id 對齊。
 - 模型驗證使用事件 `t0/t1`、purging、embargo、concurrency/uniqueness；禁止 IID random CV。Tier 2 只接收 Tier 1 OOF 或嚴格 walk-forward 預測。
-- 先以 2024–2026 的最小足夠區間驗證正確性、效能與 schema；不足時才擴至 2020–2026。小區間通過後，才允許一次可追蹤的 13 ETF 全歷史驗收。不得把全歷史當日常測試捷徑。
+- 2024–2026 只可作手算後的 smoke、schema 與效能檢查，不能作為 60 根 Dollar-bar 標籤、ETF 選擇或策略失敗的證據。Tier 1 的最小正式有界研究／OOF 區間固定為 2020–2026；必須保留每個 ETF 的成熟／未成熟 60-bar event 數。
+- 要對某 ETF 或特徵提出「長期未見可重現訊號」的否定結論，另須以 2005–2026 的 expanding、purged、embargoed OOF 長歷史診斷支持。它必須使用時間先後的 train/validation partitions，不能把完整歷史混成 IID CV，也不能把診斷結果拿來反覆調參；最新未碰觸的期間仍保留給 sealed test。資料工程的一般單元／整合／效能測試仍不得直接把 13 ETF 全歷史當捷徑。
 - 現行 ETF Trick 沒有可交易、同步的 High/Low/Open，Tier 1 horizontal barrier 只能以每日 NAV 收盤路徑確認；`close_path_*` 欄位不得作為 OHLC、特徵或成交價。故 daily-close path 不存在同日雙觸及；只有未來另有 PIT-safe 逐筆/日內序列且新 trial 已登錄時，才可建立 double-touch 規則。
 - 未通過 gate 時，停止該分支的績效結論並明確寫出污染/失敗路徑、已驗證事實、未驗證假設與下一個合理修復方向。模型可自主搜尋合理且預先記錄的設定範圍，但任何看過績效後的候選都必須登錄 trial registry。
 

@@ -48,6 +48,12 @@ The authoritative path is daily-close-only. One daily close cannot double-touch,
 
 ## 4. Fitting and hand-off
 
+### 4.1 Research windows and claim hierarchy
+
+Separate runtime checks from research evidence. `2024-01-01` to the current data end is a smoke/schema/performance interval only: under a 60-Dollar-bar vertical horizon it can leave low-frequency ETFs with mostly unresolved tails, so it must never reject an ETF, feature, or model family. The minimum formal bounded Tier 1 OOF interval is `2020-01-01` to the current data end. Report the mature target count, unresolved-tail count, and OOF support by ETF; a zero-OOF ETF is `INSUFFICIENT_MATURE_EVENTS`, not a failed model.
+
+A claim that an ETF/feature has no reproducible long-run Tier 1 signal requires a separately registered `2005-01-01` to current-data-end long-history diagnostic. Use strictly chronological expanding training folds with purging and embargo, including only outcome-mature validation events. This diagnostic is descriptive research evidence, not an IID pooled backtest and not a license to tune repeatedly after observing the result. Keep the most recent untouched interval for sealed-test admission; any ETF-set/model/threshold selection informed by the long-history diagnostic increases the DSR effective trial count and must be re-evaluated in a later unseen interval. A model failing only the 2024–2026 smoke cannot be recorded as a strategy failure.
+
 Estimate `p1 = P(y_direction=+1 | PIT state)`. Begin with calibrated regularized logistic regression; any additional model family is a registered trial. Fit preprocessing, feature selection, weighting, and calibration only inside each training fold.
 
 Use `t0/t1`, concurrency, and average uniqueness for sample weights, purging, and embargo. Compute concurrency only over the immutable AFML metadata's governed `trading_sessions`; weekends, holidays, and every non-session day have no observation weight. For the ETF panel, compute uniqueness independently within `etf_id`: simultaneous events from distinct ETF Tricks are distinct labelled instruments, not duplicate observations of one price path. Random IID CV is prohibited. Produce fold-local and walk-forward/OOF predictions with model, feature, data, and availability lineage.
