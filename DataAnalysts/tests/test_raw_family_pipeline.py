@@ -1,4 +1,5 @@
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
@@ -71,6 +72,36 @@ def test_daily_chip_mongo_extraction_replaces_epoch_cutoff_with_extraction_snaps
 
     assert rows[0]["data_cutoff_at"] == "2026-09-04T01:23:45Z"
     assert rows[0]["data_cutoff_origin"] == "extraction_completed_fallback"
+
+
+def test_extraction_cutoff_recovery_preserves_real_source_datetime():
+    family = {
+        "family_id": "daily_chip",
+        "collection_pattern": "{ticker}",
+        "source_profile": "large_daily_panel",
+        "primary_key": ["date", "ticker"],
+        "date_fields": {"source_date": "mdate"},
+        "data_cutoff_policy": "extraction_completed_fallback",
+    }
+    source_cutoff = datetime(2026, 9, 4, 1, 23, 45, tzinfo=timezone.utc)
+    database = FakeDatabase({
+        "2330": FakeCollection([{
+            "coid": "2330", "mdate": "2024-01-02",
+            "data_cutoff_at": source_cutoff,
+        }]),
+    })
+
+    rows = extract_family_rows_from_database(
+        database,
+        family,
+        start_date="2024-01-02",
+        end_date="2024-01-02",
+        run_scope="bounded_backfill",
+        extraction_completed_at="2026-09-04T02:00:00Z",
+    )
+
+    assert rows[0]["data_cutoff_at"] == source_cutoff
+    assert "data_cutoff_origin" not in rows[0]
 
 
 def _write_configs(root: Path) -> None:

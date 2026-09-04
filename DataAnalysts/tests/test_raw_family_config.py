@@ -71,6 +71,15 @@ def test_runtime_config_loads_with_raw_family_profiles():
     assert "taiwan_index_futures_near_month" in config.family_ids
 
 
+def test_all_enabled_mongo_families_declare_extraction_cutoff_recovery():
+    profiles = _load("source_family_profiles.json")["families"]
+    enabled = [item for item in profiles if item.get("enabled", True)]
+    assert all(
+        item.get("data_cutoff_policy") == "extraction_completed_fallback"
+        for item in enabled
+    )
+
+
 def test_unknown_data_cutoff_policy_is_rejected():
     with pytest.raises(ConfigError, match="unsupported data_cutoff_policy"):
         _validate_families(

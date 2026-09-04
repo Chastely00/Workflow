@@ -96,11 +96,14 @@ def _extraction_completed_at(value: str | None) -> str:
 
 
 def _is_real_cutoff(value: Any) -> bool:
-    if not isinstance(value, str) or ("T" not in value and " " not in value):
-        return False
-    try:
-        parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
-    except ValueError:
+    if isinstance(value, datetime):
+        parsed = value
+    elif isinstance(value, str) and ("T" in value or " " in value):
+        try:
+            parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+        except ValueError:
+            return False
+    else:
         return False
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)

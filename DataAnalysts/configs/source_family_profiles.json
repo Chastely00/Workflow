@@ -7,6 +7,7 @@
       "connection": "apiprcd",
       "collection_pattern": "{ticker}",
       "source_profile": "large_daily_panel",
+      "data_cutoff_policy": "extraction_completed_fallback",
       "primary_key": ["date", "ticker"],
       "date_fields": {
         "source_date": "mdate"
@@ -45,6 +46,7 @@
       "connection": "tej",
       "collection": "APISTOCK",
       "source_profile": "small_snapshot",
+      "data_cutoff_policy": "extraction_completed_fallback",
       "primary_key": ["ticker"],
       "date_fields": {},
       "availability": {
@@ -71,6 +73,7 @@
       "connection": "tej",
       "collection": "APIMT1",
       "source_profile": "medium_pit_table",
+      "data_cutoff_policy": "extraction_completed_fallback",
       "primary_key": ["ticker", "source_date"],
       "date_fields": {
         "source_date": "mdate"
@@ -105,6 +108,7 @@
       "connection": "tej",
       "collection": "APISTK1",
       "source_profile": "medium_pit_table",
+      "data_cutoff_policy": "extraction_completed_fallback",
       "primary_key": ["ticker", "source_date"],
       "date_fields": {
         "source_date": "mdate"
@@ -135,6 +139,7 @@
       "connection": "tej",
       "collection": "TRADEDAY_TWSE",
       "source_profile": "small_snapshot",
+      "data_cutoff_policy": "extraction_completed_fallback",
       "primary_key": ["date", "market"],
       "date_fields": {
         "source_date": "zdate"
@@ -152,6 +157,7 @@
       "connection": "apistkattr",
       "collection_pattern": "{ticker}",
       "source_profile": "large_daily_panel",
+      "data_cutoff_policy": "extraction_completed_fallback",
       "primary_key": ["date", "ticker"],
       "date_fields": {
         "source_date": "mdate"
@@ -187,6 +193,7 @@
       "connection": "tej",
       "collection": "APISALE",
       "source_profile": "medium_pit_table",
+      "data_cutoff_policy": "extraction_completed_fallback",
       "primary_key": ["ticker", "source_period_date", "source_available_date"],
       "date_fields": {
         "source_date": "annd_s"
@@ -204,6 +211,7 @@
       "connection": "tej",
       "collection": "AINVFINB",
       "source_profile": "medium_pit_table",
+      "data_cutoff_policy": "extraction_completed_fallback",
       "primary_key": [
         "ticker",
         "no",
@@ -230,6 +238,7 @@
       "connection": "tej",
       "collection": "AFESTM1",
       "source_profile": "medium_pit_table",
+      "data_cutoff_policy": "extraction_completed_fallback",
       "primary_key": [
         "ticker",
         "key3",
@@ -256,6 +265,7 @@
       "connection": "futures_taifex_tx",
       "collection": "TX_1",
       "source_profile": "large_daily_panel",
+      "data_cutoff_policy": "extraction_completed_fallback",
       "primary_key": ["date", "contract"],
       "date_fields": {
         "source_date": "日期"
@@ -273,6 +283,7 @@
       "connection": "tej",
       "collection": "APIBSTN1",
       "source_profile": "medium_pit_table",
+      "data_cutoff_policy": "extraction_completed_fallback",
       "primary_key": ["ticker", "source_date", "source_available_date"],
       "date_fields": {
         "source_date": "mdate"
@@ -290,6 +301,7 @@
       "connection": "tej",
       "collection": "APICHGSTAT",
       "source_profile": "medium_pit_table",
+      "data_cutoff_policy": "extraction_completed_fallback",
       "primary_key": ["ticker", "source_date", "source_available_date"],
       "date_fields": {
         "source_date": "mdate"
@@ -307,6 +319,7 @@
       "connection": "tej",
       "collection": "APIDIRCHG",
       "source_profile": "medium_pit_table",
+      "data_cutoff_policy": "extraction_completed_fallback",
       "primary_key": ["ticker", "source_date", "source_available_date"],
       "date_fields": {
         "source_date": "mdate"
@@ -324,6 +337,7 @@
       "connection": "tej",
       "collection": "APIMA",
       "source_profile": "medium_pit_table",
+      "data_cutoff_policy": "extraction_completed_fallback",
       "primary_key": ["ticker", "source_date", "source_available_date"],
       "date_fields": {
         "source_date": "mdate"
@@ -341,6 +355,7 @@
       "connection": "tej",
       "collection": "APISTKPRV",
       "source_profile": "medium_pit_table",
+      "data_cutoff_policy": "extraction_completed_fallback",
       "primary_key": ["ticker", "source_date", "source_available_date"],
       "date_fields": {
         "source_date": "mdate"
@@ -358,6 +373,7 @@
       "connection": "tej",
       "collection": "APITRANS1",
       "source_profile": "medium_pit_table",
+      "data_cutoff_policy": "extraction_completed_fallback",
       "primary_key": ["ticker", "source_date", "source_available_date"],
       "date_fields": {
         "source_date": "mdate"
@@ -375,6 +391,7 @@
       "connection": "tej",
       "collection": "APITRANS2",
       "source_profile": "medium_pit_table",
+      "data_cutoff_policy": "extraction_completed_fallback",
       "primary_key": ["ticker", "source_date", "source_available_date"],
       "date_fields": {
         "source_date": "mdate"
@@ -392,6 +409,7 @@
       "connection": "tej",
       "collection": "APITRS",
       "source_profile": "medium_pit_table",
+      "data_cutoff_policy": "extraction_completed_fallback",
       "primary_key": ["ticker", "source_date", "source_available_date"],
       "date_fields": {
         "source_date": "mdate"
