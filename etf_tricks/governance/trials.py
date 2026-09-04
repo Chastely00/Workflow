@@ -23,6 +23,8 @@ _REQUIRED_FIELDS = {
     "execution_cost_policy_hash",
     "fold_definition_hash",
     "train_validation_test_boundaries",
+    "etf_scope",
+    "model_scope",
     "raw_trial_count",
     "effective_independent_trial_count",
     "validation_metrics",
@@ -70,10 +72,10 @@ def write_tier1_gate_report(report: dict[str, Any], output_dir: str | Path) -> d
     output = Path(output_dir)
     if output.exists():
         raise FileExistsError(f"Tier 1 gate output already exists: {output}")
-    if report.get("status") not in {"PASSED", "FAILED"}:
-        raise ValueError("Tier 1 gate report requires status PASSED or FAILED")
-    if report["status"] == "FAILED" and (report.get("tier2_permitted") or report.get("tier3_permitted")):
-        raise ValueError("a failed Tier 1 gate cannot permit downstream layers")
+    if report.get("status") not in {"PASSED", "FAILED", "INSUFFICIENT_MATURE_EVENTS"}:
+        raise ValueError("Tier 1 gate report requires a recognized status")
+    if report["status"] != "PASSED" and (report.get("tier2_permitted") or report.get("tier3_permitted")):
+        raise ValueError("a non-passing Tier 1 gate cannot permit downstream layers")
     try:
         encoded = json.dumps(report, sort_keys=True, ensure_ascii=False, allow_nan=False)
     except (TypeError, ValueError) as exc:

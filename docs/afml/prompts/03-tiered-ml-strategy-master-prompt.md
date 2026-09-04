@@ -1,6 +1,6 @@
 # Authoritative Prompt - ETF Tricks Tiered ML Strategy Coordinator
 
-Status: Approved authority as of 2026-09-03.
+Status: Approved authority as of 2026-09-04.
 
 ## 1. Purpose and authority
 
@@ -14,14 +14,20 @@ This coordinator owns cross-layer contracts only. It does not authorize a child 
 
 ```text
 immutable AFML PIT state
-  -> 04 Tier 1: directional {-1,+1} long opportunity
-  -> 05 Tier 2: meta-label {0,1} accept/pass and capital-neutral confidence
+  -> 04 Tier 1: one independent directional {-1,+1} long-opportunity model per ETF Trick
+  -> 05 Tier 2: one independent meta-label {0,1} accept/pass model per admitted ETF
   -> 06 Tier 3: same candidates under equal-capital, inverse-vol, and HRP
   -> 06 constituent-level paper execution ledger
   -> 07 trial governance, DSR, sealed-test decision, final report
 ```
 
 `-1` never opens a short. Tier 1 does not allocate NTD. Tier 2 does not issue orders. Tier 3 does not alter Tier 1/2 labels. The paper ledger, not a research label, is the source of strategy PnL.
+
+### 2.1 Model ownership boundary
+
+`etf_id` is the Tier 1 and default Tier 2 model boundary, not a categorical feature. Each ETF model fits only its own historical events. It owns its own folds, sample weights, imputer, scaler, estimator, probability calibrator, candidate threshold, OOF diagnostics, economic gate, and sealed-test scope. Common source contracts and model *specifications* may be reused, but fitted state and rows may not cross ETF boundaries.
+
+A pooled/panel model may be explored only as a separately registered benchmark with a distinct trial id and DSR accounting. It cannot be used to rank, admit, reject, or overwrite an ETF-local Tier 1/Tier 2 lineage unless the pooled hypothesis itself independently passes its own OOF and sealed gates. Tier 3 is the first required cross-ETF layer: it consumes only already-admitted ETF-local candidate streams and may estimate cross-ETF risk using PIT-safe common-calendar returns.
 
 ## 3. Global PIT and execution invariants
 
@@ -38,8 +44,8 @@ immutable AFML PIT state
 
 | Child | May produce | Must hand off | Gate before next child |
 |---|---|---|---|
-| `04` | Tier 1 target, OOF predictions, model lineage | directional candidate stream | PIT, cost-label, double-touch, purged-CV tests pass |
-| `05` | meta labels, OOF-aware Tier 2 probabilities | accepted candidates and risk-budget caps | no in-sample Tier 1 prediction; calibration tests pass |
+| `04` | per-ETF Tier 1 target, OOF predictions, model lineage | ETF-local directional candidate stream | PIT, cost-label, daily-close path, per-ETF purged-CV and economic tests pass |
+| `05` | per-ETF meta labels, OOF-aware Tier 2 probabilities | ETF-local accepted candidates and risk-budget caps | same-ETF non-in-sample Tier 1 prediction; calibration tests pass |
 | `06` | three allocation curves, paper orders, ledger | net-return strategy paths | same candidates/capital/execution across policies; ledger reconciles |
 | `07` | trial registry, DSR/PSR, final report | decision and next actions | sealed test, all trial evidence, full diagnostics complete |
 

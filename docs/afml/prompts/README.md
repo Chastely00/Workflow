@@ -9,7 +9,7 @@ ETF Tricks 是上游資料與可交易組合建構子系統；AFML 是消費其 
 3. 上游 ETF Prompt：`docs/etf_tricks/prompts/00-goal-prompt.md`、`01-master-prompt.md`、`02-performance-optimization-prompt.md` 與個別 `etfs/` 契約。
 4. `00-goal-prompt.md` — 本 AFML 進度、PIT 與驗收治理。
 5. `01-dataset-goal-prompt.md` 與 `02-dataset-master-prompt.md` — Dollar bar、FFD、features、labels 與 AFML dataset 契約。
-6. `03-tiered-ml-strategy-master-prompt.md` — Tier 1/2/3 共用交接與執行契約。
+6. `03-tiered-ml-strategy-master-prompt.md` — Tier 1/2/3 共用交接與執行契約；Tier 1 與預設 Tier 2 以 `etf_id` 獨立建模，Tier 3 才跨 ETF 配置。
 7. 當前唯一活動 child：`04-tier1-directional-label-and-model-prompt.md`、`05-tier2-meta-labeling-prompt.md`、`06-tier3-allocation-and-paper-execution-prompt.md` 或 `07-strategy-governance-dsr-acceptance-prompt.md`。
 8. 只要不與以上衝突的後續 implementation notes。
 

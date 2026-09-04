@@ -94,3 +94,58 @@ def test_lab_excludes_events_that_resolve_in_the_sealed_interval(tmp_path) -> No
     assert result.training_frame["t0"].max() <= pd.Timestamp("2024-01-20")
     assert result.training_frame["t1"].max() < pd.Timestamp("2024-01-21")
     assert set(result.training_frame["event_id"]) == {f"event-{i}" for i in range(19)}
+
+
+def test_lab_runs_oof_in_isolated_etf_partitions(tmp_path) -> None:
+    afml = tmp_path / "afml"
+    targets = tmp_path / "targets"
+    (afml / "tables").mkdir(parents=True)
+    targets.mkdir()
+    dates = pd.date_range("2024-01-01", periods=20)
+    etf_ids = ["a"] * 20 + ["b"] * 20
+    bar_ids = list(range(20)) * 2
+    event_dates = list(dates) * 2
+    labels = ([-1, 1] * 10) * 2
+    (afml / "metadata.json").write_text(
+        json.dumps({"trading_sessions": [str(date.date()) for date in dates]}),
+        encoding="utf-8",
+    )
+    pd.DataFrame(
+        {
+            "etf_id": etf_ids,
+            "bar_id": bar_ids,
+            "feature_available_at": pd.to_datetime(event_dates).tz_localize("Asia/Taipei") + pd.Timedelta(hours=13, minutes=30),
+            "f": list(range(20)) * 2,
+        }
+    ).to_parquet(afml / "tables" / "features.parquet", index=False)
+    pd.DataFrame(
+        {
+            "event_id": [f"event-{etf_id}-{bar_id}" for etf_id, bar_id in zip(etf_ids, bar_ids)],
+            "etf_id": etf_ids,
+            "t0_bar_id": bar_ids,
+            "t0_date": event_dates,
+            "exit_date": pd.to_datetime(event_dates) + pd.Timedelta(days=1),
+            "y_direction": labels,
+            "net_log_return": [-0.01 if label == -1 else 0.02 for label in labels],
+            "target_status": ["resolved_lower" if label == -1 else "resolved_upper" for label in labels],
+        }
+    ).to_parquet(targets / "targets.parquet", index=False)
+
+    result = Tier1Lab.from_artifacts(afml, targets).run_oof_per_etf(["f"], outer_splits=1)
+
+    assert set(result.by_etf) == {"a", "b"}
+    assert result.by_etf["a"].training_frame["etf_id"].eq("a").all()
+    assert result.by_etf["b"].training_frame["etf_id"].eq("b").all()
+    assert result.by_etf["a"].handoff["etf_id"].eq("a").all()
+    assert result.by_etf["b"].handoff["etf_id"].eq("b").all()
+
+    changed = pd.read_parquet(targets / "targets.parquet")
+    changed.loc[changed["etf_id"].eq("b"), "y_direction"] *= -1
+    changed.loc[changed["etf_id"].eq("b"), "net_log_return"] *= -10
+    changed.to_parquet(targets / "targets.parquet", index=False)
+    rerun = Tier1Lab.from_artifacts(afml, targets).run_oof_per_etf(["f"], outer_splits=1)
+
+    pd.testing.assert_frame_equal(
+        result.by_etf["a"].predictions.reset_index(drop=True),
+        rerun.by_etf["a"].predictions.reset_index(drop=True),
+    )

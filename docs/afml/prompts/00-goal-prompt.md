@@ -2,7 +2,7 @@
 
 ## 目標
 
-以已 finalized 的 AFML dataset 為 immutable input，完成可重用、PIT 安全、可復現的 AFML 研究與紙上交易流程：Tier 1 方向機會、Tier 2 Meta-Labeling、Tier 3 Equal / Inverse-vol / HRP 資金配置與實際成分股交易帳，最後以 DSR 與 sealed test 做出 `NOT_READY`、`RESEARCH_ONLY` 或 `PAPER_TRADE_ELIGIBLE` 的證據化結論。此 Goal 不授權 live trading。
+以已 finalized 的 AFML dataset 為 immutable input，完成可重用、PIT 安全、可復現的 AFML 研究與紙上交易流程：每個 ETF Trick 各自的 Tier 1 方向機會與預設獨立 Tier 2 Meta-Labeling，然後才以 Tier 3 Equal / Inverse-vol / HRP 跨 ETF 資金配置與實際成分股交易帳，最後以 DSR 與 sealed test 做出 `NOT_READY`、`RESEARCH_ONLY` 或 `PAPER_TRADE_ELIGIBLE` 的證據化結論。此 Goal 不授權 live trading。
 
 ## 每次恢復時的強制程序
 
@@ -15,30 +15,33 @@
 
 ```text
 01/02 AFML dataset 已完成（Dollar bar、FFD、PIT 特徵、events、labels）；每次只做 artifact/readiness 驗證，不重建
--> 03/04 Tier 1（目前活動起點：成本感知、only-long {-1,+1}、purged/embargo OOF p1）
--> 05 Tier 2（只過濾 Tier 1 候選的 {0,1}、只用 OOF/walk-forward p1）
+-> 03/04 Tier 1（目前活動起點：每 ETF 獨立、成本感知、only-long {-1,+1}、purged/embargo OOF p1）
+-> 05 Tier 2（預設每 ETF 獨立，只過濾該 ETF Tier 1 候選的 {0,1}、只用 OOF/walk-forward p1）
 -> 06 Tier 3（同一訊號下 Equal、Inverse-vol、HRP 與 constituent paper ledger）
 -> 07 registry、PSR/DSR、sealed test 與最終驗收
 ```
 
 - Tier 1 的 `-1` 只代表不開多單；不建立空方部位、不配置 NTD。
+- Tier 1 的唯一研究、訓練、門檻選擇、OOF 診斷與經濟 gate 單位是單一 `etf_id`。每個模型只可讀該 ETF 的事件與特徵；不得以 `etf_id` one-hot 或任一跨 ETF 資料共同 fit 一個 primary model。各 ETF 可共用已鎖定的特徵定義、成本政策與驗證演算法，但不得共用擬合參數、imputer、scaler、calibrator、threshold 或訓練列。
+- pooled/panel Tier 1 僅可作為另行登錄的比較研究，不能取代、否決或宣稱等同於任一 ETF 的獨立模型；它的 pooled AUC 也不得當作每 ETF AUC 的平均或單一 ETF 的 gate。
 - Tier 2 不可創造 Tier 1 未產生的 side，不可使用樣本內 Tier 1 預測，不可下單。
+- Tier 2 預設以相同 `etf_id` 的 Tier 1 OOF/walk-forward candidates 獨立訓練。跨 ETF pooled meta-model 是額外、預先登錄且獨立驗證的候選，不是預設捷徑。
 - Tier 3 不可重新訓練或改寫 Tier 1/2 標籤；三種配置必須使用相同候選、總資金、成本、raw-OPEN 執行規則與限制。研究標籤不是策略 PnL；策略 PnL 只能來自可對帳的 paper ledger。
 - 交易執行使用下一個合法交易日之 constituent 原始 OPEN；不得以調整價或 FFD 價格成交。整數股數、手續費、交易稅、最低 1 元手續費、現金、停牌、下市與已驗證公司行動由共用執行引擎處理。
 
 ## PIT、驗證與測試順序
 
 - 特徵、scaler、imputer、threshold、calibration、volatility、covariance、模型與標籤一律只可讀決策時已可得資料；跨 ETF 依 availability time 向後 join，禁止以未來 bar id 對齊。
-- 模型驗證使用事件 `t0/t1`、purging、embargo、concurrency/uniqueness；禁止 IID random CV。Tier 2 只接收 Tier 1 OOF 或嚴格 walk-forward 預測。
+- 模型驗證使用事件 `t0/t1`、purging、embargo、concurrency/uniqueness；禁止 IID random CV。每 ETF 獨立產生 chronological folds、fold-local preprocessing/calibration/threshold 與 OOF 指標；Tier 2 只接收同 ETF 的 Tier 1 OOF 或嚴格 walk-forward 預測。
 - 2024–2026 只可作手算後的 smoke、schema 與效能檢查，不能作為 60 根 Dollar-bar 標籤、ETF 選擇或策略失敗的證據。Tier 1 的最小正式有界研究／OOF 區間固定為 2020–2026；必須保留每個 ETF 的成熟／未成熟 60-bar event 數。
-- 要對某 ETF 或特徵提出「長期未見可重現訊號」的否定結論，另須以 2005–2026 的 expanding、purged、embargoed OOF 長歷史診斷支持。它必須使用時間先後的 train/validation partitions，不能把完整歷史混成 IID CV，也不能把診斷結果拿來反覆調參；最新未碰觸的期間仍保留給 sealed test。資料工程的一般單元／整合／效能測試仍不得直接把 13 ETF 全歷史當捷徑。
+- 要對某 ETF 或特徵提出「長期未見可重現訊號」的否定結論，另須以該 ETF 的 2005–2026 expanding、purged、embargoed OOF 長歷史診斷支持。它必須使用時間先後的 train/validation partitions，不能把完整歷史混成 IID CV，也不能把診斷結果拿來反覆調參；最新未碰觸的期間仍保留給該 ETF lineage 的 sealed test。資料工程的一般單元／整合／效能測試仍不得直接把 13 ETF 全歷史當捷徑。
 - 現行 ETF Trick 沒有可交易、同步的 High/Low/Open，Tier 1 horizontal barrier 只能以每日 NAV 收盤路徑確認；`close_path_*` 欄位不得作為 OHLC、特徵或成交價。故 daily-close path 不存在同日雙觸及；只有未來另有 PIT-safe 逐筆/日內序列且新 trial 已登錄時，才可建立 double-touch 規則。
 - 未通過 gate 時，停止該分支的績效結論並明確寫出污染/失敗路徑、已驗證事實、未驗證假設與下一個合理修復方向。模型可自主搜尋合理且預先記錄的設定範圍，但任何看過績效後的候選都必須登錄 trial registry。
 
 ## 試驗治理與完成定義
 
-- 在結果影響選擇前，登錄模型、特徵、障礙、threshold、calibration、Tier 2、配置與 HRP 變體；保留失敗與淘汰試驗。以保守的有效獨立試驗數計算 PSR/DSR。
-- Sealed test 只允許一條已鎖定 lineage 進入；若 test 改變選擇，test 即不再 sealed，所有受影響候選納入試驗數。
+- 在結果影響選擇前，登錄 `etf_id`、模型、特徵、障礙、threshold、calibration、Tier 2、配置與 HRP 變體；保留失敗與淘汰試驗。跨 ETF 選擇或比較的 13 個獨立模型，以及任何 pooled benchmark，都必須保守納入有效獨立試驗數。
+- Sealed test 的 scope 必須明示 `etf_id` 與 lineage；每個 scope 僅允許一條事前鎖定 lineage 進入。若模型、ETF 選擇或 threshold 因該 test 結果改變，該 scope 不再 sealed，所有受影響候選納入試驗數。不能證明 sealed outcome 未被研究程式或決策讀取時，必須標示 `NOT_SEALED`，不可借用 sealed 名稱。
 - 僅在完整 PIT/OOF/執行對帳、三種配置比較、成本與容量診斷、sealed test，以及 `DSR >= 0.95` 均有可重現證據時，才可由 07 評為 `PAPER_TRADE_ELIGIBLE`。通過不代表未來獲利，絕不代表可 live。
 
 ## 結束與續跑

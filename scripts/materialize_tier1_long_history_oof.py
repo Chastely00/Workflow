@@ -179,6 +179,8 @@ def main() -> int:
         "execution_cost_policy_hash": _sha256_object({"buy_cost_rate": 0.001425, "sell_cost_rate": 0.003, "cost_policy_id": "tier1-proportional-v1"}),
         "fold_definition_hash": _sha256_object(config),
         "train_validation_test_boundaries": {"research_t0_end": args.research_t0_end, "research_outcome_before": args.sealed_start, "sealed_test_start": args.sealed_start, "sealed_test_end": "2026-07-07"},
+        "etf_scope": "ALL_ETFS",
+        "model_scope": "PANEL_BENCHMARK",
         "raw_trial_count": int(args.effective_independent_trial_count),
         "effective_independent_trial_count": float(args.effective_independent_trial_count),
         "validation_metrics": {},

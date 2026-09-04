@@ -22,6 +22,8 @@ def test_trial_registry_appends_a_complete_immutable_record(tmp_path) -> None:
         "execution_cost_policy_hash": "f" * 64,
         "fold_definition_hash": "0" * 64,
         "train_validation_test_boundaries": {"validation_end": "2026-04-10"},
+        "etf_scope": "momentum",
+        "model_scope": "ETF_LOCAL",
         "raw_trial_count": 1,
         "effective_independent_trial_count": 1.0,
         "validation_metrics": {"auc": 0.535},

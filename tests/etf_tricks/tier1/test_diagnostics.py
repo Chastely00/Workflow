@@ -1,7 +1,7 @@
 import pandas as pd
 import pytest
 
-from etf_tricks.tier1.diagnostics import summarize_per_etf_oof
+from etf_tricks.tier1.diagnostics import evaluate_etf_local_gate, summarize_per_etf_oof
 
 
 def test_per_etf_oof_summary_keeps_fold_and_all_metrics() -> None:
@@ -72,3 +72,22 @@ def test_per_etf_oof_summary_retains_expected_etf_with_no_resolved_target() -> N
     missing = result.loc[(result["etf_id"] == "missing") & (result["scope"] == "ALL")].iloc[0]
     assert missing["training_rows"] == 0
     assert missing["oof_rows"] == 0
+
+
+def test_etf_local_gate_has_local_scope_and_never_uses_pooled_metrics() -> None:
+    metrics = {
+        "oof_rows": 12,
+        "auc": 0.61,
+        "candidate_count": 4,
+        "candidate_positive_rate": 1.0,
+        "base_positive_rate": 0.5,
+        "candidate_mean_net_log_return": 0.02,
+        "base_mean_net_log_return": 0.005,
+    }
+
+    report = evaluate_etf_local_gate(metrics, "momentum", "trial-1", 43.0)
+
+    assert report["status"] == "PASSED"
+    assert report["etf_scope"] == "momentum"
+    assert report["model_scope"] == "ETF_LOCAL"
+    assert "pooled_auc" not in report["metrics"]

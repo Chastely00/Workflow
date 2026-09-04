@@ -1,6 +1,6 @@
 # Authoritative Prompt - Strategy Governance, DSR, and Final Acceptance
 
-Status: Approved authority as of 2026-09-03. Parent: `03-tiered-ml-strategy-master-prompt.md`.
+Status: Approved authority as of 2026-09-04. Parent: `03-tiered-ml-strategy-master-prompt.md`.
 
 ## 1. Single responsibility
 
@@ -16,16 +16,16 @@ research_question, hypothesis, code_commit,
 upstream_artifact_hashes, feature_set_hash, label_config_hash,
 tier1_config_hash, tier2_config_hash, allocation_config_hash,
 execution_cost_policy_hash, fold_definition_hash,
-train_validation_test_boundaries,
+train_validation_test_boundaries, etf_scope, model_scope,
 raw_trial_count, effective_independent_trial_count,
 validation_metrics, selection_status, selection_reason
 ```
 
-Count performance-observed alternatives that could influence selection: models, features, barriers, thresholds, calibration, Tier 2 variants, allocation policies, and HRP settings. Record non-performance ADF-gated FFD selection separately, but do not count it as a performance trial. Estimate effective independent trials conservatively from dependence among trial return paths.
+Count performance-observed alternatives that could influence selection: each ETF-local model/feature/barrier/threshold/calibration/Tier 2 variant, every pooled benchmark, allocation policies, and HRP settings. A choice among 13 ETF-local results is a multiple-comparison decision even when all models share a specification. Record non-performance ADF-gated FFD selection separately, but do not count it as a performance trial. Estimate effective independent trials conservatively from dependence among trial return paths.
 
 ## 3. Sealed test and statistics
 
-Only one lineage may reach sealed test. If test outcomes change a decision, it is no longer sealed and every observed alternative joins the trial count.
+Each sealed-test admission must state its `etf_scope`, model scope, train end, and untouched outcome interval. Only one pre-locked lineage may enter each ETF scope. If that scope's test outcomes change a decision, it is no longer sealed and every observed alternative joins the trial count. A model that had physical/logical access to the scope's outcome labels before lock must be marked `NOT_SEALED`; it cannot be promoted using a nominal sealed test.
 
 On net paper-ledger returns report raw Sharpe, PSR, DSR, effective observations, skewness, kurtosis, raw/effective trial counts, cross-trial Sharpe variance, and all `08` allocation comparisons. `PAPER_TRADE_ELIGIBLE` requires `DSR >= 0.95`; DSR never compensates for broken data/PIT/execution evidence.
 

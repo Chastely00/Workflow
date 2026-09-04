@@ -1,6 +1,6 @@
 # Authoritative Prompt - Tier 2 Meta-Labeling
 
-Status: Approved authority as of 2026-09-03. Parent: `03-tiered-ml-strategy-master-prompt.md`.
+Status: Approved authority as of 2026-09-04. Parent: `03-tiered-ml-strategy-master-prompt.md`.
 
 ## 1. Single responsibility
 
@@ -12,16 +12,18 @@ Tier 1 candidate side=+1 -> y_meta in {0,1} -> calibrated p2, accept/pass, capit
 
 ## 2. Data contract and target
 
-Read finalized `06` hand-off and immutable AFML state. Tier 1 and Tier 2 may share historical events and PIT features. Tier 2 training may use only Tier 1 out-of-fold or strictly walk-forward predictions for matching rows; in-sample Tier 1 predictions are forbidden.
+Read finalized Tier 1 hand-off and immutable AFML state. Tier 1 and Tier 2 may share historical events and PIT features. The default Tier 2 research unit is one `etf_id`: use only that ETF's Tier 1 out-of-fold or strictly walk-forward predictions for matching rows; in-sample Tier 1 predictions are forbidden. Never pool Tier 2 rows or use `etf_id` as a categorical feature by default.
 
 For a Tier 1 candidate, define `y_meta=1` when finalized directional outcome is `+1`, otherwise `0` when it is `-1`. Exclude unresolved, data-quality-failed, or non-candidate rows under a predeclared rule. Never select this definition after seeing test results.
 
 ## 3. Fitting and hand-off
 
-Fit transforms, meta model, calibration, and acceptance threshold on the training side only, with the same purged/embargo/sample-dependence discipline as Tier 1. Report incremental value against taking every Tier 1 candidate: precision, recall, F1, calibration, acceptance rate, expected net edge, holding interval, turnover implication, and fold stability.
+Fit transforms, meta model, calibration, and acceptance threshold on the same ETF's training side only, with the same purged/embargo/sample-dependence discipline as Tier 1. Report incremental value against taking every Tier 1 candidate separately for each ETF: precision, recall, F1, calibration, acceptance rate, expected net edge, holding interval, turnover implication, and fold stability. An ETF-local Tier 2 may begin only after that ETF's Tier 1 gate passes.
+
+A pooled Tier 2 is permissible only as a separately registered hypothesis, with a distinct fold design, trial count, OOF/sealed evaluation, and proof that pooled rows add incremental value over the ETF-local baseline. It must not replace the ETF-local default merely because it has more observations.
 
 Output only `p2`, accept/pass, capital-neutral confidence or `risk_budget_cap`, decision availability time, source/model hashes, and explicit reason codes. A rejected candidate has no order. An accepted candidate is not a capital allocation.
 
 The `08` hand-off is PIT-safe accepted candidates only: no future label, `t1`, touch path, or realized return.
 
-Test rejection of in-sample Tier 1 predictions, OOF-fold lineage, Tier 2 inability to create an absent Tier 1 candidate, fold-local calibration/thresholds, absence of future labels, and absence of allocation/order fields.
+Test rejection of in-sample Tier 1 predictions, same-ETF OOF-fold lineage, Tier 2 inability to create an absent Tier 1 candidate, fold-local calibration/thresholds, absence of future labels, absence of allocation/order fields, and cross-ETF isolation: another ETF's rows cannot alter an ETF-local Tier 2 output.

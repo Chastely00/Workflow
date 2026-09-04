@@ -128,7 +128,7 @@ def main() -> int:
         "fold_definition_hash": _hash_object(config),
         "train_validation_test_boundaries": {"research_t0_end": args.research_t0_end, "research_outcome_before": args.sealed_start, "sealed_test_start": args.sealed_start, "sealed_test_end": "2026-07-07", "selected_etf_id": args.selected_etf_id},
         "raw_trial_count": int(args.effective_independent_trial_count), "effective_independent_trial_count": float(args.effective_independent_trial_count),
-        "validation_metrics": {}, "selection_status": "REGISTERED", "selection_reason": "Registered before any sealed prediction. Momentum was selected from the recorded pooled diagnostic; the 13-way post-selection is conservatively counted in the effective trial total.",
+        "etf_scope": args.selected_etf_id, "model_scope": "PANEL_BENCHMARK", "validation_metrics": {}, "selection_status": "REGISTERED", "selection_reason": "Registered before any sealed prediction. Momentum was selected from the recorded pooled diagnostic; the 13-way post-selection is conservatively counted in the effective trial total.",
     }
     registry.append(record)
     frame, sessions = _load_frame(roots["afml"], roots["target"], roots["extension"], features)

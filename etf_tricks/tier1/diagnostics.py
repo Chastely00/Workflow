@@ -5,6 +5,59 @@ import pandas as pd
 from sklearn.metrics import roc_auc_score
 
 
+def evaluate_etf_local_gate(
+    metrics: dict[str, float | int],
+    etf_id: str,
+    trial_id: str,
+    effective_trial_count: float,
+) -> dict[str, object]:
+    """Apply the Tier 1 promotion rule to one ETF-local OOF result only."""
+    if not etf_id:
+        raise ValueError("ETF-local gate requires a nonempty etf_id")
+    if effective_trial_count <= 0:
+        raise ValueError("ETF-local gate requires a positive effective trial count")
+    required = {
+        "oof_rows", "auc", "candidate_count", "candidate_positive_rate",
+        "base_positive_rate", "candidate_mean_net_log_return",
+        "base_mean_net_log_return",
+    }
+    if missing := required.difference(metrics):
+        raise ValueError(f"ETF-local gate metrics missing: {sorted(missing)}")
+    if not int(metrics["oof_rows"]):
+        return {
+            "trial_id": trial_id,
+            "etf_scope": etf_id,
+            "model_scope": "ETF_LOCAL",
+            "effective_independent_trial_count": effective_trial_count,
+            "metrics": metrics,
+            "reasons": ["insufficient_mature_events"],
+            "status": "INSUFFICIENT_MATURE_EVENTS",
+            "tier2_permitted": False,
+            "tier3_permitted": False,
+        }
+    reasons: list[str] = []
+    if not float(metrics["auc"]) > 0.5:
+        reasons.append("oof_auc_not_above_0_5")
+    if not int(metrics["candidate_count"]) > 0:
+        reasons.append("no_oof_candidates")
+    elif not float(metrics["candidate_positive_rate"]) > float(metrics["base_positive_rate"]):
+        reasons.append("candidate_positive_rate_not_above_base")
+    if not int(metrics["candidate_count"]) > 0 or not float(metrics["candidate_mean_net_log_return"]) > float(metrics["base_mean_net_log_return"]):
+        reasons.append("candidate_net_return_not_above_base")
+    passed = not reasons
+    return {
+        "trial_id": trial_id,
+        "etf_scope": etf_id,
+        "model_scope": "ETF_LOCAL",
+        "effective_independent_trial_count": effective_trial_count,
+        "metrics": metrics,
+        "reasons": reasons,
+        "status": "PASSED" if passed else "FAILED",
+        "tier2_permitted": passed,
+        "tier3_permitted": passed,
+    }
+
+
 def _metrics(group: pd.DataFrame) -> dict[str, float | int]:
     if group.empty:
         return {
@@ -37,6 +90,7 @@ def summarize_per_etf_oof(
     predictions: pd.DataFrame,
     folds: list[tuple[list[int], list[int]]],
     expected_etf_ids: list[str] | None = None,
+    scope_label: str = "ALL",
 ) -> pd.DataFrame:
     """Summarize validation-only Tier 1 outcomes by ETF and outer OOF fold."""
     required_frame = {"etf_id", "y_direction", "net_log_return"}
@@ -71,7 +125,7 @@ def summarize_per_etf_oof(
         source_group = frame.loc[frame["etf_id"] == etf_id]
         group = oof.loc[oof["etf_id"] == etf_id]
         summaries.append(
-            {"etf_id": etf_id, "scope": "ALL", "training_rows": int(len(source_group)), **_metrics(group)}
+            {"etf_id": etf_id, "scope": scope_label, "training_rows": int(len(source_group)), **_metrics(group)}
         )
         for fold_number, fold_group in group.groupby("outer_fold", sort=True):
             summaries.append(
