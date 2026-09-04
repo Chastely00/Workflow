@@ -1,6 +1,31 @@
 import pandas as pd
+import pytest
 
-from etf_tricks.tier1.sealed import predict_sealed, split_training_and_sealed_frames
+from etf_tricks.tier1.sealed import (
+    predict_sealed,
+    split_training_and_sealed_frames,
+    validate_outcome_access_boundary,
+)
+
+
+def _unopened_boundary() -> dict[str, str]:
+    return {
+        "schema_version": "afml-outcome-access-boundary-v1",
+        "recorded_at": "2024-12-31T12:00:00Z",
+        "observable_outcomes_through": "2024-12-31",
+        "source_manifest_sha256": "a" * 64,
+    }
+
+
+def test_sealed_boundary_requires_outcomes_to_be_unopened_at_sealed_start() -> None:
+    result = validate_outcome_access_boundary(_unopened_boundary(), sealed_start="2025-01-01")
+
+    assert result["observable_outcomes_through"] == "2024-12-31"
+    with pytest.raises(ValueError, match="already observable"):
+        validate_outcome_access_boundary(
+            {**_unopened_boundary(), "observable_outcomes_through": "2025-01-01"},
+            sealed_start="2025-01-01",
+        )
 
 
 def test_sealed_split_keeps_only_selected_etf_after_boundary() -> None:
@@ -19,6 +44,7 @@ def test_sealed_split_keeps_only_selected_etf_after_boundary() -> None:
         research_t0_end="2024-12-31",
         sealed_start="2025-01-01",
         selected_etf_id="momentum",
+        outcome_access_boundary=_unopened_boundary(),
     )
 
     assert set(train["event_id"]) == {"a", "b"}
@@ -55,7 +81,7 @@ def test_sealed_prediction_uses_only_historical_training_rows() -> None:
         }
     )
 
-    result = predict_sealed(train, sealed, ["f"])
+    result = predict_sealed(train, sealed, ["f"], outcome_access_boundary=_unopened_boundary())
 
     assert result["event_id"].tolist() == sealed["event_id"].tolist()
     assert result["prediction_kind"].eq("SEALED_CALIBRATED").all()

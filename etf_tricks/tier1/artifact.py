@@ -6,6 +6,8 @@ from pathlib import Path
 
 import pandas as pd
 
+from .sealed import validate_outcome_access_boundary
+
 
 def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
@@ -94,6 +96,14 @@ def write_sealed_artifact(
     selected_etf_id = metadata.get("selected_etf_id")
     if not isinstance(selected_etf_id, str) or not selected_etf_id:
         raise ValueError("sealed metadata requires selected_etf_id")
+    sealed_start = metadata.get("sealed_start")
+    boundary = metadata.get("outcome_access_boundary")
+    if not isinstance(sealed_start, (str, pd.Timestamp)) or not isinstance(boundary, dict):
+        raise ValueError("sealed metadata requires outcome access boundary and sealed start")
+    validated_boundary = validate_outcome_access_boundary(
+        boundary,
+        sealed_start=sealed_start,
+    )
     required = {
         "event_id", "etf_id", "t0_bar_id", "side", "p1",
         "candidate_indicator", "candidate_threshold", "candidate_reason",
@@ -120,7 +130,7 @@ def write_sealed_artifact(
     predictions.to_parquet(table, index=False)
     manifest = {
         "schema_version": "tier1-sealed-v1",
-        "metadata": metadata,
+        "metadata": {**metadata, "outcome_access_boundary": validated_boundary},
         "tables": {"sealed_predictions": {"path": table.name, "row_count": len(predictions), "sha256": _sha256(table)}},
     }
     (output / "manifest.json").write_text(json.dumps(manifest, sort_keys=True, ensure_ascii=False), encoding="utf-8")

@@ -96,6 +96,11 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--feature-set", required=True)
     parser.add_argument("--research-t0-end", default="2024-12-31")
     parser.add_argument("--sealed-start", default="2025-01-01")
+    parser.add_argument(
+        "--outcome-access-boundary",
+        required=True,
+        help="Pre-sealed JSON boundary proving which outcomes were observable before the test interval.",
+    )
     parser.add_argument("--effective-independent-trial-count", type=float, required=True)
     return parser.parse_args()
 
@@ -103,6 +108,7 @@ def _parse_args() -> argparse.Namespace:
 def main() -> int:
     args = _parse_args()
     roots = {"afml": Path(args.afml_root), "target": Path(args.target_root), "extension": Path(args.feature_extension_root)}
+    outcome_access_boundary = _read_json(Path(args.outcome_access_boundary))
     manifests = {f"{name}_manifest": root / "manifest.json" for name, root in roots.items()}
     if missing := [str(path) for path in manifests.values() if not path.is_file()]:
         raise ValueError(f"missing immutable input manifest: {missing}")
@@ -132,9 +138,9 @@ def main() -> int:
     }
     registry.append(record)
     frame, sessions = _load_frame(roots["afml"], roots["target"], roots["extension"], features)
-    training, sealed = split_training_and_sealed_frames(frame, research_t0_end=args.research_t0_end, sealed_start=args.sealed_start, selected_etf_id=args.selected_etf_id)
-    predictions = predict_sealed(training, sealed, features, model_family="hist_gradient_boosting", categorical_columns=("etf_id",), trading_sessions=sessions)
-    metadata = {**upstream, "trial_id": args.trial_id, "selected_etf_id": args.selected_etf_id, "config": config, "training_rows": len(training), "sealed_rows": len(sealed)}
+    training, sealed = split_training_and_sealed_frames(frame, research_t0_end=args.research_t0_end, sealed_start=args.sealed_start, selected_etf_id=args.selected_etf_id, outcome_access_boundary=outcome_access_boundary)
+    predictions = predict_sealed(training, sealed, features, model_family="hist_gradient_boosting", categorical_columns=("etf_id",), trading_sessions=sessions, outcome_access_boundary=outcome_access_boundary)
+    metadata = {**upstream, "trial_id": args.trial_id, "selected_etf_id": args.selected_etf_id, "sealed_start": args.sealed_start, "outcome_access_boundary": outcome_access_boundary, "config": config, "training_rows": len(training), "sealed_rows": len(sealed)}
     prediction_manifest = write_sealed_artifact(predictions, prediction_root, metadata)
     metrics = _sealed_metrics(sealed, predictions)
     report_root.mkdir(parents=True)

@@ -70,10 +70,26 @@ def test_sealed_artifact_refuses_label_columns_and_unselected_etf(tmp_path) -> N
         }
     )
 
-    result = write_sealed_artifact(predictions, tmp_path / "sealed", {"selected_etf_id": "momentum"})
+    metadata = {
+        "selected_etf_id": "momentum",
+        "sealed_start": "2025-01-01",
+        "outcome_access_boundary": {
+            "schema_version": "afml-outcome-access-boundary-v1",
+            "recorded_at": "2024-12-31T12:00:00Z",
+            "observable_outcomes_through": "2024-12-31",
+            "source_manifest_sha256": "a" * 64,
+        },
+    }
+    result = write_sealed_artifact(predictions, tmp_path / "sealed", metadata)
 
     assert result["schema_version"] == "tier1-sealed-v1"
+    with pytest.raises(ValueError, match="outcome access"):
+        write_sealed_artifact(
+            predictions,
+            tmp_path / "missing-boundary",
+            {"selected_etf_id": "momentum"},
+        )
     with pytest.raises(ValueError, match="future"):
-        write_sealed_artifact(predictions.assign(y_direction=1), tmp_path / "label", {"selected_etf_id": "momentum"})
+        write_sealed_artifact(predictions.assign(y_direction=1), tmp_path / "label", metadata)
     with pytest.raises(ValueError, match="selected"):
-        write_sealed_artifact(predictions.assign(etf_id="market_cap"), tmp_path / "other", {"selected_etf_id": "momentum"})
+        write_sealed_artifact(predictions.assign(etf_id="market_cap"), tmp_path / "other", metadata)
