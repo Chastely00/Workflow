@@ -47,7 +47,8 @@ def test_sealed_split_keeps_only_selected_etf_after_boundary() -> None:
         outcome_access_boundary=_unopened_boundary(),
     )
 
-    assert set(train["event_id"]) == {"a", "b"}
+    assert train["event_id"].tolist() == ["a"]
+    assert train["etf_id"].eq("momentum").all()
     assert sealed["event_id"].tolist() == ["c"]
     assert sealed["etf_id"].eq("momentum").all()
     assert train["t1"].lt(pd.Timestamp("2025-01-01")).all()

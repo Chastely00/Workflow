@@ -78,7 +78,14 @@ def split_training_and_sealed_frames(
     copied["t1"] = pd.to_datetime(copied["t1"], errors="coerce").dt.normalize()
     if copied[["t0", "t1"]].isna().any().any():
         raise ValueError("frame requires valid event times")
-    train = copied.loc[copied["t0"].le(end) & copied["t1"].lt(sealed)].copy()
+    # Tier 1 has an ETF-local fitted state.  Do not let a different ETF's
+    # historical labels enter the selected ETF's supposedly sealed training
+    # side merely because they predate the sealed interval.
+    train = copied.loc[
+        copied["etf_id"].eq(selected_etf_id)
+        & copied["t0"].le(end)
+        & copied["t1"].lt(sealed)
+    ].copy()
     test = copied.loc[
         copied["etf_id"].eq(selected_etf_id) & copied["t0"].ge(sealed)
     ].copy()
