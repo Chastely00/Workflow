@@ -83,6 +83,7 @@ def verify_runtime(
     *,
     pre_publication_audit: dict[str, Any] | None = None,
     run_scope: RunScope | None = None,
+    audit_contract_keys: set[str] | None = None,
 ) -> dict[str, Any]:
     checks: list[dict[str, Any]] = []
     manifests = load_manifests(context)
@@ -287,7 +288,9 @@ def verify_runtime(
             _write_verification_result(context, result)
             return result
 
-    store_audit = audit_store(context, config.artifact_contracts)
+    store_audit = audit_store(
+        context, config.artifact_contracts, contract_keys=audit_contract_keys
+    )
     metrics.update(store_audit["metrics"])
     checks.append(
         {

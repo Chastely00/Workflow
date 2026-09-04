@@ -29,6 +29,7 @@ from data_analysts.metadata import (
 )
 from data_analysts.paths import DataAnalystsContext, PathBoundaryError
 from data_analysts.pipeline import run_pipeline
+from data_analysts.artifact_contracts import expected_contract_outputs
 from data_analysts.run_transaction import FormalStoreTransaction
 from data_analysts.store_audit import audit_store
 from data_analysts.dataset_publication import archive_superseded_paths
@@ -198,12 +199,18 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         if args.command in {"run-full-history", "run-backfill"}:
             try:
-                pre_audit = audit_store(context, config.artifact_contracts)
+                selected_families = _parse_families(getattr(args, "families", None))
+                audit_contract_keys = _expected_contract_keys(config, selected_families)
+                pre_audit = audit_store(
+                    context,
+                    config.artifact_contracts,
+                    contract_keys=audit_contract_keys,
+                )
                 with FormalStoreTransaction(context) as transaction:
                     result = run_pipeline(
                         context,
                         config,
-                        families=_parse_families(getattr(args, "families", None)),
+                        families=selected_families,
                         start_date=getattr(args, "start_date", None),
                         end_date=getattr(args, "end_date", None),
                         as_of_date=getattr(args, "as_of_date", None),
@@ -216,6 +223,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                         getattr(args, "as_of_date", None),
                         pre_publication_audit=pre_audit,
                         run_scope=scope,
+                        audit_contract_keys=audit_contract_keys,
                     )
                     if verification["status"] != "ready":
                         raise ValueError(verification["message"])
@@ -337,6 +345,17 @@ def _parse_families(requested: str | None) -> set[str] | None:
     if not requested:
         return None
     return {item.strip() for item in requested.split(",") if item.strip()}
+
+
+def _expected_contract_keys(config, requested_families: set[str] | None) -> set[str]:
+    selected = {
+        str(family["family_id"])
+        for family in config.source_family_profiles.get("families", [])
+        if family.get("enabled", True) is not False
+        and (not requested_families or family["family_id"] in requested_families)
+    }
+    matrix = expected_contract_outputs(config.artifact_contracts, selected)
+    return {key for keys in matrix.values() for key in keys}
 
 
 def _validate_date_range(args: argparse.Namespace) -> None:

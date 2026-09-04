@@ -90,8 +90,29 @@ class _BoundedEvidenceState:
 def audit_store(
     context: DataAnalystsContext,
     contracts: dict[str, ArtifactContract],
+    *,
+    contract_keys: set[str] | None = None,
 ) -> dict[str, Any]:
-    """Derive active artifact evidence from contract-bounded parquet inventories."""
+    """Derive active artifact evidence from contract-bounded parquet inventories.
+
+    Supplying ``contract_keys`` creates an explicit changed-contract audit: it
+    deeply validates only those contracts and their exact manifest identities.
+    The default remains a complete store audit for periodic health checks.
+    """
+    if contract_keys is not None:
+        unknown = sorted(set(contract_keys).difference(contracts))
+        if unknown:
+            raise ValueError(f"audit scope has unknown contract keys: {unknown}")
+        selected_contracts = {
+            key: contracts[key] for key in sorted(contract_keys)
+        }
+        selected_manifest_paths = {
+            context.store_path("manifests", contract.manifest_file_name).resolve()
+            for contract in selected_contracts.values()
+        }
+    else:
+        selected_contracts = contracts
+        selected_manifest_paths = None
     manifests = _load_manifest_objects(context)
     artifacts: dict[str, dict[str, Any]] = {}
     issues: list[dict[str, Any]] = []
@@ -114,10 +135,15 @@ def audit_store(
     }
 
     by_artifact_id: dict[str, list[ArtifactContract]] = {}
-    for contract in contracts.values():
+    for contract in selected_contracts.values():
         by_artifact_id.setdefault(contract.artifact_id, []).append(contract)
 
     for manifest_path, manifest in manifests:
+        if (
+            selected_manifest_paths is not None
+            and manifest_path.resolve() not in selected_manifest_paths
+        ):
+            continue
         artifact_id = manifest.get("artifact_id")
         if not isinstance(artifact_id, str) or not artifact_id:
             _issue(
@@ -133,7 +159,7 @@ def audit_store(
         declared_contract_key = manifest.get("contract_key")
         contract = None
         if isinstance(declared_contract_key, str):
-            declared = contracts.get(declared_contract_key)
+            declared = selected_contracts.get(declared_contract_key)
             if (
                 declared is not None
                 and declared.artifact_id == artifact_id
@@ -198,7 +224,7 @@ def audit_store(
         evidence = _audit_artifact(context, contract, manifest, issues, metrics)
         artifacts[contract.contract_key] = evidence
 
-    for contract_key, contract in contracts.items():
+    for contract_key, contract in selected_contracts.items():
         if contract_key in artifacts:
             continue
         inventory = _inventory(context, contract, [])
@@ -250,7 +276,7 @@ def audit_store(
 
     # Full-replace contracts retain valid versions for rollback, but any parquet
     # in their owned directory outside that layout is a legacy/orphan surface.
-    for contract in contracts.values():
+    for contract in selected_contracts.values():
         if contract.publication_mode not in {
             "full_replace", "partition_upsert", "snapshot_by_value"
         }:
@@ -273,7 +299,7 @@ def audit_store(
         "metrics": metrics,
         "artifacts": artifacts,
         "issues": issues,
-        "backup_evidence": _backup_evidence(context, contracts),
+        "backup_evidence": _backup_evidence(context, selected_contracts),
     }
 
 

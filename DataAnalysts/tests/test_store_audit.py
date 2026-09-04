@@ -251,6 +251,25 @@ def test_audit_streams_bounded_columns_without_table_read(tmp_path, monkeypatch)
     assert result["status"] == "ready"
 
 
+def test_scoped_audit_ignores_unselected_manifest_but_full_audit_still_blocks(tmp_path):
+    context = DataAnalystsContext.from_paths(tmp_path)
+    path = _write_parquet(context, "2026", [_row("2026-07-08")])
+    _write_manifest(context, [path])
+    unrelated = context.store_path("manifests", "unrelated.json")
+    unrelated.write_text(json.dumps({"artifact_id": "unrelated"}), encoding="utf-8")
+
+    scoped = audit_store(
+        context,
+        {"daily_price_volume": _contract()},
+        contract_keys={"daily_price_volume"},
+    )
+    full = audit_store(context, {"daily_price_volume": _contract()})
+
+    assert scoped["status"] == "ready"
+    assert full["status"] == "blocked"
+    assert any(issue["artifact_id"] == "unrelated" for issue in full["issues"])
+
+
 def test_audit_treats_universe_snapshot_variants_as_distinct(tmp_path):
     context = DataAnalystsContext.from_paths(tmp_path)
     historical = ArtifactContract(
