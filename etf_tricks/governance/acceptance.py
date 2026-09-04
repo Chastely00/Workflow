@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import pandas as pd
+
 
 def build_final_acceptance(
     *,
@@ -84,4 +86,50 @@ def build_not_ready_acceptance(
             "fresh_pre_registered_trial",
             "tier1_gate_before_tier2_or_tier3",
         ],
+    }
+
+
+def build_current_lineage_acceptance(
+    *,
+    trial_count: float,
+    tier1_gate_table: pd.DataFrame,
+    tier2_status_by_etf: dict[str, str],
+) -> dict[str, Any]:
+    """Summarize a current lineage without misusing a legacy sealed report."""
+    required = {"etf_id", "status", "tier2_permitted", "tier3_permitted"}
+    if missing := required.difference(tier1_gate_table.columns):
+        raise ValueError(f"Tier 1 gate table missing columns: {sorted(missing)}")
+    if tier1_gate_table.empty or tier1_gate_table["etf_id"].duplicated().any():
+        raise ValueError("Tier 1 gate table requires unique nonempty ETF rows")
+    passers = sorted(
+        tier1_gate_table.loc[tier1_gate_table["status"].eq("PASSED"), "etf_id"].astype(str)
+    )
+    if set(tier2_status_by_etf) != set(passers):
+        raise ValueError("Tier 2 statuses must match exactly the Tier 1 passing ETF set")
+    statuses = set(tier2_status_by_etf.values())
+    if statuses == {"SEALED_PASSED"}:
+        tier2_status = "SEALED_PASSED"
+    elif "RESEARCH_ONLY" in statuses:
+        tier2_status = "RESEARCH_ONLY"
+    elif statuses == {"INSUFFICIENT_MATURE_EVENTS"}:
+        tier2_status = "INSUFFICIENT_MATURE_EVENTS"
+    else:
+        tier2_status = "MIXED_NOT_ADMITTED"
+    report = build_final_acceptance(
+        trial_count=trial_count,
+        sealed_status="NOT_SEALED",
+        tier2_status=tier2_status,
+        tier3_status="NOT_STARTED",
+        paper_ledger_ready=False,
+        allocation_policies=(),
+        dsr=None,
+    )
+    return {
+        **report,
+        "tier1_passed_etfs": passers,
+        "tier2_status_by_etf": dict(sorted(tier2_status_by_etf.items())),
+        "tier1_gate_status_counts": {
+            str(key): int(value)
+            for key, value in tier1_gate_table["status"].value_counts().items()
+        },
     }

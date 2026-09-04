@@ -1,4 +1,6 @@
-from etf_tricks.governance.acceptance import build_not_ready_acceptance
+import pandas as pd
+
+from etf_tricks.governance.acceptance import build_current_lineage_acceptance, build_not_ready_acceptance
 from etf_tricks.governance.acceptance import build_final_acceptance
 
 
@@ -31,3 +33,25 @@ def test_final_acceptance_is_not_ready_when_sealed_ledger_and_dsr_are_missing() 
     assert report["dsr_status"] == "NOT_COMPUTABLE_NO_PAPER_LEDGER"
     assert "sealed_test" in report["missing_requirements"]
     assert "three_policy_ledger_comparison" in report["missing_requirements"]
+
+
+def test_current_lineage_acceptance_requires_tier2_status_for_every_tier1_passer() -> None:
+    gates = pd.DataFrame(
+        {
+            "etf_id": ["a", "b"],
+            "status": ["PASSED", "FAILED"],
+            "tier2_permitted": [True, False],
+            "tier3_permitted": [False, False],
+        }
+    )
+
+    report = build_current_lineage_acceptance(
+        trial_count=181.0,
+        tier1_gate_table=gates,
+        tier2_status_by_etf={"a": "INSUFFICIENT_MATURE_EVENTS"},
+    )
+
+    assert report["status"] == "NOT_READY"
+    assert report["tier1_passed_etfs"] == ["a"]
+    assert report["tier2_status"] == "INSUFFICIENT_MATURE_EVENTS"
+    assert report["tier3_status"] == "NOT_STARTED"
