@@ -77,3 +77,18 @@ def test_economic_threshold_prefers_higher_supported_training_net_return() -> No
     )
 
     assert threshold == 0.6
+
+
+def test_oof_emits_no_trade_when_no_economic_threshold_has_support() -> None:
+    frame = pd.DataFrame({"f": [0.0, 1.0] * 6, "net_log_return": [-0.01, 0.02] * 6, "y_direction": [-1, 1] * 6, "t0": pd.date_range("2024-01-01", periods=12), "t1": pd.date_range("2024-01-01", periods=12)})
+
+    result = oof_logistic_predictions(
+        frame, [([*range(8)], [8, 9, 10, 11])], ["f"],
+        candidate_threshold_objective="economic_net_log_return",
+        candidate_threshold_grid=(0.999999,),
+    )
+
+    assert result.loc[[8, 9, 10, 11], "p1"].notna().all()
+    assert result.loc[[8, 9, 10, 11], "is_candidate"].eq(False).all()
+    assert result.loc[[8, 9, 10, 11], "candidate_threshold"].isna().all()
+    assert set(result.loc[[8, 9, 10, 11], "candidate_reason"]) == {"no_supported_training_threshold"}

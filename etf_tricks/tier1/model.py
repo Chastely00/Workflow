@@ -202,13 +202,18 @@ def oof_logistic_predictions(
         )
         if candidate_threshold_objective == "economic_net_log_return":
             calibration_returns = train.loc[calibration_usable, "net_log_return"]
-            threshold = _select_economic_candidate_threshold(
-                calibration_probability,
-                calibration_returns.to_numpy(dtype=float),
-                candidate_threshold_grid,
-                calibration_weights,
-                minimum_candidate_weight_share,
-            )
+            try:
+                threshold = _select_economic_candidate_threshold(
+                    calibration_probability,
+                    calibration_returns.to_numpy(dtype=float),
+                    candidate_threshold_grid,
+                    calibration_weights,
+                    minimum_candidate_weight_share,
+                )
+            except ValueError as error:
+                if str(error) != "no candidate threshold meets minimum weighted support":
+                    raise
+                threshold = None
         else:
             threshold = _select_candidate_threshold(
                 calibration_probability,
@@ -218,10 +223,13 @@ def oof_logistic_predictions(
             )
         logits = np.log(np.clip(raw_probability, 1e-6, 1 - 1e-6) / (1 - np.clip(raw_probability, 1e-6, 1 - 1e-6)))
         probability = calibrator.predict_proba(logits.reshape(-1, 1))[:, 1]
-        candidate = probability >= threshold
+        candidate = np.zeros(len(probability), dtype=bool) if threshold is None else probability >= threshold
         result.iloc[validation_rows, result.columns.get_loc("p1")] = probability
         result.iloc[validation_rows, result.columns.get_loc("prediction_kind")] = "OOF_CALIBRATED"
-        result.iloc[validation_rows, result.columns.get_loc("candidate_threshold")] = threshold
+        if threshold is not None:
+            result.iloc[validation_rows, result.columns.get_loc("candidate_threshold")] = threshold
         result.iloc[validation_rows, result.columns.get_loc("is_candidate")] = candidate
-        result.iloc[validation_rows, result.columns.get_loc("candidate_reason")] = np.where(candidate, "p1_at_or_above_fold_threshold", "p1_below_fold_threshold")
+        result.iloc[validation_rows, result.columns.get_loc("candidate_reason")] = (
+            "no_supported_training_threshold" if threshold is None else np.where(candidate, "p1_at_or_above_fold_threshold", "p1_below_fold_threshold")
+        )
     return result
