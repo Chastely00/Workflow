@@ -202,11 +202,19 @@ def oof_logistic_predictions(
                 uniqueness_entity_column,
             )
         except ValueError as error:
-            if str(error) not in {"training fold requires both classes", "calibration evidence requires both classes"}:
+            message = str(error)
+            class_errors = {"training fold requires both classes", "calibration evidence requires both classes"}
+            evidence_errors = {
+                "insufficient distinct t0 dates for requested folds",
+                "no fold has fully resolved historical training events",
+            }
+            if message not in class_errors | evidence_errors:
                 raise
-            result.iloc[validation_rows, result.columns.get_loc("prediction_kind")] = "INSUFFICIENT_TRAINING_CLASSES"
+            kind = "INSUFFICIENT_TRAINING_CLASSES" if message in class_errors else "INSUFFICIENT_TRAINING_EVIDENCE"
+            reason = "insufficient_training_classes" if message in class_errors else "insufficient_training_evidence"
+            result.iloc[validation_rows, result.columns.get_loc("prediction_kind")] = kind
             result.iloc[validation_rows, result.columns.get_loc("is_candidate")] = False
-            result.iloc[validation_rows, result.columns.get_loc("candidate_reason")] = "insufficient_training_classes"
+            result.iloc[validation_rows, result.columns.get_loc("candidate_reason")] = reason
             continue
         if candidate_threshold_objective == "economic_net_log_return":
             calibration_returns = train.loc[calibration_usable, "net_log_return"]

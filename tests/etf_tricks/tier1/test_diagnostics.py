@@ -90,6 +90,8 @@ def test_etf_local_gate_has_local_scope_and_never_uses_pooled_metrics() -> None:
     assert report["status"] == "PASSED"
     assert report["etf_scope"] == "momentum"
     assert report["model_scope"] == "ETF_LOCAL"
+    assert report["tier2_permitted"] is True
+    assert report["tier3_permitted"] is False
     assert "pooled_auc" not in report["metrics"]
 
 

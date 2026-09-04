@@ -102,3 +102,20 @@ def test_oof_marks_a_one_class_chronological_training_fold_as_insufficient() -> 
     assert result.loc[[4, 5, 6, 7], "p1"].isna().all()
     assert set(result.loc[[4, 5, 6, 7], "prediction_kind"]) == {"INSUFFICIENT_TRAINING_CLASSES"}
     assert set(result.loc[[4, 5, 6, 7], "candidate_reason"]) == {"insufficient_training_classes"}
+
+
+def test_oof_marks_insufficient_inner_calibration_dates_without_raising() -> None:
+    frame = pd.DataFrame(
+        {
+            "f": [0.0, 1.0, 0.2, 0.8],
+            "y_direction": [-1, 1, -1, 1],
+            "t0": pd.date_range("2024-01-01", periods=4),
+            "t1": pd.date_range("2024-01-01", periods=4),
+        }
+    )
+
+    result = oof_logistic_predictions(frame, [([0, 1], [2, 3])], ["f"])
+
+    assert result.loc[[2, 3], "p1"].isna().all()
+    assert set(result.loc[[2, 3], "prediction_kind"]) == {"INSUFFICIENT_TRAINING_EVIDENCE"}
+    assert set(result.loc[[2, 3], "candidate_reason"]) == {"insufficient_training_evidence"}

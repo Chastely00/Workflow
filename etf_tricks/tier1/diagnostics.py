@@ -54,7 +54,9 @@ def evaluate_etf_local_gate(
         "reasons": reasons,
         "status": "PASSED" if passed else "FAILED",
         "tier2_permitted": passed,
-        "tier3_permitted": passed,
+        # Tier 1 can admit only ETF-local meta-label research.  Tier 3 needs
+        # independently admitted Tier 2 streams and cannot be bypassed.
+        "tier3_permitted": False,
     }
 
 
