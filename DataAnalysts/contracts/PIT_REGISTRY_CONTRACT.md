@@ -34,6 +34,8 @@ Selected PIT views use:
 
 `key3` is the availability date for the selected view, not a future leakage source. For `AINVFINB`, a later raw `key3` timestamp on the same normalized date is treated as a same-day publication/correction tie-breaker; it is not allowed to make any row eligible after `decision_date`. `mdate` is only the revision tie-breaker after the latest available `key3` date and same-day timestamp have already been selected.
 
+For a full-history build, `financial_statement_pit_selected` is an **as-of state-update** artifact, not a repeated daily snapshot grid. A row is emitted only when a selected logical key changes, at the first requested trading decision date on or after the source availability date. To reconstruct a decision date, consumers must take the latest emitted row for each logical key with `decision_date <= requested_decision_date`; they must never select a later event. This is PIT-equivalent to a daily snapshot while avoiding repeated copies of unchanged statements.
+
 ## AFESTM1 Rule
 
 `AFESTM1.annd` is the PIT date. `AFESTM1.key3` is a statement form/category field and must not be parsed as a date.

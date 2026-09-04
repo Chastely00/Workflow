@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from bisect import bisect_left
 from collections import Counter, defaultdict
 from datetime import date, datetime, time
 from typing import Any
@@ -17,6 +18,7 @@ def normalize_raw_family(
     pit_registry: dict[str, object],
     *,
     decision_dates: list[str] | None = None,
+    selected_materialization: str = "snapshots",
 ) -> dict[str, object]:
     rule = _rule_for(family_id, pit_registry)
     normalizer = _NORMALIZERS.get(family_id)
@@ -35,6 +37,7 @@ def normalize_raw_family(
             selected_family_id="financial_statement_pit_selected",
             pit_registry=pit_registry,
             decision_dates=decision_dates,
+            selected_materialization=selected_materialization,
         )
         diagnostics.update(selected_diag)
         diagnostics["resolved_same_day_source_timestamp_count"] = (
@@ -277,6 +280,7 @@ def _selected_rows(
     selected_family_id: str,
     pit_registry: dict[str, object],
     decision_dates: list[str] | None,
+    selected_materialization: str = "snapshots",
 ) -> tuple[list[dict[str, object]], dict[str, object]]:
     normalized_decision_dates = [_normalize_decision_date(decision_date) for decision_date in decision_dates or []]
     diagnostics: dict[str, object] = {
@@ -302,8 +306,17 @@ def _selected_rows(
         "resolved_duplicate_count",
         "unresolved_duplicate_count",
     }
+    if selected_materialization not in {"snapshots", "state_updates"}:
+        raise RawFamilyError(
+            f"unsupported selected materialization: {selected_materialization}"
+        )
+    selector = (
+        _select_pit_state_updates_by_decision_dates
+        if selected_materialization == "state_updates"
+        else _select_latest_pit_rows_by_decision_dates
+    )
     try:
-        selected_rows, selected_diagnostics_by_date = _select_latest_pit_rows_by_decision_dates(
+        selected_rows, selected_diagnostics_by_date = selector(
             rows,
             logical_key=list(rule["logical_key"]),
             availability_field=str(rule["availability_field"]),
@@ -322,11 +335,92 @@ def _selected_rows(
             diagnostics["resolved_same_day_source_timestamp_count"]
         ) + int(selected_diag.get("resolved_same_day_source_timestamp_count", 0))
     diagnostics["selected_row_count"] = len(selected_rows)
+    diagnostics["selected_materialization"] = selected_materialization
     diagnostics["selected_no_q_row_count"] = sum(1 for row in selected_rows if row.get("no") == "Q")
     diagnostics["selected_key3_category_counts"] = dict(
         Counter(str(row["key3"]) for row in selected_rows if "key3" in row)
     )
     return selected_rows, diagnostics
+
+
+def _select_pit_state_updates_by_decision_dates(
+    rows: list[dict[str, object]],
+    *,
+    logical_key: list[str],
+    availability_field: str,
+    revision_field: str | None,
+    source_timestamp_field: str | None,
+    decision_dates: list[str],
+) -> tuple[list[dict[str, object]], dict[str, dict[str, int]]]:
+    """Emit only state changes effective at each requested decision date.
+
+    A complete daily selected-PIT grid duplicates the same financial statement
+    state on every trading day.  The event form is PIT-equivalent when a reader
+    selects the latest event at or before its decision date, while keeping a
+    full-history materialization bounded by source changes rather than days.
+    """
+    events_by_available, availability_counts, same_day_resolved_counts = (
+        _selection_events_by_available(
+            rows,
+            logical_key=logical_key,
+            availability_field=availability_field,
+            revision_field=revision_field,
+            source_timestamp_field=source_timestamp_field,
+        )
+    )
+    unique_decision_dates = sorted(set(decision_dates))
+    if not unique_decision_dates:
+        return [], {}
+
+    candidates_by_decision: dict[str, dict[tuple[str, ...], list[dict[str, object]]]] = defaultdict(
+        lambda: defaultdict(list)
+    )
+    eligible_row_count = 0
+    same_day_resolved_count = 0
+    for available, events in events_by_available.items():
+        position = bisect_left(unique_decision_dates, available)
+        if position == len(unique_decision_dates):
+            continue
+        decision_date = unique_decision_dates[position]
+        eligible_row_count += availability_counts[available]
+        same_day_resolved_count += same_day_resolved_counts.get(available, 0)
+        for key, row in events:
+            candidates_by_decision[decision_date][key].append(row)
+
+    selected_rows: list[dict[str, object]] = []
+    diagnostics_by_date: dict[str, dict[str, int]] = {}
+    cumulative_eligible = 0
+    cumulative_same_day_resolved = 0
+    for decision_date in unique_decision_dates:
+        candidates = candidates_by_decision.get(decision_date, {})
+        selected_count = 0
+        for key in sorted(candidates):
+            rows_for_key = candidates[key]
+            selected = _select_latest_active_row(
+                key,
+                rows_for_key,
+                availability_field=availability_field,
+                revision_field=revision_field,
+            )
+            selected_with_decision = dict(selected)
+            selected_with_decision["decision_date"] = decision_date
+            selected_rows.append(selected_with_decision)
+            selected_count += 1
+        for available, count in availability_counts.items():
+            position = bisect_left(unique_decision_dates, available)
+            if position < len(unique_decision_dates) and unique_decision_dates[position] == decision_date:
+                cumulative_eligible += count
+                cumulative_same_day_resolved += same_day_resolved_counts.get(available, 0)
+        diagnostics_by_date[decision_date] = {
+            "input_row_count": len(rows),
+            "eligible_row_count": cumulative_eligible,
+            "future_row_count": len(rows) - cumulative_eligible,
+            "selected_row_count": selected_count,
+            "resolved_duplicate_count": cumulative_eligible - len(selected_rows),
+            "resolved_same_day_source_timestamp_count": cumulative_same_day_resolved,
+            "unresolved_duplicate_count": 0,
+        }
+    return selected_rows, diagnostics_by_date
 
 
 def _select_latest_pit_rows_by_decision_dates(

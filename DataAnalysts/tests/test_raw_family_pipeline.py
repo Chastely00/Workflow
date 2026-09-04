@@ -354,10 +354,8 @@ def test_full_history_financial_statement_uses_complete_fresh_calendar_domain(tm
         context, "financial_statement_pit_selected.json", "decision_year=2025"
     )
     selected = pq.read_table(selected_path).to_pylist()
-    assert [row["decision_date"] for row in selected] == [
-        "2025-08-14", "2025-08-15", "2025-08-18"
-    ]
-    assert [row["eps"] for row in selected] == [11, 11, 11]
+    assert [row["decision_date"] for row in selected] == ["2025-08-14"]
+    assert [row["eps"] for row in selected] == [11]
 
 
 def test_full_history_selected_pit_without_fresh_calendar_evidence_fails_closed(tmp_path):

@@ -348,6 +348,8 @@ def publish_dataset(
         )
     if not rows:
         return _publish_empty_inventory(context, contract)
+    if write_schema is None and run_scope == "full_history":
+        write_schema = _full_history_write_schema(contract, rows)
     if contract.publication_mode == "full_replace":
         if run_scope != "full_history":
             raise ArtifactError(
@@ -1334,7 +1336,11 @@ def _table_from_rows(
     write_schema: pa.Schema | None = None,
 ) -> pa.Table:
     columns = _columns_from_rows(rows)
-    ordered = list(dict.fromkeys([*contract.required_columns, *columns]))
+    ordered = (
+        list(write_schema.names)
+        if write_schema is not None
+        else list(dict.fromkeys([*contract.required_columns, *columns]))
+    )
     try:
         return pa.table(
             {
@@ -1345,6 +1351,38 @@ def _table_from_rows(
         )
     except (pa.ArrowException, TypeError, ValueError) as exc:
         raise ArtifactError(f"{contract.artifact_id} schema mismatch: {exc}") from exc
+
+
+def _full_history_write_schema(
+    contract: ArtifactContract, rows: list[dict[str, Any]]
+) -> pa.Schema:
+    """Infer one permissive schema over all rows before partitioned publication.
+
+    Mongo source documents can introduce optional fields in only some years.
+    A bounded batch union avoids materializing one giant Arrow table while
+    guaranteeing that every full-history partition has the same schema.
+    """
+    column_names = list(
+        dict.fromkeys([*contract.required_columns, *_columns_from_rows(rows)])
+    )
+    schema = pa.schema([pa.field(column, pa.null()) for column in column_names])
+    for offset in range(0, len(rows), 65536):
+        batch = rows[offset : offset + 65536]
+        batch_schema = pa.table(
+            {
+                column: [
+                    _normalize_parquet_scalar(row.get(column)) for row in batch
+                ]
+                for column in column_names
+            }
+        ).schema
+        try:
+            schema = pa.unify_schemas([schema, batch_schema], promote_options="permissive")
+        except pa.ArrowException as exc:
+            raise ArtifactError(
+                f"{contract.artifact_id} cannot unify full-history schema: {exc}"
+            ) from exc
+    return schema
 
 
 def _unique_rows(

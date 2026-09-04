@@ -439,6 +439,35 @@ def test_financial_statement_selected_pit_evolves_across_multiple_decision_dates
     assert result["diagnostics"]["unresolved_duplicate_count"] == 0
 
 
+def test_financial_statement_state_updates_do_not_repeat_unchanged_snapshot():
+    result = normalize_raw_family(
+        "financial_statement_raw",
+        [
+            {
+                "coid": "3576",
+                "no": "Q",
+                "sem": "1",
+                "curr": "NTD",
+                "merg": "Y",
+                "endd": "2025-03-31",
+                "key3": "2025-01-10",
+                "mdate": "2025-01-10",
+                "eps": 10,
+                "source_row_id": "jan",
+            }
+        ],
+        _registry(),
+        decision_dates=["2025-01-15", "2025-02-10", "2025-03-15"],
+        selected_materialization="state_updates",
+    )
+
+    assert [
+        (row["decision_date"], row["source_row_id"], row["eps"])
+        for row in result["selected_rows"]
+    ] == [("2025-01-15", "jan", 10)]
+    assert result["diagnostics"]["selected_materialization"] == "state_updates"
+
+
 def test_financial_statement_multi_date_selection_does_not_call_selector_per_decision_date(monkeypatch):
     calls = 0
     original = raw_families.select_latest_pit_rows

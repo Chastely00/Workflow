@@ -113,6 +113,30 @@ def test_full_history_replaces_complete_partition_inventory(context, tradability
     assert "/versions/" in result.manifest["artifact_paths"][0]
 
 
+def test_full_history_unifies_optional_columns_across_year_partitions(
+    context, tradability_contract
+):
+    result = publish_dataset(
+        context,
+        tradability_contract,
+        [
+            tradability_row("2025-12-31", legacy_optional="old"),
+            tradability_row("2026-01-02", current_optional="new"),
+        ],
+        run_scope="full_history",
+    )
+
+    schemas = [
+        pq.ParquetFile(context.artifact_path(path)).schema_arrow
+        for path in result.manifest["artifact_paths"]
+    ]
+    assert schemas[0].equals(schemas[1], check_metadata=False)
+    assert {field.name for field in schemas[0]} >= {
+        "legacy_optional",
+        "current_optional",
+    }
+
+
 def test_partition_publication_switches_one_versioned_manifest_without_mixed_reader_view(
     context, tradability_contract
 ):

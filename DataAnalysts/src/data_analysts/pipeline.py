@@ -349,6 +349,11 @@ def run_pipeline(
                 extracted_rows,
                 config.pit_registry,
                 decision_dates=decision_dates,
+                selected_materialization=(
+                    "state_updates"
+                    if family_id in full_history_pit_families
+                    else "snapshots"
+                ),
             )
             source_collections = sorted(
                 {str(row.get("source_collection")) for row in extracted_rows if row.get("source_collection")}
