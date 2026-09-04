@@ -94,7 +94,8 @@ def main() -> int:
     registry = TrialRegistry(args.registry_path)
     label_config = json.loads((roots["target"] / "manifest.json").read_text(encoding="utf-8"))["metadata"]["target_config"]
     records: dict[str, dict[str, object]] = {}
-    for ordinal, etf_id in enumerate(expected_etfs, start=1):
+    effective_trial_count = float(args.effective_trial_count_base + len(expected_etfs))
+    for etf_id in expected_etfs:
         trial_id = f"{args.trial_prefix}-{etf_id}"
         records[etf_id] = {
             "trial_id": trial_id, "parent_trial_id": "tier1-hgb-base15-cost-audited-2005-2024-v1-result",
@@ -109,8 +110,8 @@ def main() -> int:
             "fold_definition_hash": _hash({**config, "etf_scope": etf_id}),
             "train_validation_test_boundaries": {"research_t0_end": args.research_t0_end, "research_outcome_before": args.research_outcome_before},
             "etf_scope": etf_id, "model_scope": "ETF_LOCAL",
-            "raw_trial_count": int(args.effective_trial_count_base + ordinal),
-            "effective_independent_trial_count": float(args.effective_trial_count_base + ordinal),
+            "raw_trial_count": int(effective_trial_count),
+            "effective_independent_trial_count": effective_trial_count,
             "validation_metrics": {}, "selection_status": "REGISTERED",
             "selection_reason": "Registered before ETF-local fitting; no pooled fitted state or pooled gate is used.",
         }
