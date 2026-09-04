@@ -54,6 +54,8 @@ Every completed Dollar bar may emit OOF `p1`, but this is evidence rather than a
 
 Persist diagnostics separately for all mature events and selected candidates: first-touch type, time-to-touch bars/days, gross/net return, cost, MFE, MAE, and post-profit-take continuation to the original 60-bar horizon. Diagnose excessive/too-near stops, too-near profits, overly wide barriers, and volatility mismatch. Pre-register any barrier alternatives; a diagnostic alone is not a trial, while an adopted alternative is.
 
+The stateful gate defaults to at least 20 completed OOF `flat -> long -> flat` round-trips. Fewer completed trades are `INSUFFICIENT_EXECUTED_TRADES`, not an economically failed ETF and not Tier 2 admission. A ledger ending long is `MARK_TO_MARKET_ONLY`; its NAV path and Sharpe are descriptive proxy marks, never completed strategy evidence. At or above 20 completed trades, require a positive daily-NAV-proxy Sharpe before `RESEARCH_PASS_PROXY_LEDGER` may permit Tier 2 research. This gateway never permits Tier 3, paper trading, PSR, or DSR because it is not yet the constituent ticket ledger.
+
 ### 4.1 Research windows and claim hierarchy
 
 Separate runtime checks from research evidence. `2024-01-01` to the current data end is a smoke/schema/performance interval only: under a 60-Dollar-bar vertical horizon it can leave low-frequency ETFs with mostly unresolved tails, so it must never reject an ETF, feature, or model family. The minimum formal bounded Tier 1 OOF interval is `2020-01-01` to the current data end. Report the mature target count, unresolved-tail count, and OOF support by ETF; a zero-OOF ETF is `INSUFFICIENT_MATURE_EVENTS`, not a failed model.

@@ -28,6 +28,7 @@
 - Tier 2 預設以相同 `etf_id` 的 Tier 1 OOF/walk-forward candidates 獨立訓練。跨 ETF pooled meta-model 是額外、預先登錄且獨立驗證的候選，不是預設捷徑。
 - Tier 3 不可重新訓練或改寫 Tier 1/2 標籤；三種配置必須使用相同候選、總資金、成本、raw-OPEN 執行規則與限制。研究標籤不是策略 PnL；策略 PnL 只能來自可對帳的 paper ledger。
 - 每根完成 Dollar bar 的 `p1` 是資訊證據，不是自動 round-trip。Tier 1 策略必須以預登記的一側 CUSUM stateful aggregation 決定 `flat -> long` 與 `long -> flat`：空手只累積正向 `p1-0.5`、持有時只累積負向 `p1-0.5`，反向舊證據歸零，轉換後重設分數；持倉時不得重複開倉，只有真實狀態轉換才計入交易成本與損益。每 ETF 的 OOF `p1` 必須先轉為不可重疊 position ledger，再作策略績效結論。
+- Stateful Tier 1 gate 的預設最低可解讀樣本是 20 筆已完成 OOF round-trips；少於此數一律 `INSUFFICIENT_EXECUTED_TRADES`，不可將 mark-to-market 曲線、單筆收益或 proxy Sharpe 當經濟 gate。結尾仍持倉者為 `MARK_TO_MARKET_ONLY`。達到 20 筆、全數已平倉且 proxy Sharpe 為正，至多允許 Tier 2 的研究性 hand-off；仍不允許 Tier 3、paper 或績效宣稱。此 gate 的實作或設定若在既有 OOF 後改變，必須登錄並保守增加 DSR 試驗數。
 - 交易執行使用下一個合法交易日之 constituent 原始 OPEN；不得以調整價或 FFD 價格成交。整數股數、手續費、交易稅、最低 1 元手續費、現金、停牌、下市與已驗證公司行動由共用執行引擎處理。
 
 ## PIT、驗證與測試順序
