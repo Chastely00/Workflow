@@ -74,7 +74,9 @@ def main() -> int:
         raise ValueError(f"missing immutable input manifest: {missing}")
     features = feature_columns_for(args.feature_set) + ["p1"]
     registry = TrialRegistry(args.registry_path)
-    effective_count = float(args.effective_trial_count_base + len(etf_ids))
+    # Registration establishes the pre-result sample-adequacy probe.  It does
+    # not consume DSR budget unless a comparable calibrated OOF result exists.
+    preflight_count = float(args.effective_trial_count_base)
     common = {
         "model_scope": "ETF_LOCAL", "model_family": args.model_family,
         "feature_set": args.feature_set, "feature_columns": features,
@@ -106,9 +108,9 @@ def main() -> int:
             "allocation_config_hash": None, "execution_cost_policy_hash": _hash({"inherited_from_tier1_label": True}),
             "fold_definition_hash": _hash({**common, "etf_scope": etf_id}),
             "train_validation_test_boundaries": {"research_t0_start": "2005-01-01", "research_t0_end": "2024-12-31", "sealed_status": "NOT_SEALED"},
-            "etf_scope": etf_id, "model_scope": "ETF_LOCAL", "raw_trial_count": int(effective_count),
-            "effective_independent_trial_count": effective_count, "validation_metrics": {},
-            "selection_status": "REGISTERED", "selection_reason": "Registered before Tier 2 fitting; research-only and not sealed.",
+            "etf_scope": etf_id, "model_scope": "ETF_LOCAL", "raw_trial_count": int(preflight_count),
+            "effective_independent_trial_count": preflight_count, "validation_metrics": {},
+            "selection_status": "REGISTERED", "selection_reason": "Registered before Tier 2 fitting as a non-performance sample-adequacy probe; research-only and not sealed.",
         }
         registry.append(record)
         run = lab.run_oof(tier1_oof, features, outer_splits=args.outer_splits, model_family=args.model_family)
@@ -127,11 +129,15 @@ def main() -> int:
             })
             print({"etf_id": etf_id, **metrics, "status": "INSUFFICIENT_MATURE_EVENTS", "oof_sha256": None})
             continue
+        # A nonempty calibrated OOF handoff is a comparable performance
+        # alternative and therefore consumes one conservative DSR trial.
+        result_count = float(args.effective_trial_count_base + len(etf_ids))
         artifact_metadata = {**upstream, **common, "etf_scope": etf_id, "trial_id": trial_id}
         manifest = write_tier2_oof_artifact(run.handoff, output / etf_id / "oof", artifact_metadata)
         registry.append({
             **record, "trial_id": f"{trial_id}-result", "parent_trial_id": trial_id,
             "created_at": _now(), "completed_at": _now(), "validation_metrics": metrics,
+            "raw_trial_count": int(result_count), "effective_independent_trial_count": result_count,
             "upstream_artifact_hashes": {**upstream, "tier2_oof_manifest": _sha256(output / etf_id / "oof" / "manifest.json"), "diagnostics_manifest": _sha256(diagnostics_root / "manifest.json")},
             "selection_status": "RESEARCH_ONLY", "selection_reason": "Tier 2 OOF materialized; NOT_SEALED and no Tier 3/paper admission.",
         })
