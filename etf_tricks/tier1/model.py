@@ -183,23 +183,31 @@ def oof_logistic_predictions(
         train_weights = average_uniqueness(
             train, trading_sessions, uniqueness_entity_column
         ).to_numpy()
-        raw_probability = _fit_predict_probability(
-            train,
-            valid,
-            feature_columns,
-            model_family,
-            categorical_columns,
-            train_weights,
-        )
-        calibrator, calibration_probability, calibration_target, calibration_weights, calibration_usable = _fold_local_calibrator(
-            train.reset_index(drop=True),
-            feature_columns,
-            calibration_splits,
-            model_family,
-            categorical_columns,
-            trading_sessions,
-            uniqueness_entity_column,
-        )
+        try:
+            raw_probability = _fit_predict_probability(
+                train,
+                valid,
+                feature_columns,
+                model_family,
+                categorical_columns,
+                train_weights,
+            )
+            calibrator, calibration_probability, calibration_target, calibration_weights, calibration_usable = _fold_local_calibrator(
+                train.reset_index(drop=True),
+                feature_columns,
+                calibration_splits,
+                model_family,
+                categorical_columns,
+                trading_sessions,
+                uniqueness_entity_column,
+            )
+        except ValueError as error:
+            if str(error) not in {"training fold requires both classes", "calibration evidence requires both classes"}:
+                raise
+            result.iloc[validation_rows, result.columns.get_loc("prediction_kind")] = "INSUFFICIENT_TRAINING_CLASSES"
+            result.iloc[validation_rows, result.columns.get_loc("is_candidate")] = False
+            result.iloc[validation_rows, result.columns.get_loc("candidate_reason")] = "insufficient_training_classes"
+            continue
         if candidate_threshold_objective == "economic_net_log_return":
             calibration_returns = train.loc[calibration_usable, "net_log_return"]
             try:

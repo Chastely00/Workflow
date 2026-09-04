@@ -92,3 +92,13 @@ def test_oof_emits_no_trade_when_no_economic_threshold_has_support() -> None:
     assert result.loc[[8, 9, 10, 11], "is_candidate"].eq(False).all()
     assert result.loc[[8, 9, 10, 11], "candidate_threshold"].isna().all()
     assert set(result.loc[[8, 9, 10, 11], "candidate_reason"]) == {"no_supported_training_threshold"}
+
+
+def test_oof_marks_a_one_class_chronological_training_fold_as_insufficient() -> None:
+    frame = pd.DataFrame({"f": list(range(8)), "y_direction": [-1] * 4 + [1] * 4, "t0": pd.date_range("2024-01-01", periods=8), "t1": pd.date_range("2024-01-01", periods=8)})
+
+    result = oof_logistic_predictions(frame, [([0, 1, 2, 3], [4, 5, 6, 7])], ["f"])
+
+    assert result.loc[[4, 5, 6, 7], "p1"].isna().all()
+    assert set(result.loc[[4, 5, 6, 7], "prediction_kind"]) == {"INSUFFICIENT_TRAINING_CLASSES"}
+    assert set(result.loc[[4, 5, 6, 7], "candidate_reason"]) == {"insufficient_training_classes"}

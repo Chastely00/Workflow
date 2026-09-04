@@ -138,7 +138,10 @@ def main() -> int:
             metrics, etf_id, str(records[etf_id]["trial_id"]),
             float(records[etf_id]["effective_independent_trial_count"]),
         )
-        oof_manifest = write_oof_artifact(run.handoff, etf_root / "oof", {**upstream, "config": config, "etf_scope": etf_id})
+        oof_hashes: dict[str, str] = {}
+        if not run.handoff.empty:
+            oof_manifest = write_oof_artifact(run.handoff, etf_root / "oof", {**upstream, "config": config, "etf_scope": etf_id})
+            oof_hashes = {"oof_manifest": _sha256(etf_root / "oof" / "manifest.json")}
         diagnostics_path = etf_root / "diagnostics"
         diagnostics_path.mkdir(parents=True)
         summary.to_parquet(diagnostics_path / "per_etf_oof.parquet", index=False)
@@ -147,12 +150,12 @@ def main() -> int:
         registry.append({
             **records[etf_id], "trial_id": f"{records[etf_id]['trial_id']}-result", "parent_trial_id": records[etf_id]["trial_id"],
             "created_at": _now(), "completed_at": _now(),
-            "upstream_artifact_hashes": {**upstream, "oof_manifest": _sha256(etf_root / "oof" / "manifest.json"), "diagnostics_manifest": _sha256(diagnostics_path / "manifest.json"), "gate_manifest": _sha256(etf_root / "gate" / "manifest.json")},
+            "upstream_artifact_hashes": {**upstream, **oof_hashes, "diagnostics_manifest": _sha256(diagnostics_path / "manifest.json"), "gate_manifest": _sha256(etf_root / "gate" / "manifest.json")},
             "validation_metrics": metrics,
             "selection_status": "SELECTED" if report["status"] == "PASSED" else report["status"],
             "selection_reason": "ETF-local OOF gate " + str(report["status"]),
         })
-        print({"etf_id": etf_id, "status": report["status"], "oof_sha256": oof_manifest["tables"]["oof_handoff"]["sha256"], "gate_sha256": gate_manifest["report"]["sha256"]})
+        print({"etf_id": etf_id, "status": report["status"], "oof_sha256": None if run.handoff.empty else oof_manifest["tables"]["oof_handoff"]["sha256"], "gate_sha256": gate_manifest["report"]["sha256"]})
     return 0
 
 
