@@ -159,6 +159,7 @@ class Tier1Lab:
         categorical_columns: tuple[str, ...] = (),
         candidate_threshold_objective: str = "f1",
         minimum_candidate_weight_share: float = 0.10,
+        research_t0_start: str | pd.Timestamp | None = None,
         research_t0_end: str | pd.Timestamp | None = None,
         research_outcome_before: str | pd.Timestamp | None = None,
     ) -> Tier1LocalOOFRuns:
@@ -166,7 +167,7 @@ class Tier1Lab:
         if "etf_id" in categorical_columns:
             raise ValueError("ETF-local OOF must not use etf_id as a categorical feature")
         frame = self._build_training_frame(
-            feature_columns, research_t0_end, research_outcome_before
+            feature_columns, research_t0_start, research_t0_end, research_outcome_before
         )
         runs: dict[str, Tier1OOFRun] = {}
         for etf_id, local in frame.groupby("etf_id", sort=True):
@@ -208,6 +209,7 @@ class Tier1Lab:
     def _build_training_frame(
         self,
         feature_columns: list[str],
+        research_t0_start: str | pd.Timestamp | None,
         research_t0_end: str | pd.Timestamp | None,
         research_outcome_before: str | pd.Timestamp | None,
     ) -> pd.DataFrame:
@@ -242,14 +244,15 @@ class Tier1Lab:
                 on=["etf_id", "bar_id"], how="inner", validate="one_to_one",
             )
         frame = build_directional_training_frame(targets, features, feature_columns)
-        if (research_t0_end is None) != (research_outcome_before is None):
-            raise ValueError("research_t0_end and research_outcome_before must be supplied together")
-        if research_t0_end is not None and research_outcome_before is not None:
+        if (research_t0_start is None) != (research_t0_end is None) or (research_t0_end is None) != (research_outcome_before is None):
+            raise ValueError("research_t0_start, research_t0_end, and research_outcome_before must be supplied together")
+        if research_t0_start is not None and research_t0_end is not None and research_outcome_before is not None:
+            t0_start = pd.Timestamp(research_t0_start).normalize()
             t0_end = pd.Timestamp(research_t0_end).normalize()
             outcome_before = pd.Timestamp(research_outcome_before).normalize()
-            if t0_end >= outcome_before:
-                raise ValueError("research t0 end must precede sealed outcome boundary")
-            frame = frame.loc[frame["t0"].le(t0_end) & frame["t1"].lt(outcome_before)].reset_index(drop=True)
+            if t0_start > t0_end or t0_end >= outcome_before:
+                raise ValueError("research boundary must satisfy start <= end < outcome boundary")
+            frame = frame.loc[frame["t0"].ge(t0_start) & frame["t0"].le(t0_end) & frame["t1"].lt(outcome_before)].reset_index(drop=True)
             if frame.empty:
                 raise ValueError("research cut-off excludes every resolved target")
         return frame

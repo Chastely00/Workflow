@@ -63,6 +63,7 @@ def _args() -> argparse.Namespace:
     parser.add_argument("--trial-prefix", required=True)
     parser.add_argument("--feature-set", default="hgb_base_15_v1")
     parser.add_argument("--model-family", choices=("logistic_regression", "hist_gradient_boosting"), required=True)
+    parser.add_argument("--research-t0-start", required=True)
     parser.add_argument("--research-t0-end", required=True)
     parser.add_argument("--research-outcome-before", required=True)
     parser.add_argument("--outer-splits", type=int, default=3)
@@ -89,7 +90,7 @@ def main() -> int:
         "feature_set": args.feature_set, "feature_columns": features,
         "candidate_threshold_objective": "economic_net_log_return",
         "minimum_candidate_weight_share": 0.10, "outer_splits": args.outer_splits,
-        "research_t0_end": args.research_t0_end,
+        "research_t0_start": args.research_t0_start, "research_t0_end": args.research_t0_end,
         "research_outcome_before": args.research_outcome_before,
         "fold_policy": "ETF-local chronological expanding event-end purged",
     }
@@ -110,7 +111,7 @@ def main() -> int:
             "tier2_config_hash": None, "allocation_config_hash": None,
             "execution_cost_policy_hash": _hash({"buy_cost_rate": 0.001425, "sell_cost_rate": 0.003, "cost_policy_id": "tier1-proportional-v1"}),
             "fold_definition_hash": _hash({**config, "etf_scope": etf_id}),
-            "train_validation_test_boundaries": {"research_t0_end": args.research_t0_end, "research_outcome_before": args.research_outcome_before},
+            "train_validation_test_boundaries": {"research_t0_start": args.research_t0_start, "research_t0_end": args.research_t0_end, "research_outcome_before": args.research_outcome_before},
             "etf_scope": etf_id, "model_scope": "ETF_LOCAL",
             "raw_trial_count": int(effective_trial_count),
             "effective_independent_trial_count": effective_trial_count,
@@ -123,6 +124,7 @@ def main() -> int:
     runs = lab.run_oof_per_etf(
         features, outer_splits=args.outer_splits, model_family=args.model_family,
         candidate_threshold_objective="economic_net_log_return",
+        research_t0_start=args.research_t0_start,
         research_t0_end=args.research_t0_end,
         research_outcome_before=args.research_outcome_before,
     )

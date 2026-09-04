@@ -96,6 +96,21 @@ def test_lab_excludes_events_that_resolve_in_the_sealed_interval(tmp_path) -> No
     assert set(result.training_frame["event_id"]) == {f"event-{i}" for i in range(19)}
 
 
+def test_etf_local_oof_respects_explicit_research_start(tmp_path) -> None:
+    afml = tmp_path / "afml"
+    targets = tmp_path / "targets"
+    (afml / "tables").mkdir(parents=True)
+    targets.mkdir()
+    dates = pd.date_range("2024-01-01", periods=20)
+    (afml / "metadata.json").write_text(json.dumps({"trading_sessions": [str(date.date()) for date in dates]}), encoding="utf-8")
+    pd.DataFrame({"etf_id": "x", "bar_id": range(20), "feature_available_at": dates.tz_localize("Asia/Taipei"), "f": range(20)}).to_parquet(afml / "tables" / "features.parquet", index=False)
+    pd.DataFrame({"event_id": [f"event-{i}" for i in range(20)], "etf_id": "x", "t0_bar_id": range(20), "t0_date": dates, "exit_date": dates + pd.Timedelta(days=1), "y_direction": [-1, 1] * 10, "net_log_return": [-0.01, 0.02] * 10, "target_status": ["resolved_lower", "resolved_upper"] * 10}).to_parquet(targets / "targets.parquet", index=False)
+
+    result = Tier1Lab.from_artifacts(afml, targets).run_oof_per_etf(["f"], outer_splits=1, research_t0_start="2024-01-06", research_t0_end="2024-01-20", research_outcome_before="2024-01-21")
+
+    assert result.by_etf["x"].training_frame["t0"].min() >= pd.Timestamp("2024-01-06")
+
+
 def test_lab_runs_oof_in_isolated_etf_partitions(tmp_path) -> None:
     afml = tmp_path / "afml"
     targets = tmp_path / "targets"
