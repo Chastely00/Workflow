@@ -20,6 +20,7 @@ from etf_tricks.tier1.artifact import write_oof_artifact
 from etf_tricks.tier1.diagnostics import evaluate_etf_local_gate, summarize_per_etf_oof
 from etf_tricks.tier1.lab import Tier1Lab
 from etf_tricks.tier1.long_history import feature_columns_for
+from etf_tricks.tier1.splits import fold_audit_records
 
 
 def _sha256(path: Path) -> str:
@@ -160,7 +161,23 @@ def main() -> int:
         diagnostics_path = etf_root / "diagnostics"
         diagnostics_path.mkdir(parents=True)
         summary.to_parquet(diagnostics_path / "per_etf_oof.parquet", index=False)
-        (diagnostics_path / "manifest.json").write_text(json.dumps({"schema_version": "tier1-etf-local-diagnostics-v1", "etf_scope": etf_id, "table_sha256": _sha256(diagnostics_path / "per_etf_oof.parquet")}, sort_keys=True), encoding="utf-8")
+        fold_audit_records(run.training_frame, run.folds).to_parquet(
+            diagnostics_path / "fold_audit.parquet", index=False
+        )
+        (diagnostics_path / "manifest.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": "tier1-etf-local-diagnostics-v2",
+                    "etf_scope": etf_id,
+                    "table_sha256": _sha256(diagnostics_path / "per_etf_oof.parquet"),
+                    "fold_audit_sha256": _sha256(diagnostics_path / "fold_audit.parquet"),
+                    "fold_policy": "chronological_expanding_event_end_purged",
+                    "embargo_policy": "NOT_APPLICABLE_FORWARD_ONLY",
+                },
+                sort_keys=True,
+            ),
+            encoding="utf-8",
+        )
         gate_manifest = write_tier1_gate_report(report, etf_root / "gate")
         registry.append({
             **records[etf_id], "trial_id": f"{records[etf_id]['trial_id']}-result", "parent_trial_id": records[etf_id]["trial_id"],

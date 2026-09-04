@@ -81,6 +81,55 @@ def chronological_purged_folds(events: pd.DataFrame, n_splits: int = 3) -> list[
     return folds
 
 
+def fold_audit_records(
+    events: pd.DataFrame, folds: list[tuple[np.ndarray, np.ndarray]]
+) -> pd.DataFrame:
+    """Return the realized expanding-fold boundaries and event-end purge proof.
+
+    These records are evidence, rather than a second splitter: every reported
+    boolean is re-checked from the supplied row indices and source event times.
+    A forward-only fold has no later observations in its training side, so a
+    post-validation embargo is structurally not applicable.
+    """
+    if not {"t0", "t1"}.issubset(events.columns):
+        raise ValueError("events require t0 and t1")
+    t0 = pd.to_datetime(events["t0"], errors="coerce")
+    t1 = pd.to_datetime(events["t1"], errors="coerce")
+    if t0.isna().any() or t1.isna().any() or (t1 < t0).any():
+        raise ValueError("event intervals must be valid")
+    records: list[dict[str, object]] = []
+    for fold_number, (train_rows, validation_rows) in enumerate(folds):
+        train_index = np.asarray(train_rows, dtype=int)
+        validation_index = np.asarray(validation_rows, dtype=int)
+        if not len(train_index) or not len(validation_index):
+            raise ValueError("fold audit requires nonempty train and validation rows")
+        if set(train_index).intersection(validation_index):
+            raise ValueError("fold audit rows overlap")
+        train_t0 = t0.iloc[train_index]
+        train_t1 = t1.iloc[train_index]
+        validation_t0 = t0.iloc[validation_index]
+        validation_t1 = t1.iloc[validation_index]
+        event_end_purge_verified = bool(train_t1.lt(validation_t0.min()).all())
+        if not event_end_purge_verified:
+            raise ValueError("fold audit found training event unresolved at validation start")
+        records.append(
+            {
+                "outer_fold": fold_number,
+                "train_rows": int(len(train_index)),
+                "validation_rows": int(len(validation_index)),
+                "train_t0_min": train_t0.min(),
+                "train_t0_max": train_t0.max(),
+                "train_t1_max": train_t1.max(),
+                "validation_t0_min": validation_t0.min(),
+                "validation_t0_max": validation_t0.max(),
+                "validation_t1_max": validation_t1.max(),
+                "event_end_purge_verified": event_end_purge_verified,
+                "embargo_policy": "NOT_APPLICABLE_FORWARD_ONLY",
+            }
+        )
+    return pd.DataFrame(records)
+
+
 def purged_train_indices(events: pd.DataFrame, validation_indices: list[int], embargo_rows: int = 0) -> np.ndarray:
     """Return rows whose closed event intervals do not overlap validation intervals."""
     if not {"t0", "t1"}.issubset(events.columns):

@@ -26,6 +26,47 @@ def test_walk_forward_folds_train_only_on_fully_resolved_past_events() -> None:
         assert (events.iloc[train]["t1"] < events.iloc[valid]["t0"].min()).all()
 
 
+def test_fold_audit_records_persist_actual_event_boundaries_and_purge_proof() -> None:
+    events = pd.DataFrame(
+        {
+            "t0": pd.date_range("2024-01-01", periods=6),
+            "t1": pd.date_range("2024-01-02", periods=6),
+        }
+    )
+    folds = splits.chronological_purged_folds(events, n_splits=2)
+
+    audit = splits.fold_audit_records(events, folds)
+
+    assert audit.to_dict("records") == [
+        {
+            "outer_fold": 0,
+            "train_rows": 1,
+            "validation_rows": 2,
+            "train_t0_min": pd.Timestamp("2024-01-01"),
+            "train_t0_max": pd.Timestamp("2024-01-01"),
+            "train_t1_max": pd.Timestamp("2024-01-02"),
+            "validation_t0_min": pd.Timestamp("2024-01-03"),
+            "validation_t0_max": pd.Timestamp("2024-01-04"),
+            "validation_t1_max": pd.Timestamp("2024-01-05"),
+            "event_end_purge_verified": True,
+            "embargo_policy": "NOT_APPLICABLE_FORWARD_ONLY",
+        },
+        {
+            "outer_fold": 1,
+            "train_rows": 3,
+            "validation_rows": 2,
+            "train_t0_min": pd.Timestamp("2024-01-01"),
+            "train_t0_max": pd.Timestamp("2024-01-03"),
+            "train_t1_max": pd.Timestamp("2024-01-04"),
+            "validation_t0_min": pd.Timestamp("2024-01-05"),
+            "validation_t0_max": pd.Timestamp("2024-01-06"),
+            "validation_t1_max": pd.Timestamp("2024-01-07"),
+            "event_end_purge_verified": True,
+            "embargo_policy": "NOT_APPLICABLE_FORWARD_ONLY",
+        },
+    ]
+
+
 def test_average_uniqueness_weights_overlapping_event_intervals() -> None:
     events = pd.DataFrame(
         {
