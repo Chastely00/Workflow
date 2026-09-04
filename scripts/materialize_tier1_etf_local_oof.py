@@ -48,7 +48,9 @@ def _native(value: object) -> object:
 
 def _record_metrics(summary: pd.DataFrame, etf_id: str) -> dict[str, object]:
     row = summary.loc[summary["scope"].eq("ALL_WITHIN_ETF")].iloc[0]
-    return {column: _native(row[column]) for column in summary.columns if column not in {"etf_id", "scope", "training_rows"}}
+    metrics = {column: _native(row[column]) for column in summary.columns if column not in {"etf_id", "scope", "training_rows"}}
+    metrics["base_positive_rate"] = metrics.pop("positive_rate")
+    return metrics
 
 
 def _args() -> argparse.Namespace:
