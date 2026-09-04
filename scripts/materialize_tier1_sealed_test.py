@@ -123,8 +123,8 @@ def main() -> int:
         "trial_id": args.trial_id,
         "parent_trial_id": "tier1-hgb-base15-cost-audited-2005-2024-v1-result",
         "created_at": _now(), "completed_at": None,
-        "research_question": "Does the selected Momentum ETF retain the fixed pooled HGB-base15 Tier 1 signal in the once-only 2025-2026 sealed interval?",
-        "hypothesis": "The post-selected Momentum diagnostic may retain discrimination and net candidate return after a frozen pooled historical fit, without any sealed-time selection or recalibration.",
+        "research_question": "Does the selected ETF retain its fixed ETF-local HGB-base15 Tier 1 signal in the once-only sealed interval?",
+        "hypothesis": "The selected ETF's frozen local model may retain discrimination and net candidate return without sealed-time selection or recalibration.",
         "code_commit": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
         "upstream_artifact_hashes": upstream,
         "feature_set_hash": _hash_object(features),
@@ -134,12 +134,12 @@ def main() -> int:
         "fold_definition_hash": _hash_object(config),
         "train_validation_test_boundaries": {"research_t0_end": args.research_t0_end, "research_outcome_before": args.sealed_start, "sealed_test_start": args.sealed_start, "sealed_test_end": "2026-07-07", "selected_etf_id": args.selected_etf_id},
         "raw_trial_count": int(args.effective_independent_trial_count), "effective_independent_trial_count": float(args.effective_independent_trial_count),
-        "etf_scope": args.selected_etf_id, "model_scope": "PANEL_BENCHMARK", "validation_metrics": {}, "selection_status": "REGISTERED", "selection_reason": "Registered before any sealed prediction. Momentum was selected from the recorded pooled diagnostic; the 13-way post-selection is conservatively counted in the effective trial total.",
+        "etf_scope": args.selected_etf_id, "model_scope": "ETF_LOCAL", "validation_metrics": {}, "selection_status": "REGISTERED", "selection_reason": "Registered before any ETF-local sealed prediction; the effective trial count includes prior selection alternatives.",
     }
     registry.append(record)
     frame, sessions = _load_frame(roots["afml"], roots["target"], roots["extension"], features)
     training, sealed = split_training_and_sealed_frames(frame, research_t0_end=args.research_t0_end, sealed_start=args.sealed_start, selected_etf_id=args.selected_etf_id, outcome_access_boundary=outcome_access_boundary)
-    predictions = predict_sealed(training, sealed, features, model_family="hist_gradient_boosting", categorical_columns=("etf_id",), trading_sessions=sessions, outcome_access_boundary=outcome_access_boundary)
+    predictions = predict_sealed(training, sealed, features, model_family="hist_gradient_boosting", trading_sessions=sessions, outcome_access_boundary=outcome_access_boundary)
     metadata = {**upstream, "trial_id": args.trial_id, "selected_etf_id": args.selected_etf_id, "sealed_start": args.sealed_start, "outcome_access_boundary": outcome_access_boundary, "config": config, "training_rows": len(training), "sealed_rows": len(sealed)}
     prediction_manifest = write_sealed_artifact(predictions, prediction_root, metadata)
     metrics = _sealed_metrics(sealed, predictions)
