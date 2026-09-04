@@ -137,7 +137,7 @@
       "artifact_id": "self_reported_numbers_pit_selected", "layer": "derived", "base_path": "canonical/derived/pit/self_reported_numbers_pit_selected", "file_name": "part.parquet",
       "required_columns": ["decision_date", "ticker", "key3", "sem", "curr", "merg", "period_end_date", "source_available_date", "revision_date", "data_cutoff_at"], "logical_key": ["decision_date", "ticker", "key3", "sem", "curr", "merg", "period_end_date"], "publication_mode": "partition_upsert",
       "partition_name": "decision_year", "partition_field": "decision_date", "date_field": "decision_date", "availability_field": "source_available_date",
-      "pit_policy": "selected_pit_decision_date", "source_families": ["self_reported_numbers_raw"]
+        "pit_policy": "selected_pit_state_updates_asof", "source_families": ["self_reported_numbers_raw"]
     },
     {
       "artifact_id": "dividend_events", "layer": "derived", "base_path": "canonical/derived/events/dividend_events", "file_name": "part.parquet",

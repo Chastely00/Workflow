@@ -172,7 +172,7 @@ canonical/derived/universes/<universe_id>/membership_by_date/as_of_date=YYYY-MM-
 
 - `date` 是市場或資料本身的日期，不必然等於可用日期。
 - `source_available_date` 是 Agent 能安全使用該 row 的 PIT 日期。
-- `decision_date` 是 selected PIT artifacts 對應的決策日。`financial_statement_pit_selected` 在完整歷史模式是 state-update as-of surface：使用某日資料時，必須按 logical key 取 `decision_date <= 該日` 的最新事件，不能把它誤當成每日完整快照。
+- `decision_date` 是 selected PIT artifacts 對應的決策日。`financial_statement_pit_selected` 與 `self_reported_numbers_pit_selected` 在完整歷史模式是 state-update as-of surface：使用某日資料時，必須按 logical key 取 `decision_date <= 該日` 的最新事件，不能把它誤當成每日完整快照。
 - 不得在 `decision_date` 之前使用 `source_available_date` 晚於該日的資料。
 - Universe、security panel、adjusted price、events 已由 DataAnalysts 負責 PIT-safe 建構；下游不要回頭用 raw Mongo 覆蓋。
 

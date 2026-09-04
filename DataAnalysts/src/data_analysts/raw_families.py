@@ -54,6 +54,7 @@ def normalize_raw_family(
             selected_family_id="self_reported_numbers_pit_selected",
             pit_registry=pit_registry,
             decision_dates=decision_dates,
+            selected_materialization=selected_materialization,
         )
         diagnostics.update(selected_diag)
     diagnostics.setdefault("source_row_count", len(rows))

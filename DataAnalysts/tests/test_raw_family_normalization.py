@@ -468,6 +468,31 @@ def test_financial_statement_state_updates_do_not_repeat_unchanged_snapshot():
     assert result["diagnostics"]["selected_materialization"] == "state_updates"
 
 
+def test_self_reported_state_updates_do_not_repeat_unchanged_snapshot():
+    result = normalize_raw_family(
+        "self_reported_numbers_raw",
+        [
+            {
+                "coid": "3576",
+                "key3": "Q",
+                "sem": "1",
+                "curr": "NTD",
+                "merg": "Y",
+                "endd": "2025-06-30",
+                "annd": "2025-07-20",
+                "mdate": "2025-07-21",
+                "source_row_id": "jul",
+            }
+        ],
+        _registry(),
+        decision_dates=["2025-07-31", "2025-08-01"],
+        selected_materialization="state_updates",
+    )
+
+    assert [row["decision_date"] for row in result["selected_rows"]] == ["2025-07-31"]
+    assert result["diagnostics"]["selected_materialization"] == "state_updates"
+
+
 def test_financial_statement_multi_date_selection_does_not_call_selector_per_decision_date(monkeypatch):
     calls = 0
     original = raw_families.select_latest_pit_rows
