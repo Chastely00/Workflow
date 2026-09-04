@@ -46,6 +46,7 @@ REQUIRED_STATIC_ARTIFACT_IDS = {
     "daily_tradability",
     "daily_market_state",
     "daily_chip",
+    "afml_roe_etf_constituents",
     "monthly_sales",
     "financial_statement_raw",
     "self_reported_numbers_raw",
@@ -68,6 +69,7 @@ REQUIRED_STATIC_ARTIFACT_IDS = {
 }
 SOURCE_ONLY_FAMILY_IDS = {
     "afml_chip_snapshot",
+    "afml_roe_snapshot",
     "capital_formation",
     "dividend_policy",
 }

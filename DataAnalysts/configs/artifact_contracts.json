@@ -44,6 +44,12 @@
       "pit_policy": "source_available_date", "source_families": ["afml_chip_snapshot"]
     },
     {
+      "artifact_id": "afml_roe_etf_constituents", "layer": "raw", "base_path": "canonical/raw/afml_roe_etf_constituents", "file_name": "part.parquet",
+      "required_columns": ["ticker", "no", "sem", "curr", "merg", "period_end_date", "source_available_date", "revision_date", "r103", "r103_conflict", "source_row_count", "source_row_id", "data_cutoff_at"], "logical_key": ["ticker", "no", "sem", "curr", "merg", "period_end_date", "source_available_date", "revision_date"], "publication_mode": "partition_upsert",
+      "partition_name": "available_year", "partition_field": "source_available_date", "date_field": "source_available_date", "availability_field": "source_available_date",
+      "pit_policy": "source_available_date", "source_families": ["afml_roe_snapshot"]
+    },
+    {
       "artifact_id": "monthly_sales", "layer": "raw", "base_path": "canonical/raw/monthly_sales", "file_name": "part.parquet",
       "required_columns": ["ticker", "source_period_date", "source_available_date", "data_cutoff_at"], "logical_key": ["ticker", "source_period_date", "source_available_date"], "publication_mode": "partition_upsert",
       "partition_name": "available_year", "partition_field": "source_available_date", "date_field": "source_available_date", "availability_field": "source_available_date",
