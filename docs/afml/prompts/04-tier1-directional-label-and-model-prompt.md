@@ -48,6 +48,12 @@ The authoritative path is daily-close-only. One daily close cannot double-touch,
 
 ## 4. Fitting and hand-off
 
+### 3.2 Execution-policy hand-off and barrier diagnostics
+
+Every completed Dollar bar may emit OOF `p1`, but this is evidence rather than an order. Convert ETF-local OOF/walk-forward probabilities through a pre-registered stateful aggregation policy into one non-overlapping `flat/long` position ledger. While long, later candidates update evidence but cannot create another entry. Charge execution cost only on actual `flat -> long` and `long -> flat` transitions; the event-level proportional-cost target remains a directional-label baseline and is never strategy PnL.
+
+Persist diagnostics separately for all mature events and selected candidates: first-touch type, time-to-touch bars/days, gross/net return, cost, MFE, MAE, and post-profit-take continuation to the original 60-bar horizon. Diagnose excessive/too-near stops, too-near profits, overly wide barriers, and volatility mismatch. Pre-register any barrier alternatives; a diagnostic alone is not a trial, while an adopted alternative is.
+
 ### 4.1 Research windows and claim hierarchy
 
 Separate runtime checks from research evidence. `2024-01-01` to the current data end is a smoke/schema/performance interval only: under a 60-Dollar-bar vertical horizon it can leave low-frequency ETFs with mostly unresolved tails, so it must never reject an ETF, feature, or model family. The minimum formal bounded Tier 1 OOF interval is `2020-01-01` to the current data end. Report the mature target count, unresolved-tail count, and OOF support by ETF; a zero-OOF ETF is `INSUFFICIENT_MATURE_EVENTS`, not a failed model.

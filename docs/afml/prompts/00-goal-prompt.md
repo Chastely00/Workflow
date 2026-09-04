@@ -27,6 +27,7 @@
 - Tier 2 不可創造 Tier 1 未產生的 side，不可使用樣本內 Tier 1 預測，不可下單。
 - Tier 2 預設以相同 `etf_id` 的 Tier 1 OOF/walk-forward candidates 獨立訓練。跨 ETF pooled meta-model 是額外、預先登錄且獨立驗證的候選，不是預設捷徑。
 - Tier 3 不可重新訓練或改寫 Tier 1/2 標籤；三種配置必須使用相同候選、總資金、成本、raw-OPEN 執行規則與限制。研究標籤不是策略 PnL；策略 PnL 只能來自可對帳的 paper ledger。
+- 每根完成 Dollar bar 的 `p1` 是資訊證據，不是自動 round-trip。Tier 1 策略必須以預登記 stateful aggregation 狀態機決定 `flat -> long` 與 `long -> flat`；持倉時不得重複開倉，只有真實狀態轉換才計入交易成本與損益。每 ETF 的 OOF `p1` 必須先轉為不可重疊 position ledger，再作策略績效結論。
 - 交易執行使用下一個合法交易日之 constituent 原始 OPEN；不得以調整價或 FFD 價格成交。整數股數、手續費、交易稅、最低 1 元手續費、現金、停牌、下市與已驗證公司行動由共用執行引擎處理。
 
 ## PIT、驗證與測試順序
@@ -38,6 +39,7 @@
 - 現行 ETF Trick 沒有可交易、同步的 High/Low/Open，Tier 1 horizontal barrier 只能以每日 NAV 收盤路徑確認；`close_path_*` 欄位不得作為 OHLC、特徵或成交價。故 daily-close path 不存在同日雙觸及；只有未來另有 PIT-safe 逐筆/日內序列且新 trial 已登錄時，才可建立 double-touch 規則。
 - 未通過 gate 時，停止該分支的績效結論並明確寫出污染/失敗路徑、已驗證事實、未驗證假設與下一個合理修復方向。模型可自主搜尋合理且預先記錄的設定範圍，但任何看過績效後的候選都必須登錄 trial registry。
 - OOF 前必須預先登記有限的 `IF OOF state -> allowed action`。樣本不足時只允許向前延長既有歷史範圍；仍不足即棄置該設計，且因未產生可比較績效不增加 DSR trial count。AUC 無辨識力、無淨邊際或不穩定時，只可啟用已登記替代模型、特徵、barrier/horizon 或診斷；每個看過 OOF 後觸發的績效替代都增加 effective DSR trial count。禁止等待未來資料、放寬成本／標籤／ETF 定義，或事後新增未登記的搜尋。
+- 對所有成熟事件與 Tier 1 candidates 分別保存 barrier diagnostics：first-touch 類型、time-to-touch bars/days、gross/net return、成本、MFE、MAE，及提前停利後至原 60-bar horizon 的延續。預登記診斷停損過多／過近、停利過近、barrier 過寬與 volatility mismatch；診斷本身不計 trial，但任何依結果採用的 barrier 變體必須預登記並計入 DSR。
 
 ## 試驗治理與完成定義
 
