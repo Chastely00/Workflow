@@ -56,6 +56,8 @@ Persist diagnostics separately for all mature events and selected candidates: fi
 
 The stateful gate defaults to at least 20 completed OOF `flat -> long -> flat` round-trips. Fewer completed trades are `INSUFFICIENT_EXECUTED_TRADES`, not an economically failed ETF and not Tier 2 admission. A ledger ending long is `MARK_TO_MARKET_ONLY`; its NAV path and Sharpe are descriptive proxy marks, never completed strategy evidence. At or above 20 completed trades, require a positive daily-NAV-proxy Sharpe before `RESEARCH_PASS_PROXY_LEDGER` may permit Tier 2 research. This gateway never permits Tier 3, paper trading, PSR, or DSR because it is not yet the constituent ticket ledger.
 
+After a prepend-only full-existing-history extension fails that sample gate, the only permitted CUSUM-policy alternative is `entry_score=0.10`, `exit_score=-0.05`. Register it for every ETF before any of its ledger is read; it is a separate performance alternative for every ETF and increases DSR trials. If it also fails the same stateful gate, reject the policy family rather than iterating thresholds.
+
 ### 4.1 Research windows and claim hierarchy
 
 Separate runtime checks from research evidence. `2024-01-01` to the current data end is a smoke/schema/performance interval only: under a 60-Dollar-bar vertical horizon it can leave low-frequency ETFs with mostly unresolved tails, so it must never reject an ETF, feature, or model family. The minimum formal bounded Tier 1 OOF interval is `2020-01-01` to the current data end. Report the mature target count, unresolved-tail count, and OOF support by ETF; a zero-OOF ETF is `INSUFFICIENT_MATURE_EVENTS`, not a failed model.

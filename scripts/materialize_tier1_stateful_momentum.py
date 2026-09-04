@@ -53,6 +53,9 @@ def _args() -> argparse.Namespace:
     parser.add_argument("--initial-capital", type=float, default=10_000_000.0)
     parser.add_argument("--entry-score", type=float, default=0.20)
     parser.add_argument("--exit-score", type=float, default=-0.10)
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--register-only", action="store_true")
+    mode.add_argument("--skip-registration", action="store_true")
     return parser.parse_args()
 
 
@@ -91,7 +94,10 @@ def main() -> int:
     trial_id = args.trial_id
     registry = TrialRegistry(args.registry_path)
     registered = {"trial_id": trial_id, "parent_trial_id": args.parent_trial_id, "created_at": _now(), "completed_at": None, "research_question": "Does a pre-registered non-overlapping state policy improve this ETF-local Tier 1 OOF economics?", "hypothesis": "Accumulating calibrated OOF directional evidence and charging only real state changes removes the artificial per-event round-trip penalty.", "code_commit": _commit(), "upstream_artifact_hashes": upstream, "feature_set_hash": _hash("hgb_base_15_v1"), "label_config_hash": _hash(json.loads((roots["target"] / "manifest.json").read_text(encoding="utf-8"))["metadata"]["target_config"]), "tier1_config_hash": _hash(config), "tier2_config_hash": None, "allocation_config_hash": None, "execution_cost_policy_hash": _hash(config["execution"]), "fold_definition_hash": _hash("existing_etf_local_expanding_event_end_purged_oof"), "train_validation_test_boundaries": {"research_t0_start": "2005-01-01", "research_t0_end": "2024-12-31", "oof_only": True}, "etf_scope": args.etf_id, "model_scope": "ETF_LOCAL", "raw_trial_count": int(args.effective_trial_count_base + 1), "effective_independent_trial_count": float(args.effective_trial_count_base + 1), "validation_metrics": {}, "selection_status": "REGISTERED", "selection_reason": "State-policy configuration registered before its OOF ledger outcomes are materialized."}
-    registry.append(registered)
+    if not args.skip_registration:
+        registry.append(registered)
+    if args.register_only:
+        return 0
 
     oof = pd.read_parquet(roots["oof"] / "oof_handoff.parquet")
     if oof.empty or not oof["etf_id"].eq(args.etf_id).all():
