@@ -8,7 +8,7 @@
 
 1. 讀取 `AGENTS.md`、本檔、`README.md`，以及當前唯一活動的編號 Prompt；讀取其要求的上游 Prompt 與計畫。權威順序由 `README.md` 定義。
 2. 讀取 immutable AFML dataset artifact 的 manifest、schema、coverage、code/config/input hash 與 readiness 報告。現行基線為 `.artifacts/etf_afml/full-history-20050103-20260707-v5`，其狀態必須仍為 `READY_FOR_BOUNDED_RESEARCH_WITH_LIMITATIONS` 且 `ML_ELIGIBLE`。確認資料可用時間、PIT join、未來 append 不改寫既有結果、無存活者/下市/停牌/公司行動污染。除非 artifact 契約失效，不得重建 01/02；資料契約不成立時，只修復或回報該契約，不得訓練、回測或宣稱績效。
-3. 維持一份可提交的 append-only progress/decision record：時間、active stage、輸入版本、假設、設定、驗證、失敗原因、下一個最小行動。每次完成 bounded slice 後更新它與 manifest；不得以聊天摘要取代磁碟證據。
+3. 維持 `docs/afml/progress/decision-log.jsonl` 這份可提交的 append-only progress/decision record：時間、active stage、輸入版本、假設、設定、驗證、失敗原因、下一個最小行動。每次完成 bounded slice 後更新它與 manifest；不得以聊天摘要取代磁碟證據。
 4. 一次只執行一個 stage。前一 stage 的 hand-off artifact、hash 與 gate 尚未完成，不得進入下一 stage，也不得以 tuning 繞過失敗。
 
 ## 固定階段與交接
