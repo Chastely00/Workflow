@@ -25,6 +25,7 @@ def test_roe_extension_uses_only_latest_after_close_available_r103_and_current_h
             "ticker": ["1101", "2330", "2330"],
             "source_available_date": ["2024-01-02", "2024-01-02", "2024-01-04"],
             "revision_date": ["2023-12-31", "2023-12-31", "2023-12-31"],
+            "no": ["TTM", "TTM", "TTM"], "merg": ["Y", "Y", "Y"], "curr": ["NTD", "NTD", "NTD"],
             "r103": [10.0, 20.0, 99.0],
             "r103_conflict": [False, False, False],
         }
@@ -51,7 +52,7 @@ def test_roe_extension_does_not_use_same_day_value_before_after_close_cutoff():
     roe = pd.DataFrame(
         {
             "ticker": ["2330"], "source_available_date": ["2024-01-03"],
-            "revision_date": ["2023-12-31"], "r103": [20.0], "r103_conflict": [False],
+            "revision_date": ["2023-12-31"], "no": ["TTM"], "merg": ["Y"], "curr": ["NTD"], "r103": [20.0], "r103_conflict": [False],
         }
     )
 

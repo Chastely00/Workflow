@@ -1,13 +1,25 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import numpy as np
 import pandas as pd
+
+
+@dataclass(frozen=True)
+class Tier1RoeFeatureExtensionConfig:
+    statement_no: str = "TTM"
+    merged: str = "Y"
+    currency: str = "NTD"
 
 
 class Tier1RoeFeatureExtensionBuilder:
     """Build a PIT-safe constituent-weighted R103/ROE feature sidecar."""
 
     _AFTER_CLOSE = pd.Timedelta(hours=18)
+
+    def __init__(self, config: Tier1RoeFeatureExtensionConfig | None = None) -> None:
+        self.config = config or Tier1RoeFeatureExtensionConfig()
 
     def build(
         self,
@@ -70,7 +82,7 @@ class Tier1RoeFeatureExtensionBuilder:
         return frame
 
     def _prepare_roe(self, roe: pd.DataFrame) -> pd.DataFrame:
-        required = {"ticker", "source_available_date", "revision_date", "r103", "r103_conflict"}
+        required = {"ticker", "no", "merg", "curr", "source_available_date", "revision_date", "r103", "r103_conflict"}
         if missing := required.difference(roe.columns):
             raise ValueError(f"roe snapshot missing columns: {sorted(missing)}")
         frame = roe.loc[:, sorted(required)].copy()
@@ -83,7 +95,13 @@ class Tier1RoeFeatureExtensionBuilder:
             raise ValueError("roe snapshot requires valid ticker and PIT dates")
         # A date-only announcement becomes usable at the conservative same-day
         # after-close cutoff.  Conflicting source identities never enter as-of.
-        frame = frame.loc[~frame["r103_conflict"] & frame["r103"].notna()].copy()
+        frame = frame.loc[
+            frame["no"].eq(self.config.statement_no)
+            & frame["merg"].eq(self.config.merged)
+            & frame["curr"].eq(self.config.currency)
+            & ~frame["r103_conflict"]
+            & frame["r103"].notna()
+        ].copy()
         frame["roe_available_at"] = (
             frame["source_available_date"].dt.tz_localize("Asia/Taipei")
             .add(self._AFTER_CLOSE).dt.tz_convert("UTC")
