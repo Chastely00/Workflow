@@ -63,7 +63,7 @@ class Tier1RoeFeatureExtensionBuilder:
             raise ValueError(f"bars missing columns: {sorted(missing)}")
         frame = bars.loc[bars["bar_status"].eq("FINALIZED"), sorted(required)].copy()
         frame["bar_end_date"] = pd.to_datetime(frame["bar_end_date"], errors="coerce").dt.normalize()
-        frame["feature_available_at"] = pd.to_datetime(frame["feature_available_at"], errors="coerce", utc=True)
+        frame["feature_available_at"] = pd.to_datetime(frame["feature_available_at"], errors="coerce", utc=True).astype("datetime64[ns, UTC]")
         if frame.duplicated(["etf_id", "bar_id"]).any() or frame[["bar_end_date", "feature_available_at"]].isna().any().any():
             raise ValueError("bars requires unique finalized keys and valid PIT times")
         return frame
@@ -105,7 +105,7 @@ class Tier1RoeFeatureExtensionBuilder:
         frame["roe_available_at"] = (
             frame["source_available_date"].dt.tz_localize("Asia/Taipei")
             .add(self._AFTER_CLOSE).dt.tz_convert("UTC")
-        )
+        ).astype("datetime64[ns, UTC]")
         return frame.sort_values(["ticker", "roe_available_at", "revision_date"], kind="stable")
 
     @staticmethod
