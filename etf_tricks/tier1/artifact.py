@@ -82,3 +82,46 @@ def write_oof_artifact(handoff: pd.DataFrame, output_dir: str | Path, metadata: 
     manifest = {"schema_version": "tier1-oof-v1", "metadata": metadata, "tables": {"oof_handoff": {"path": table.name, "row_count": len(handoff), "sha256": _sha256(table)}}}
     (output / "manifest.json").write_text(json.dumps(manifest, sort_keys=True, ensure_ascii=False), encoding="utf-8")
     return manifest
+
+
+def write_sealed_artifact(
+    predictions: pd.DataFrame,
+    output_dir: str | Path,
+    metadata: dict[str, object],
+) -> dict[str, object]:
+    """Persist selected-ETF sealed predictions without target outcomes."""
+    output = Path(output_dir)
+    selected_etf_id = metadata.get("selected_etf_id")
+    if not isinstance(selected_etf_id, str) or not selected_etf_id:
+        raise ValueError("sealed metadata requires selected_etf_id")
+    required = {
+        "event_id", "etf_id", "t0_bar_id", "side", "p1",
+        "candidate_indicator", "candidate_threshold", "candidate_reason",
+        "prediction_kind", "decision_available_at",
+    }
+    if missing := required.difference(predictions.columns):
+        raise ValueError(f"sealed predictions missing columns: {sorted(missing)}")
+    forbidden = {
+        "t1", "y_direction", "target_status", "trigger_date", "entry_date",
+        "entry_raw_open", "exit_date", "exit_raw_open", "net_log_return",
+    }
+    if present := forbidden.intersection(predictions.columns):
+        raise ValueError(f"sealed predictions have forbidden future target columns: {sorted(present)}")
+    if output.exists():
+        raise FileExistsError(f"Tier 1 output already exists: {output}")
+    if predictions.empty or predictions["event_id"].duplicated().any():
+        raise ValueError("sealed predictions require nonempty unique event_id")
+    if not predictions["etf_id"].eq(selected_etf_id).all():
+        raise ValueError("sealed predictions contain an unselected ETF")
+    if not predictions["prediction_kind"].eq("SEALED_CALIBRATED").all():
+        raise ValueError("sealed predictions require SEALED_CALIBRATED kind")
+    output.mkdir(parents=True)
+    table = output / "sealed_predictions.parquet"
+    predictions.to_parquet(table, index=False)
+    manifest = {
+        "schema_version": "tier1-sealed-v1",
+        "metadata": metadata,
+        "tables": {"sealed_predictions": {"path": table.name, "row_count": len(predictions), "sha256": _sha256(table)}},
+    }
+    (output / "manifest.json").write_text(json.dumps(manifest, sort_keys=True, ensure_ascii=False), encoding="utf-8")
+    return manifest

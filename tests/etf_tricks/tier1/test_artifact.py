@@ -1,8 +1,10 @@
 import pandas as pd
+import pytest
 
 from etf_tricks.tier1.artifact import (
     write_feature_extension_artifact,
     write_oof_artifact,
+    write_sealed_artifact,
     write_target_artifact,
 )
 
@@ -50,3 +52,28 @@ def test_feature_extension_artifact_requires_unique_pit_keys(tmp_path) -> None:
 
     assert (tmp_path / "extension" / "features.parquet").exists()
     assert result["schema_version"] == "tier1-feature-extension-v1"
+
+
+def test_sealed_artifact_refuses_label_columns_and_unselected_etf(tmp_path) -> None:
+    predictions = pd.DataFrame(
+        {
+            "event_id": ["momentum-1"],
+            "etf_id": ["momentum"],
+            "t0_bar_id": [1],
+            "side": [1],
+            "p1": [0.6],
+            "candidate_indicator": [True],
+            "candidate_threshold": [0.5],
+            "candidate_reason": ["p1_at_or_above_fold_threshold"],
+            "prediction_kind": ["SEALED_CALIBRATED"],
+            "decision_available_at": pd.to_datetime(["2025-01-02 13:30+08:00"]),
+        }
+    )
+
+    result = write_sealed_artifact(predictions, tmp_path / "sealed", {"selected_etf_id": "momentum"})
+
+    assert result["schema_version"] == "tier1-sealed-v1"
+    with pytest.raises(ValueError, match="future"):
+        write_sealed_artifact(predictions.assign(y_direction=1), tmp_path / "label", {"selected_etf_id": "momentum"})
+    with pytest.raises(ValueError, match="selected"):
+        write_sealed_artifact(predictions.assign(etf_id="market_cap"), tmp_path / "other", {"selected_etf_id": "momentum"})
