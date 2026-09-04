@@ -67,6 +67,8 @@ class Tier1Lab:
         categorical_columns: tuple[str, ...] = (),
         candidate_threshold_objective: str = "f1",
         minimum_candidate_weight_share: float = 0.10,
+        research_t0_end: str | pd.Timestamp | None = None,
+        research_outcome_before: str | pd.Timestamp | None = None,
     ) -> Tier1OOFRun:
         targets = pd.read_parquet(self.target_root / "targets.parquet")
         features = pd.read_parquet(self.afml_root / "tables" / "features.parquet")
@@ -106,6 +108,20 @@ class Tier1Lab:
                 validate="one_to_one",
             )
         frame = build_directional_training_frame(targets, features, feature_columns)
+        if (research_t0_end is None) != (research_outcome_before is None):
+            raise ValueError(
+                "research_t0_end and research_outcome_before must be supplied together"
+            )
+        if research_t0_end is not None and research_outcome_before is not None:
+            t0_end = pd.Timestamp(research_t0_end).normalize()
+            outcome_before = pd.Timestamp(research_outcome_before).normalize()
+            if t0_end >= outcome_before:
+                raise ValueError("research t0 end must precede sealed outcome boundary")
+            frame = frame.loc[
+                frame["t0"].le(t0_end) & frame["t1"].lt(outcome_before)
+            ].reset_index(drop=True)
+            if frame.empty:
+                raise ValueError("research cut-off excludes every resolved target")
         folds = chronological_purged_folds(frame[["t0", "t1"]], n_splits=outer_splits)
         predictions = oof_logistic_predictions(
             frame,
