@@ -152,7 +152,8 @@ def main() -> int:
         "feature_set": args.feature_set,
         "feature_columns": feature_columns,
         "categorical_columns": ["etf_id"],
-        "candidate_threshold_objective": "f1",
+        "candidate_threshold_objective": "economic_net_log_return",
+        "minimum_candidate_weight_share": 0.10,
         "outer_splits": args.outer_splits,
         "calibration_splits": 2,
         "research_t0_end": args.research_t0_end,
@@ -193,7 +194,7 @@ def main() -> int:
             outer_splits=args.outer_splits,
             model_family="hist_gradient_boosting",
             categorical_columns=("etf_id",),
-            candidate_threshold_objective="f1",
+            candidate_threshold_objective="economic_net_log_return",
             research_t0_end=args.research_t0_end,
             research_outcome_before=args.sealed_start,
         )
