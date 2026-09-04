@@ -1,3 +1,5 @@
+import json
+
 import pandas as pd
 
 from etf_tricks.tier1.lab import Tier1Lab
@@ -11,6 +13,10 @@ def test_lab_reads_immutable_artifacts_and_produces_oof_handoff(tmp_path) -> Non
     targets.mkdir()
     extension.mkdir()
     dates = pd.date_range("2024-01-01", periods=24)
+    (afml / "metadata.json").write_text(
+        json.dumps({"trading_sessions": [str(date.date()) for date in dates]}),
+        encoding="utf-8",
+    )
     pd.DataFrame(
         {
             "etf_id": ["x", "y"] * 12,

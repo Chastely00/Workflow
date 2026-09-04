@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 from pathlib import Path
 
 import pandas as pd
@@ -26,10 +27,12 @@ class Tier1Lab:
         afml_root: Path,
         target_root: Path,
         feature_extension_root: Path | None = None,
+        trading_sessions: pd.DatetimeIndex | None = None,
     ) -> None:
         self.afml_root = afml_root
         self.target_root = target_root
         self.feature_extension_root = feature_extension_root
+        self.trading_sessions = trading_sessions
 
     @classmethod
     def from_artifacts(
@@ -47,7 +50,14 @@ class Tier1Lab:
         extension = Path(feature_extension_root) if feature_extension_root is not None else None
         if extension is not None and not (extension / "features.parquet").is_file():
             raise ValueError("Tier 1 feature extension missing features.parquet")
-        return cls(afml, targets, extension)
+        metadata_path = afml / "metadata.json"
+        if not metadata_path.is_file():
+            raise ValueError("AFML artifact missing metadata.json")
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        sessions = pd.DatetimeIndex(pd.to_datetime(metadata.get("trading_sessions"), errors="coerce"))
+        if sessions.empty or sessions.isna().any() or sessions.has_duplicates:
+            raise ValueError("AFML metadata requires valid unique trading_sessions")
+        return cls(afml, targets, extension, sessions.sort_values())
 
     def run_oof(
         self,
@@ -105,5 +115,6 @@ class Tier1Lab:
             categorical_columns=categorical_columns,
             candidate_threshold_objective=candidate_threshold_objective,
             minimum_candidate_weight_share=minimum_candidate_weight_share,
+            trading_sessions=self.trading_sessions,
         )
         return Tier1OOFRun(training_frame=frame, predictions=predictions, handoff=build_tier1_handoff(frame, predictions), folds=folds)

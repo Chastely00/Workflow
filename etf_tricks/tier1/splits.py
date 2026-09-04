@@ -4,15 +4,27 @@ import numpy as np
 import pandas as pd
 
 
-def average_uniqueness(events: pd.DataFrame) -> pd.Series:
-    """Return each event's mean inverse concurrency across its active dates."""
+def average_uniqueness(
+    events: pd.DataFrame,
+    trading_sessions: pd.DatetimeIndex | list[pd.Timestamp] | None = None,
+) -> pd.Series:
+    """Return each event's mean inverse concurrency across active trading sessions."""
     if not {"t0", "t1"}.issubset(events.columns):
         raise ValueError("events require t0 and t1")
     starts = pd.to_datetime(events["t0"], errors="coerce").dt.normalize()
     ends = pd.to_datetime(events["t1"], errors="coerce").dt.normalize()
     if starts.isna().any() or ends.isna().any() or (ends < starts).any():
         raise ValueError("event intervals must be valid")
-    timeline = pd.date_range(starts.min(), ends.max(), freq="D")
+    if trading_sessions is None:
+        timeline = pd.date_range(starts.min(), ends.max(), freq="D")
+    else:
+        timeline = pd.DatetimeIndex(pd.to_datetime(trading_sessions, errors="coerce")).normalize()
+        if timeline.isna().any() or timeline.has_duplicates:
+            raise ValueError("trading sessions must be valid and unique")
+        timeline = timeline.sort_values()
+        timeline = timeline[(timeline >= starts.min()) & (timeline <= ends.max())]
+        if timeline.empty or not starts.isin(timeline).all() or not ends.isin(timeline).all():
+            raise ValueError("trading sessions must cover every event endpoint")
     concurrency = np.zeros(len(timeline), dtype=np.int64)
     positions: list[tuple[int, int]] = []
     for start, end in zip(starts, ends, strict=True):

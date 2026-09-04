@@ -46,7 +46,7 @@ The authoritative path is daily-close-only. One daily close cannot double-touch,
 
 Estimate `p1 = P(y_direction=+1 | PIT state)`. Begin with calibrated regularized logistic regression; any additional model family is a registered trial. Fit preprocessing, feature selection, weighting, and calibration only inside each training fold.
 
-Use `t0/t1`, concurrency, and average uniqueness for sample weights, purging, and embargo. Random IID CV is prohibited. Produce fold-local and walk-forward/OOF predictions with model, feature, data, and availability lineage.
+Use `t0/t1`, concurrency, and average uniqueness for sample weights, purging, and embargo. Compute concurrency only over the immutable AFML metadata's governed `trading_sessions`; weekends, holidays, and every non-session day have no observation weight. Random IID CV is prohibited. Produce fold-local and walk-forward/OOF predictions with model, feature, data, and availability lineage.
 
 The candidate threshold is selected only on training/CPCV/validation evidence. Its objective must match the promotion metric: an economic threshold may use only realised `net_log_return` from already-resolved training-fold calibration events, never the outer validation fold, and must record its fixed grid and minimum weighted support. F1 is a classification diagnostic, not an implicit economic-selection objective. Output `side=+1`, `p1`, diagnostics, and candidate reason—never NTD allocation or an order.
 

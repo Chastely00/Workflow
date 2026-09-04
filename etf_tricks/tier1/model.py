@@ -50,10 +50,11 @@ def _fold_local_calibrator(
     n_splits: int,
     model_family: str,
     categorical_columns: tuple[str, ...],
+    trading_sessions: pd.DatetimeIndex | None,
 ) -> tuple[LogisticRegression, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     folds = chronological_purged_folds(train[["t0", "t1"]], n_splits=n_splits)
     probabilities = np.full(len(train), np.nan)
-    calibration_weights = average_uniqueness(train[["t0", "t1"]]).to_numpy()
+    calibration_weights = average_uniqueness(train[["t0", "t1"]], trading_sessions).to_numpy()
     for inner_train, inner_valid in folds:
         inner = train.iloc[inner_train]
         probabilities[inner_valid] = _fit_predict_probability(
@@ -62,7 +63,7 @@ def _fold_local_calibrator(
             feature_columns,
             model_family,
             categorical_columns,
-            average_uniqueness(inner[["t0", "t1"]]).to_numpy(),
+            average_uniqueness(inner[["t0", "t1"]], trading_sessions).to_numpy(),
         )
     usable = np.isfinite(probabilities)
     target = (train.loc[usable, "y_direction"] == 1).astype(int)
@@ -146,6 +147,7 @@ def oof_logistic_predictions(
     categorical_columns: tuple[str, ...] = (),
     candidate_threshold_objective: str = "f1",
     minimum_candidate_weight_share: float = 0.10,
+    trading_sessions: pd.DatetimeIndex | None = None,
 ) -> pd.DataFrame:
     """Fit preprocessing/model on each supplied train fold and emit validation-only p1."""
     required = set(feature_columns) | set(categorical_columns) | {"y_direction", "t0", "t1"}
@@ -174,7 +176,7 @@ def oof_logistic_predictions(
             raise ValueError("train and validation rows overlap")
         if not (pd.to_datetime(train["t1"]) < pd.to_datetime(valid["t0"]).min()).all():
             raise ValueError("training events must resolve before validation begins")
-        train_weights = average_uniqueness(train[["t0", "t1"]]).to_numpy()
+        train_weights = average_uniqueness(train[["t0", "t1"]], trading_sessions).to_numpy()
         raw_probability = _fit_predict_probability(
             train,
             valid,
@@ -189,6 +191,7 @@ def oof_logistic_predictions(
             calibration_splits,
             model_family,
             categorical_columns,
+            trading_sessions,
         )
         if candidate_threshold_objective == "economic_net_log_return":
             calibration_returns = train.loc[calibration_usable, "net_log_return"]

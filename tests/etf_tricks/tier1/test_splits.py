@@ -38,3 +38,20 @@ def test_average_uniqueness_weights_overlapping_event_intervals() -> None:
 
     # Concurrency is [1, 2, 2].  The event averages are [0.75, 0.5, 0.5].
     assert result.tolist() == [0.75, 0.5, 0.5]
+
+
+def test_average_uniqueness_excludes_non_trading_days_from_event_concurrency() -> None:
+    events = pd.DataFrame(
+        {
+            "t0": pd.to_datetime(["2024-01-05", "2024-01-08"]),
+            "t1": pd.to_datetime(["2024-01-09", "2024-01-09"]),
+        }
+    )
+
+    result = splits.average_uniqueness(
+        events,
+        trading_sessions=pd.to_datetime(["2024-01-05", "2024-01-08", "2024-01-09"]),
+    )
+
+    # Sessions have concurrency [1, 2, 2]; Saturday and Sunday are not observations.
+    assert result.tolist() == [2 / 3, 0.5]
