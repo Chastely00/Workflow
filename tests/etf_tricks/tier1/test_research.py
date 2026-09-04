@@ -70,3 +70,13 @@ def test_handoff_keeps_only_oof_trading_fields() -> None:
     assert result.columns.tolist() == ["event_id", "etf_id", "t0_bar_id", "side", "p1", "candidate_indicator", "candidate_threshold", "candidate_reason", "prediction_kind", "decision_available_at"]
     assert result.to_dict("records")[0]["side"] == 1
     assert "t1" not in result and "y_direction" not in result
+
+
+def test_handoff_accepts_a_calibrated_explicit_no_trade_fold() -> None:
+    frame = pd.DataFrame({"event_id": ["x-1"], "etf_id": ["x"], "t0_bar_id": [1], "decision_available_at": pd.to_datetime(["2024-01-02 13:30+08:00"])})
+    predictions = pd.DataFrame({"p1": [0.7], "prediction_kind": ["OOF_CALIBRATED"], "candidate_threshold": [None], "is_candidate": [False], "candidate_reason": ["no_supported_training_threshold"]})
+
+    result = research.build_tier1_handoff(frame, predictions)
+
+    assert result.loc[0, "candidate_indicator"] == False
+    assert pd.isna(result.loc[0, "candidate_threshold"])

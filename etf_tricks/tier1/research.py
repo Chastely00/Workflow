@@ -59,8 +59,12 @@ def build_tier1_handoff(frame: pd.DataFrame, predictions: pd.DataFrame) -> pd.Da
     oof = joined.loc[joined["p1"].notna()].copy()
     if not oof["prediction_kind"].eq("OOF_CALIBRATED").all():
         raise ValueError("hand-off accepts calibrated OOF predictions only")
-    if oof[["candidate_threshold", "is_candidate", "candidate_reason"]].isna().any().any():
+    if oof[["is_candidate", "candidate_reason"]].isna().any().any():
         raise ValueError("OOF predictions require candidate metadata")
+    no_threshold = oof["candidate_threshold"].isna()
+    valid_no_trade = no_threshold & ~oof["is_candidate"].astype(bool) & oof["candidate_reason"].eq("no_supported_training_threshold")
+    if (no_threshold & ~valid_no_trade).any():
+        raise ValueError("null candidate threshold requires explicit no-trade metadata")
     oof["side"] = 1
     oof["candidate_indicator"] = oof["is_candidate"].astype(bool)
     return oof[["event_id", "etf_id", "t0_bar_id", "side", "p1", "candidate_indicator", "candidate_threshold", "candidate_reason", "prediction_kind", "decision_available_at"]].sort_values(
