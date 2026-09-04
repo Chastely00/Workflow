@@ -2,6 +2,7 @@ import pandas as pd
 import pytest
 
 from etf_tricks.tier1.long_history import (
+    feature_columns_for,
     validate_fold_feature_coverage,
     validate_long_history_research_frame,
 )
@@ -57,3 +58,13 @@ def test_fold_feature_coverage_reports_nonmissing_counts() -> None:
     result = validate_fold_feature_coverage(frame, [([0, 1], [2])], ["f"])
 
     assert result == [{"fold": 0, "training_rows": 2, "training_nonmissing": {"f": 1}}]
+
+
+def test_long_history_feature_set_selection_is_explicit() -> None:
+    base = feature_columns_for("hgb_base_15_v1")
+    chip = feature_columns_for("hgb_chip_flow_16_v1")
+
+    assert "chip_net_flow_z_20" not in base
+    assert chip == [*base, "chip_net_flow_z_20"]
+    with pytest.raises(ValueError, match="unknown"):
+        feature_columns_for("not-a-feature-set")

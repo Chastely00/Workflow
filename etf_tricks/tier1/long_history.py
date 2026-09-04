@@ -5,6 +5,24 @@ from __future__ import annotations
 import pandas as pd
 
 
+_BASE_FEATURE_COLUMNS = [
+    "ffd_ma_distance_20", "ffd_change_vol_14", "ffd_level_std_60",
+    "log_return_vol_60", "amount_ratio_20", "amihud_mean_20",
+    "portfolio_hhi", "realized_weight_turnover", "ix_log_return_vol_60",
+    "etf_ix_beta_60", "etf_sadf", "ix_sadf", "bar_log_return_std_14",
+    "ir0001_realized_vol_20", "ir0001_realized_vol_60",
+]
+
+
+def feature_columns_for(feature_set: str) -> list[str]:
+    """Return one named, pre-registered long-history feature contract."""
+    if feature_set == "hgb_base_15_v1":
+        return list(_BASE_FEATURE_COLUMNS)
+    if feature_set == "hgb_chip_flow_16_v1":
+        return [*_BASE_FEATURE_COLUMNS, "chip_net_flow_z_20"]
+    raise ValueError(f"unknown long-history feature set: {feature_set}")
+
+
 def validate_long_history_research_frame(
     frame: pd.DataFrame,
     *,

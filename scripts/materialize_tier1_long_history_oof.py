@@ -20,16 +20,10 @@ from etf_tricks.governance.trials import TrialRegistry, write_tier1_gate_report
 from etf_tricks.tier1.artifact import write_oof_artifact
 from etf_tricks.tier1.diagnostics import summarize_per_etf_oof
 from etf_tricks.tier1.lab import Tier1Lab
-from etf_tricks.tier1.long_history import validate_long_history_research_frame
-
-
-FEATURE_COLUMNS = [
-    "ffd_ma_distance_20", "ffd_change_vol_14", "ffd_level_std_60",
-    "log_return_vol_60", "amount_ratio_20", "amihud_mean_20",
-    "portfolio_hhi", "realized_weight_turnover", "ix_log_return_vol_60",
-    "etf_ix_beta_60", "etf_sadf", "ix_sadf", "bar_log_return_std_14",
-    "ir0001_realized_vol_20", "ir0001_realized_vol_60", "chip_net_flow_z_20",
-]
+from etf_tricks.tier1.long_history import (
+    feature_columns_for,
+    validate_long_history_research_frame,
+)
 
 
 def _sha256_path(path: Path) -> str:
@@ -124,6 +118,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--diagnostics-output-root", required=True)
     parser.add_argument("--gate-output-root", required=True)
     parser.add_argument("--trial-id", required=True)
+    parser.add_argument("--feature-set", required=True)
     parser.add_argument("--research-t0-end", default="2024-12-31")
     parser.add_argument("--sealed-start", default="2025-01-01")
     parser.add_argument("--outer-splits", type=int, default=3)
@@ -150,10 +145,12 @@ def main() -> int:
         raise FileExistsError("long-history output root already exists")
     if args.effective_independent_trial_count <= 0:
         raise ValueError("effective-independent-trial-count must be positive")
+    feature_columns = feature_columns_for(args.feature_set)
 
     config = {
         "model_family": "hist_gradient_boosting",
-        "feature_columns": FEATURE_COLUMNS,
+        "feature_set": args.feature_set,
+        "feature_columns": feature_columns,
         "categorical_columns": ["etf_id"],
         "candidate_threshold_objective": "f1",
         "outer_splits": args.outer_splits,
@@ -173,7 +170,7 @@ def main() -> int:
         "hypothesis": "The pre-registered shallow HGB contract may show stable PIT nonlinear interactions over a longer mature-event history without changing barriers, costs, features, or threshold rule.",
         "code_commit": _code_commit(),
         "upstream_artifact_hashes": upstream,
-        "feature_set_hash": _sha256_object(FEATURE_COLUMNS),
+        "feature_set_hash": _sha256_object(feature_columns),
         "label_config_hash": _sha256_object(json.loads((roots["target"] / "manifest.json").read_text(encoding="utf-8"))["metadata"]["target_config"]),
         "tier1_config_hash": _sha256_object(config),
         "tier2_config_hash": None,
@@ -192,7 +189,7 @@ def main() -> int:
     lab = Tier1Lab.from_artifacts(roots["afml"], roots["target"], roots["extension"])
     try:
         run = lab.run_oof(
-            FEATURE_COLUMNS,
+            feature_columns,
             outer_splits=args.outer_splits,
             model_family="hist_gradient_boosting",
             categorical_columns=("etf_id",),
