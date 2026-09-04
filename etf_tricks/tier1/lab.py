@@ -216,6 +216,25 @@ class Tier1Lab:
             raise ValueError("ETF-local research frame has no ETF partitions")
         return Tier1LocalOOFRuns(by_etf=runs)
 
+    def load_training_frame(
+        self,
+        feature_columns: list[str],
+        research_t0_start: str | pd.Timestamp | None,
+        research_t0_end: str | pd.Timestamp | None,
+        research_outcome_before: str | pd.Timestamp | None,
+    ) -> pd.DataFrame:
+        """Load the exact immutable, boundary-filtered frame used by ETF-local OOF.
+
+        This read-only method exists for independent audit tooling.  It never
+        fits a model or materializes predictions.
+        """
+        return self._build_training_frame(
+            feature_columns,
+            research_t0_start,
+            research_t0_end,
+            research_outcome_before,
+        )
+
     def _build_training_frame(
         self,
         feature_columns: list[str],
