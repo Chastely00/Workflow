@@ -2,7 +2,7 @@
 
 ## 目標
 
-以已 finalized 的 AFML dataset 為 immutable input，完成可重用、PIT 安全、可復現的 AFML 研究與紙上交易流程：每個 ETF Trick 各自的 Tier 1 方向機會與預設獨立 Tier 2 Meta-Labeling，然後才以 Tier 3 Equal / Inverse-vol / HRP 跨 ETF 資金配置與實際成分股交易帳，最後以 DSR 與 sealed test 做出 `NOT_READY`、`RESEARCH_ONLY` 或 `PAPER_TRADE_ELIGIBLE` 的證據化結論。此 Goal 不授權 live trading。
+以已 finalized 的 AFML dataset 為 immutable input，完成可重用、PIT 安全、可復現的 AFML 研究與紙上交易流程：每個 ETF Trick 各自的 Tier 1 方向機會與預設獨立 Tier 2 Meta-Labeling，然後才以 Tier 3 Equal / Inverse-vol / HRP 跨 ETF 資金配置與實際成分股交易帳，最後以 DSR 與 expanding OOF 做出 `NOT_READY`、`RESEARCH_ONLY` 或 `PAPER_TRADE_ELIGIBLE` 的證據化結論。固定末段 sealed test 只可作可選 paper-monitoring，不是准入條件。此 Goal 不授權 live trading。
 
 ## 每次恢復時的強制程序
 
@@ -37,12 +37,13 @@
 - 要對某 ETF 或特徵提出「長期未見可重現訊號」的否定結論，另須以該 ETF 的 2005–2024 chronological expanding、event-end-purged OOF 長歷史診斷支持。它必須使用時間先後的 train/validation partitions，不能把完整歷史混成 IID CV，也不能把診斷結果拿來反覆調參。2025–2026 不是這個 OOF 的 validation 區間；若完整 target artifact 已可直接讀取該期間的 outcomes，該期間也不得事後稱為 sealed test。只有在研究開始前已有可證明的 outcome-access boundary、且後續新到資料落在 boundary 之後時，才可建立新的 sealed scope。資料工程的一般單元／整合／效能測試仍不得直接把 13 ETF 全歷史當捷徑。
 - 現行 ETF Trick 沒有可交易、同步的 High/Low/Open，Tier 1 horizontal barrier 只能以每日 NAV 收盤路徑確認；`close_path_*` 欄位不得作為 OHLC、特徵或成交價。故 daily-close path 不存在同日雙觸及；只有未來另有 PIT-safe 逐筆/日內序列且新 trial 已登錄時，才可建立 double-touch 規則。
 - 未通過 gate 時，停止該分支的績效結論並明確寫出污染/失敗路徑、已驗證事實、未驗證假設與下一個合理修復方向。模型可自主搜尋合理且預先記錄的設定範圍，但任何看過績效後的候選都必須登錄 trial registry。
+- OOF 前必須預先登記有限的 `IF OOF state -> allowed action`。樣本不足時只允許向前延長既有歷史範圍；仍不足即棄置該設計，且因未產生可比較績效不增加 DSR trial count。AUC 無辨識力、無淨邊際或不穩定時，只可啟用已登記替代模型、特徵、barrier/horizon 或診斷；每個看過 OOF 後觸發的績效替代都增加 effective DSR trial count。禁止等待未來資料、放寬成本／標籤／ETF 定義，或事後新增未登記的搜尋。
 
 ## 試驗治理與完成定義
 
 - 在結果影響選擇前，登錄 `etf_id`、模型、特徵、障礙、threshold、calibration、Tier 2、配置與 HRP 變體；保留失敗與淘汰試驗。跨 ETF 選擇或比較的 13 個獨立模型，以及任何 pooled benchmark，都必須保守納入有效獨立試驗數。
 - Sealed test 的 scope 必須明示 `etf_id` 與 lineage；每個 scope 僅允許一條事前鎖定 lineage 進入。若模型、ETF 選擇或 threshold 因該 test 結果改變，該 scope 不再 sealed，所有受影響候選納入試驗數。不能證明 sealed outcome 未被研究程式或決策讀取時，必須標示 `NOT_SEALED`，不可借用 sealed 名稱。
-- 僅在完整 PIT/OOF/執行對帳、三種配置比較、成本與容量診斷、sealed test，以及 `DSR >= 0.95` 均有可重現證據時，才可由 07 評為 `PAPER_TRADE_ELIGIBLE`。通過不代表未來獲利，絕不代表可 live。
+- 僅在完整 PIT/OOF/執行對帳、三種配置比較、成本與容量診斷，以及 `DSR >= 0.95` 均有可重現證據時，才可由 07 評為 `PAPER_TRADE_ELIGIBLE`。通過不代表未來獲利，絕不代表可 live。
 
 ## 結束與續跑
 

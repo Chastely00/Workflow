@@ -23,6 +23,8 @@ validation_metrics, selection_status, selection_reason
 
 Count performance-observed alternatives that could influence selection: each ETF-local model/feature/barrier/threshold/calibration/Tier 2 variant, every pooled benchmark, allocation policies, and HRP settings. A choice among 13 ETF-local results is a multiple-comparison decision even when all models share a specification. Record non-performance ADF-gated FFD selection separately, but do not count it as a performance trial. Estimate effective independent trials conservatively from dependence among trial return paths.
 
+Before viewing OOF, register a finite state-action table. `INSUFFICIENT_MATURE_EVENTS` may only extend the same design backward over already available history; if still insufficient, abandon it. It has no comparable performance outcome and adds zero DSR trials. Any OOF-observed action that changes model, feature, barrier/horizon, threshold, calibration, ETF selection, or allocation is a registered performance alternative and increases the effective trial count. Waiting for future data, relaxing costs/labels, or changing ETF definition is not an allowed insufficient-sample action.
+
 ## 3. Sealed test and statistics
 
 Each sealed-test admission must state its `etf_scope`, model scope, train end, and untouched outcome interval. Only one pre-locked lineage may enter each ETF scope. If that scope's test outcomes change a decision, it is no longer sealed and every observed alternative joins the trial count. A model that had physical/logical access to the scope's outcome labels before lock must be marked `NOT_SEALED`; it cannot be promoted using a nominal sealed test.
@@ -39,4 +41,4 @@ On success, state that Paper-trade eligibility is not a future-profit guarantee.
 
 ## 5. Final gates
 
-`PAPER_TRADE_ELIGIBLE` requires finalized lineage; fold-local Tier 1/2 and OOF hand-off; one locked sealed test; DSR >= 0.95; actual execution costs/taxes/integer shares/delays; all three allocation comparisons; and predeclared limits for drawdown, turnover, concentration, capacity, and execution failure. Passing never authorizes live orders.
+`PAPER_TRADE_ELIGIBLE` requires finalized lineage; fold-local Tier 1/2 and expanding OOF hand-off; DSR >= 0.95; actual execution costs/taxes/integer shares/delays; all three allocation comparisons; and predeclared limits for drawdown, turnover, concentration, capacity, and execution failure. A later sealed/paper interval is optional monitoring, never a reason to withhold already OOF-qualified deployment. Passing never authorizes live orders.
