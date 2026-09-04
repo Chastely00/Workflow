@@ -14,8 +14,8 @@ class Tier1TargetConfig:
     pt_mult: float = 2.0
     sl_mult: float = 2.0
     vertical_bars: int = 60
-    buy_cost_rate: float = 0.0
-    sell_cost_rate: float = 0.0
+    buy_cost_rate: float = 0.001425
+    sell_cost_rate: float = 0.003
 
     def __post_init__(self) -> None:
         if self.volatility_span <= 0 or self.min_obs <= 0 or self.min_obs > self.volatility_span:
@@ -36,15 +36,19 @@ class Tier1TargetBuilder:
         self,
         bars: pd.DataFrame,
         opens: pd.DataFrame,
+        daily_closes: pd.DataFrame,
         event_start_date: str | pd.Timestamp | None = None,
         event_end_date: str | pd.Timestamp | None = None,
     ) -> pd.DataFrame:
         required_bars = {"etf_id", "bar_id", "bar_end_date", "close_nav", "feature_available_at"}
         required_opens = {"etf_id", "date", "raw_open_nav", "available_at", "is_legal_execution"}
+        required_daily_closes = {"etf_id", "date", "nav", "available_at"}
         if missing := required_bars.difference(bars.columns):
             raise ValueError(f"bars missing columns: {sorted(missing)}")
         if missing := required_opens.difference(opens.columns):
             raise ValueError(f"opens missing columns: {sorted(missing)}")
+        if missing := required_daily_closes.difference(daily_closes.columns):
+            raise ValueError(f"daily_closes missing columns: {sorted(missing)}")
         frame = bars.copy().sort_values(["etf_id", "bar_id"], kind="stable")
         frame["bar_end_date"] = pd.to_datetime(frame["bar_end_date"]).dt.normalize()
         frame["close_nav"] = pd.to_numeric(frame["close_nav"], errors="coerce")
@@ -58,14 +62,24 @@ class Tier1TargetBuilder:
         market["date"] = pd.to_datetime(market["date"]).dt.normalize()
         market["available_at"] = pd.to_datetime(market["available_at"])
         market = market[market["is_legal_execution"].eq(True)].sort_values(["etf_id", "date"], kind="stable")
+        closes = daily_closes.copy()
+        closes["date"] = pd.to_datetime(closes["date"]).dt.normalize()
+        closes["available_at"] = pd.to_datetime(closes["available_at"])
+        closes["nav"] = pd.to_numeric(closes["nav"], errors="coerce")
+        if closes.duplicated(["etf_id", "date"]).any():
+            raise ValueError("daily_closes has duplicate etf_id-date keys")
+        if closes[["date", "available_at", "nav"]].isna().any().any() or closes["nav"].le(0).any():
+            raise ValueError("daily_closes requires valid date, availability, and positive nav")
+        closes = closes.sort_values(["etf_id", "date"], kind="stable")
         output: list[dict[str, object]] = []
         for etf_id, group in frame.groupby("etf_id", sort=False):
             indexed = group.reset_index(drop=True)
             etf_market = market[market["etf_id"].eq(etf_id)]
+            etf_closes = closes[closes["etf_id"].eq(etf_id)]
             for position, row in indexed.iterrows():
                 if (start is not None and row.bar_end_date < start) or (end is not None and row.bar_end_date > end):
                     continue
-                event = {"event_id": f"{etf_id}-{int(row.bar_id)}", "etf_id": etf_id, "t0_bar_id": int(row.bar_id), "t0_date": row.bar_end_date, "target_volatility": row.target_volatility, "target_status": "unresolved_tail", "y_direction": np.nan, "trigger_type": pd.NA, "trigger_date": pd.NaT, "entry_date": pd.NaT, "entry_raw_open": np.nan, "exit_date": pd.NaT, "exit_raw_open": np.nan, "net_log_return": np.nan}
+                event = {"event_id": f"{etf_id}-{int(row.bar_id)}", "etf_id": etf_id, "t0_bar_id": int(row.bar_id), "t0_date": row.bar_end_date, "target_volatility": row.target_volatility, "target_status": "unresolved_tail", "y_direction": np.nan, "trigger_type": pd.NA, "trigger_date": pd.NaT, "trigger_available_at": pd.NaT, "entry_date": pd.NaT, "entry_raw_open": np.nan, "exit_date": pd.NaT, "exit_raw_open": np.nan, "label_available_at": pd.NaT, "net_log_return": np.nan}
                 if position + self.config.vertical_bars >= len(indexed):
                     output.append(event)
                     continue
@@ -77,23 +91,37 @@ class Tier1TargetBuilder:
                     output.append(event)
                     continue
                 entry_price = float(entry.iloc[0].raw_open_nav)
-                future = indexed.iloc[position + 1 : position + self.config.vertical_bars + 1]
-                path_net = np.log(
-                    (future["close_nav"].to_numpy(dtype=float) * (1 - self.config.sell_cost_rate))
-                    / (entry_price * (1 + self.config.buy_cost_rate))
-                )
                 upper = self.config.pt_mult * float(sigma)
                 lower = -self.config.sl_mult * float(sigma)
+                close_path = etf_closes.loc[
+                    etf_closes["date"].ge(entry.iloc[0].date)
+                    & etf_closes["date"].le(vertical_date)
+                ].copy()
+                if close_path.empty:
+                    event["target_status"] = "missing_daily_close_path"
+                    output.append(event)
+                    continue
+                path_net = np.log(
+                    (close_path["nav"].to_numpy(dtype=float) * (1 - self.config.sell_cost_rate))
+                    / (entry_price * (1 + self.config.buy_cost_rate))
+                )
                 touches = np.flatnonzero((path_net >= upper) | (path_net <= lower))
                 if len(touches):
-                    trigger = future.iloc[int(touches[0])]
+                    trigger = close_path.iloc[int(touches[0])]
                     trigger_type = "upper" if path_net[int(touches[0])] >= upper else "lower"
-                    exit_after = pd.Timestamp(trigger.bar_end_date)
+                    exit_after = pd.Timestamp(trigger.date)
+                    trigger_available_at = pd.Timestamp(trigger.available_at)
                     label = 1 if trigger_type == "upper" else -1
                 else:
                     trigger = indexed.iloc[position + self.config.vertical_bars]
                     trigger_type = "vertical"
                     exit_after = vertical_date
+                    vertical_close = close_path.loc[close_path["date"].eq(vertical_date)]
+                    if vertical_close.empty:
+                        event["target_status"] = "missing_daily_close_path"
+                        output.append(event)
+                        continue
+                    trigger_available_at = pd.Timestamp(vertical_close.iloc[0].available_at)
                     label = None
                 exit_row = etf_market[etf_market.date.gt(exit_after)].head(1)
                 if exit_row.empty:
@@ -102,6 +130,7 @@ class Tier1TargetBuilder:
                     continue
                 exit_price = float(exit_row.iloc[0].raw_open_nav)
                 net = math.log((exit_price * (1 - self.config.sell_cost_rate)) / (entry_price * (1 + self.config.buy_cost_rate)))
-                event.update({"trigger_type": trigger_type, "trigger_date": trigger.bar_end_date, "entry_date": entry.iloc[0].date, "entry_raw_open": entry_price, "exit_date": exit_row.iloc[0].date, "exit_raw_open": exit_price, "net_log_return": net, "target_status": f"resolved_{trigger_type}", "y_direction": (1 if net > 0 else -1) if label is None else label})
+                trigger_date = pd.Timestamp(trigger.date if trigger_type != "vertical" else trigger.bar_end_date)
+                event.update({"trigger_type": trigger_type, "trigger_date": trigger_date, "trigger_available_at": trigger_available_at, "entry_date": entry.iloc[0].date, "entry_raw_open": entry_price, "exit_date": exit_row.iloc[0].date, "exit_raw_open": exit_price, "label_available_at": pd.Timestamp(exit_row.iloc[0].available_at), "net_log_return": net, "target_status": f"resolved_{trigger_type}", "y_direction": (1 if net > 0 else -1) if label is None else label})
                 output.append(event)
         return pd.DataFrame(output)
