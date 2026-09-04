@@ -65,7 +65,11 @@ REQUIRED_STATIC_ARTIFACT_IDS = {
     "security_panel",
     "security_panel_history",
 }
-SOURCE_ONLY_FAMILY_IDS = {"dividend_policy", "capital_formation"}
+SOURCE_ONLY_FAMILY_IDS = {
+    "afml_chip_snapshot",
+    "capital_formation",
+    "dividend_policy",
+}
 REQUIRED_UNIVERSE_TEMPLATE_VARIANTS = {"historical", "exact_date"}
 
 

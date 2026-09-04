@@ -41,7 +41,7 @@
       "artifact_id": "daily_chip_etf_constituents", "layer": "raw", "base_path": "canonical/raw/daily_chip_etf_constituents", "file_name": "part.parquet",
       "required_columns": ["date", "ticker", "source_available_date", "data_cutoff_at"], "logical_key": ["date", "ticker"], "publication_mode": "partition_upsert",
       "partition_name": "year", "partition_field": "date", "date_field": "date", "availability_field": "source_available_date",
-      "pit_policy": "source_available_date", "source_families": ["daily_chip"]
+      "pit_policy": "source_available_date", "source_families": ["afml_chip_snapshot"]
     },
     {
       "artifact_id": "monthly_sales", "layer": "raw", "base_path": "canonical/raw/monthly_sales", "file_name": "part.parquet",

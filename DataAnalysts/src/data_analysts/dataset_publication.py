@@ -321,6 +321,7 @@ def publish_dataset(
     run_scope: RunScope,
     *,
     snapshot_value: str | None = None,
+    write_schema: pa.Schema | None = None,
 ) -> PublicationResult:
     """Publish a dataset according to its transaction and partition contract."""
     if run_scope not in {"full_history", "bounded_backfill", "daily"}:
@@ -346,8 +347,11 @@ def publish_dataset(
             rows,
             run_scope,
             snapshot_value=snapshot_value,
+            write_schema=write_schema,
         )
-    return _publish_partition_versioned(context, contract, rows, run_scope)
+    return _publish_partition_versioned(
+        context, contract, rows, run_scope, write_schema=write_schema
+    )
 
 
 def migrate_legacy_variant_manifests(
@@ -510,6 +514,7 @@ def _publish_partition_versioned(
     run_scope: RunScope,
     *,
     snapshot_value: str | None = None,
+    write_schema: pa.Schema | None = None,
 ) -> PublicationResult:
     """Publish one immutable complete partition inventory and switch its manifest."""
     if rows:
@@ -539,7 +544,7 @@ def _publish_partition_versioned(
         ): path
         for path in active_inventory
     }
-    empty_schema: pa.Schema | None = None
+    empty_schema: pa.Schema | None = write_schema
     if active_by_partition:
         schema_source = pq.ParquetFile(
             next(iter(active_by_partition.values()))
@@ -603,6 +608,7 @@ def _publish_partition_versioned(
                     if run_scope != "full_history" and not retain_distinct_snapshots
                     else None,
                     empty_schema=empty_schema,
+                    write_schema=write_schema,
                 )
             files.append((target, relative))
 
@@ -682,6 +688,7 @@ def _write_partition_stream(
     existing_path: Path | None,
     *,
     empty_schema: pa.Schema | None = None,
+    write_schema: pa.Schema | None = None,
 ) -> None:
     incoming_keys = _SpillKeyIndex()
     for index, row in enumerate(incoming_rows):
@@ -700,7 +707,7 @@ def _write_partition_stream(
         if not batch_rows:
             return
         validate_rows(contract, batch_rows, partition_value=partition_value)
-        table = _table_from_rows(contract, batch_rows)
+        table = _table_from_rows(contract, batch_rows, write_schema=write_schema)
         if schema is None:
             schema = table.schema
             writer = pq.ParquetWriter(target, schema)
@@ -1305,7 +1312,10 @@ def _common_inventory_schema(
 
 
 def _table_from_rows(
-    contract: ArtifactContract, rows: list[dict[str, Any]]
+    contract: ArtifactContract,
+    rows: list[dict[str, Any]],
+    *,
+    write_schema: pa.Schema | None = None,
 ) -> pa.Table:
     columns = _columns_from_rows(rows)
     ordered = list(dict.fromkeys([*contract.required_columns, *columns]))
@@ -1314,7 +1324,8 @@ def _table_from_rows(
             {
                 column: [_normalize_parquet_scalar(row.get(column)) for row in rows]
                 for column in ordered
-            }
+            },
+            schema=write_schema,
         )
     except (pa.ArrowException, TypeError, ValueError) as exc:
         raise ArtifactError(f"{contract.artifact_id} schema mismatch: {exc}") from exc

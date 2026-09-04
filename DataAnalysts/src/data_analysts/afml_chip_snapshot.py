@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
+import pyarrow as pa
 import pyarrow.parquet as pq
 
 from data_analysts.artifact_contracts import ArtifactContract
@@ -15,6 +17,34 @@ from data_analysts.artifacts import atomic_write_text
 from data_analysts.dataset_publication import publish_dataset
 from data_analysts.extract import extract_family_rows_from_database
 from data_analysts.paths import DataAnalystsContext
+
+
+_CHIP_SNAPSHOT_COLUMNS = (
+    "date",
+    "ticker",
+    "qfii_examt",
+    "fund_examt",
+    "dlrp_examt",
+    "source_available_date",
+    "data_cutoff_at",
+    "data_cutoff_origin",
+    "source_collection",
+    "source_row_id",
+)
+_CHIP_SNAPSHOT_SCHEMA = pa.schema(
+    [
+        pa.field("date", pa.string()),
+        pa.field("ticker", pa.string()),
+        pa.field("qfii_examt", pa.float64()),
+        pa.field("fund_examt", pa.float64()),
+        pa.field("dlrp_examt", pa.float64()),
+        pa.field("source_available_date", pa.string()),
+        pa.field("data_cutoff_at", pa.string()),
+        pa.field("data_cutoff_origin", pa.string()),
+        pa.field("source_collection", pa.string()),
+        pa.field("source_row_id", pa.string()),
+    ]
+)
 
 
 def build_and_publish_afml_chip_snapshot(
@@ -53,7 +83,13 @@ def build_and_publish_afml_chip_snapshot(
     rows = _canonical_daily_chip_rows(extracted, start_date=start_date, end_date=end_date)
     if not rows:
         raise ValueError("AFML chip snapshot extraction returned no in-window rows")
-    result = publish_dataset(context, contract, rows, "bounded_backfill")
+    result = publish_dataset(
+        context,
+        contract,
+        rows,
+        "bounded_backfill",
+        write_schema=_CHIP_SNAPSHOT_SCHEMA,
+    )
     manifest_path = context.store_path("manifests", contract.manifest_file_name)
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     manifest.update(
@@ -70,6 +106,13 @@ def build_and_publish_afml_chip_snapshot(
                 "historical source vintages are not available."
             ),
             "snapshot_kind": "afml_etf_constituent_daily_chip",
+            "snapshot_columns": list(_CHIP_SNAPSHOT_COLUMNS),
+            "constituent_selection_policy": (
+                "The bounded ticker set is source coverage only. Downstream "
+                "features must join each historical row to holdings valid at "
+                "the relevant decision date and must not use membership in this "
+                "coverage set as an observation."
+            ),
         }
     )
     atomic_write_text(manifest_path, json.dumps(manifest, indent=2, sort_keys=True))
@@ -102,11 +145,22 @@ def _canonical_daily_chip_rows(
             raise ValueError("daily_chip source row requires coid and mdate")
         if not start_date <= value <= end_date:
             continue
+        cutoff = _cutoff_text(source.get("data_cutoff_at"))
+        if cutoff is None:
+            raise ValueError("daily_chip source row requires data_cutoff_at")
         rows.append({
-            **source,
             "date": value,
             "ticker": ticker,
+            "qfii_examt": _optional_float(source.get("qfii_examt")),
+            "fund_examt": _optional_float(source.get("fund_examt")),
+            "dlrp_examt": _optional_float(source.get("dlrp_examt")),
             "source_available_date": value,
+            "data_cutoff_at": cutoff,
+            "data_cutoff_origin": str(
+                source.get("data_cutoff_origin") or "source_reported"
+            ),
+            "source_collection": str(source.get("source_collection") or ticker),
+            "source_row_id": str(source.get("source_row_id") or ""),
         })
     rows.sort(key=lambda row: (str(row["date"]), str(row["ticker"])))
     keys = [(row["date"], row["ticker"]) for row in rows]
@@ -123,6 +177,25 @@ def _date_text(value: Any) -> str | None:
     if isinstance(value, str):
         return value[:10] if len(value) >= 10 else None
     return None
+
+
+def _cutoff_text(value: Any) -> str | None:
+    if isinstance(value, datetime):
+        return value.isoformat().replace("+00:00", "Z")
+    if isinstance(value, date):
+        return f"{value.isoformat()}T00:00:00Z"
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return None
+
+
+def _optional_float(value: Any) -> float:
+    if value is None or value == "":
+        return math.nan
+    try:
+        return float(value)
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"daily_chip numeric value is invalid: {value!r}") from error
 
 
 def _sha256_file(path: Path) -> str:

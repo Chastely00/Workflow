@@ -4,7 +4,8 @@ import json
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from data_analysts.artifact_contracts import ArtifactContract
+from data_analysts.artifact_contracts import ArtifactContract, expected_contract_outputs
+from data_analysts.config import load_runtime_config
 from data_analysts.paths import DataAnalystsContext
 
 
@@ -43,8 +44,19 @@ def _contract():
         date_field="date",
         availability_field="source_available_date",
         pit_policy="source_available_date",
-        source_families=("daily_chip",),
+        source_families=("afml_chip_snapshot",),
     )
+
+
+def test_afml_chip_snapshot_is_not_a_regular_daily_chip_pipeline_output():
+    context = DataAnalystsContext.from_paths("DataAnalysts")
+    config = load_runtime_config(context)
+
+    expected = expected_contract_outputs(
+        config.artifact_contracts, {"daily_chip"}
+    )["daily_chip"]
+
+    assert "daily_chip_etf_constituents" not in expected
 
 
 def test_afml_chip_snapshot_uses_holdings_universe_and_writes_lineage(tmp_path):
@@ -54,11 +66,15 @@ def test_afml_chip_snapshot_uses_holdings_universe_and_writes_lineage(tmp_path):
     pq.write_table(pa.Table.from_pylist([
         {"date": datetime(2024, 1, 2), "ticker": "2330"},
         {"date": datetime(2024, 1, 2), "ticker": "1101"},
+        {"date": datetime(2025, 1, 2), "ticker": "2330"},
         {"date": datetime(2023, 12, 29), "ticker": "9999"},
     ]), holdings_path)
     database = _Database({
         "1101": _Collection([{"coid": "1101", "mdate": datetime(2024, 1, 2), "qfii_examt": 10.0}]),
-        "2330": _Collection([{"coid": "2330", "mdate": datetime(2024, 1, 2), "qfii_examt": 20.0}]),
+        "2330": _Collection([
+            {"coid": "2330", "mdate": datetime(2024, 1, 2), "qfii_examt": 20.0},
+            {"coid": "2330", "mdate": datetime(2025, 1, 2), "fund_examt": 30.0},
+        ]),
     })
     context = DataAnalystsContext.from_paths(tmp_path, tmp_path / "store")
 
@@ -75,13 +91,25 @@ def test_afml_chip_snapshot_uses_holdings_universe_and_writes_lineage(tmp_path):
         },
         pit_registry={"families": {}},
         start_date="2024-01-02",
-        end_date="2024-01-02",
+        end_date="2025-01-02",
         extraction_completed_at="2026-09-04T01:40:00Z",
     )
 
     manifest = json.loads(context.store_path("manifests", "daily_chip_etf_constituents.json").read_text())
     assert result["ticker_count"] == 2
-    assert manifest["row_count"] == 2
+    assert manifest["row_count"] == 3
     assert manifest["constituent_universe"]["tickers"] == ["1101", "2330"]
     assert manifest["revision_status"] == "PIT_REVISION_UNVERIFIED"
+    assert manifest["snapshot_columns"] == [
+        "date", "ticker", "qfii_examt", "fund_examt", "dlrp_examt",
+        "source_available_date", "data_cutoff_at", "data_cutoff_origin",
+        "source_collection", "source_row_id",
+    ]
     assert all("/versions/" in path for path in manifest["artifact_paths"])
+    schemas = [pq.read_schema(context.artifact_path(path)) for path in manifest["artifact_paths"]]
+    assert len({schema.serialize().to_pybytes() for schema in schemas}) == 1
+    assert schemas[0].field("qfii_examt").type == pa.float64()
+    assert schemas[0].field("fund_examt").type == pa.float64()
+    assert schemas[0].field("dlrp_examt").type == pa.float64()
+    rows = pq.read_table(context.artifact_path(manifest["artifact_paths"][0])).to_pylist()
+    assert set(rows[0]) == set(manifest["snapshot_columns"])
