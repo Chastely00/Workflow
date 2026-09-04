@@ -190,15 +190,32 @@ def main() -> int:
     registry.append(trial_record)
 
     lab = Tier1Lab.from_artifacts(roots["afml"], roots["target"], roots["extension"])
-    run = lab.run_oof(
-        FEATURE_COLUMNS,
-        outer_splits=args.outer_splits,
-        model_family="hist_gradient_boosting",
-        categorical_columns=("etf_id",),
-        candidate_threshold_objective="f1",
-        research_t0_end=args.research_t0_end,
-        research_outcome_before=args.sealed_start,
-    )
+    try:
+        run = lab.run_oof(
+            FEATURE_COLUMNS,
+            outer_splits=args.outer_splits,
+            model_family="hist_gradient_boosting",
+            categorical_columns=("etf_id",),
+            candidate_threshold_objective="f1",
+            research_t0_end=args.research_t0_end,
+            research_outcome_before=args.sealed_start,
+        )
+    except ValueError as error:
+        if "declared feature absent" not in str(error):
+            raise
+        registry.append(
+            {
+                **trial_record,
+                "trial_id": f"{args.trial_id}-invalid-input-coverage",
+                "parent_trial_id": args.trial_id,
+                "created_at": _utc_now(),
+                "completed_at": _utc_now(),
+                "selection_status": "INVALID_INPUT_COVERAGE",
+                "selection_reason": str(error),
+            }
+        )
+        print({"trial_id": args.trial_id, "selection_status": "INVALID_INPUT_COVERAGE", "reason": str(error)})
+        return 2
     boundary = validate_long_history_research_frame(
         run.training_frame,
         research_t0_end=args.research_t0_end,

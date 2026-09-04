@@ -9,6 +9,7 @@ import pandas as pd
 from .model import oof_logistic_predictions
 from .research import build_directional_training_frame, build_tier1_handoff
 from .splits import chronological_purged_folds
+from .long_history import validate_fold_feature_coverage
 
 
 @dataclass(frozen=True)
@@ -123,6 +124,11 @@ class Tier1Lab:
             if frame.empty:
                 raise ValueError("research cut-off excludes every resolved target")
         folds = chronological_purged_folds(frame[["t0", "t1"]], n_splits=outer_splits)
+        validate_fold_feature_coverage(
+            frame,
+            [(train.tolist(), valid.tolist()) for train, valid in folds],
+            feature_columns,
+        )
         predictions = oof_logistic_predictions(
             frame,
             [(train.tolist(), valid.tolist()) for train, valid in folds],

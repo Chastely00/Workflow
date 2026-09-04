@@ -1,7 +1,10 @@
 import pandas as pd
 import pytest
 
-from etf_tricks.tier1.long_history import validate_long_history_research_frame
+from etf_tricks.tier1.long_history import (
+    validate_fold_feature_coverage,
+    validate_long_history_research_frame,
+)
 
 
 def test_long_history_research_frame_rejects_outcomes_in_sealed_interval() -> None:
@@ -39,3 +42,18 @@ def test_long_history_research_frame_returns_auditable_boundaries() -> None:
         "sealed_start": "2025-01-01",
         "research_rows": 2,
     }
+
+
+def test_fold_feature_coverage_rejects_declared_feature_absent_from_training_fold() -> None:
+    frame = pd.DataFrame({"f": [float("nan"), float("nan"), 1.0]})
+
+    with pytest.raises(ValueError, match="f"):
+        validate_fold_feature_coverage(frame, [([0, 1], [2])], ["f"])
+
+
+def test_fold_feature_coverage_reports_nonmissing_counts() -> None:
+    frame = pd.DataFrame({"f": [1.0, float("nan"), 1.0]})
+
+    result = validate_fold_feature_coverage(frame, [([0, 1], [2])], ["f"])
+
+    assert result == [{"fold": 0, "training_rows": 2, "training_nonmissing": {"f": 1}}]

@@ -31,3 +31,31 @@ def validate_long_history_research_frame(
         "sealed_start": str(sealed.date()),
         "research_rows": int(len(frame)),
     }
+
+
+def validate_fold_feature_coverage(
+    frame: pd.DataFrame,
+    folds: list[tuple[object, object]],
+    feature_columns: list[str],
+) -> list[dict[str, object]]:
+    """Reject a declared feature that a training fold would silently drop."""
+    if missing := set(feature_columns).difference(frame.columns):
+        raise ValueError(f"research frame missing declared features: {sorted(missing)}")
+    coverage: list[dict[str, object]] = []
+    for fold_number, (train_rows, validation_rows) in enumerate(folds):
+        if len(train_rows) == 0 or len(validation_rows) == 0:
+            raise ValueError("long-history folds require nonempty train and validation rows")
+        training = frame.iloc[train_rows]
+        counts = {column: int(training[column].notna().sum()) for column in feature_columns}
+        if absent := [column for column, count in counts.items() if count == 0]:
+            raise ValueError(
+                f"declared feature absent from long-history training fold {fold_number}: {absent}"
+            )
+        coverage.append(
+            {
+                "fold": fold_number,
+                "training_rows": int(len(training)),
+                "training_nonmissing": counts,
+            }
+        )
+    return coverage
