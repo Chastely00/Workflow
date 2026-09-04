@@ -162,6 +162,7 @@ class Tier1Lab:
         research_t0_start: str | pd.Timestamp | None = None,
         research_t0_end: str | pd.Timestamp | None = None,
         research_outcome_before: str | pd.Timestamp | None = None,
+        etf_ids: tuple[str, ...] | None = None,
     ) -> Tier1LocalOOFRuns:
         """Fit one OOF model per ETF; ``etf_id`` is lineage metadata, never a feature."""
         if "etf_id" in categorical_columns:
@@ -169,6 +170,15 @@ class Tier1Lab:
         frame = self._build_training_frame(
             feature_columns, research_t0_start, research_t0_end, research_outcome_before
         )
+        if etf_ids is not None:
+            requested = {str(etf_id) for etf_id in etf_ids}
+            if not requested:
+                raise ValueError("ETF-local selection must not be empty")
+            available = set(frame["etf_id"].astype(str))
+            unknown = sorted(requested.difference(available))
+            if unknown:
+                raise ValueError(f"ETF-local selection has no research rows: {unknown}")
+            frame = frame.loc[frame["etf_id"].astype(str).isin(requested)].reset_index(drop=True)
         runs: dict[str, Tier1OOFRun] = {}
         for etf_id, local in frame.groupby("etf_id", sort=True):
             local = local.reset_index(drop=True)

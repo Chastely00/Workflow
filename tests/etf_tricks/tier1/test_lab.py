@@ -166,6 +166,23 @@ def test_lab_runs_oof_in_isolated_etf_partitions(tmp_path) -> None:
     )
 
 
+def test_etf_local_oof_can_run_only_a_preregistered_partition(tmp_path) -> None:
+    afml = tmp_path / "afml"
+    targets = tmp_path / "targets"
+    (afml / "tables").mkdir(parents=True)
+    targets.mkdir()
+    dates = pd.date_range("2024-01-01", periods=20)
+    ids = ["a"] * 20 + ["b"] * 20
+    bars = list(range(20)) * 2
+    (afml / "metadata.json").write_text(json.dumps({"trading_sessions": [str(date.date()) for date in dates]}), encoding="utf-8")
+    pd.DataFrame({"etf_id": ids, "bar_id": bars, "feature_available_at": pd.to_datetime(list(dates) * 2).tz_localize("Asia/Taipei"), "f": bars}).to_parquet(afml / "tables" / "features.parquet", index=False)
+    pd.DataFrame({"event_id": [f"{etf_id}-{bar}" for etf_id, bar in zip(ids, bars)], "etf_id": ids, "t0_bar_id": bars, "t0_date": list(dates) * 2, "exit_date": list(dates + pd.Timedelta(days=1)) * 2, "y_direction": [-1, 1] * 20, "net_log_return": [-0.01, 0.02] * 20, "target_status": ["resolved_lower", "resolved_upper"] * 20}).to_parquet(targets / "targets.parquet", index=False)
+
+    result = Tier1Lab.from_artifacts(afml, targets).run_oof_per_etf(["f"], outer_splits=1, etf_ids=("a",))
+
+    assert set(result.by_etf) == {"a"}
+
+
 def test_etf_local_oof_discards_only_pre_feature_availability_warmup(tmp_path) -> None:
     afml = tmp_path / "afml"
     targets = tmp_path / "targets"

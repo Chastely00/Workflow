@@ -68,6 +68,8 @@ def _args() -> argparse.Namespace:
     parser.add_argument("--research-outcome-before", required=True)
     parser.add_argument("--outer-splits", type=int, default=3)
     parser.add_argument("--effective-trial-count-base", type=float, required=True)
+    parser.add_argument("--etf-id", action="append", dest="etf_ids", help="Repeat to run only pre-specified ETF-local lineages.")
+    parser.add_argument("--parent-trial-id", default="tier1-hgb-base15-cost-audited-2005-2024-v1-result")
     return parser.parse_args()
 
 
@@ -84,7 +86,15 @@ def main() -> int:
         raise ValueError(f"missing immutable input manifest: {missing}")
     upstream = {name: _sha256(path) for name, path in manifests.items()}
     features = feature_columns_for(args.feature_set)
-    expected_etfs = sorted(pd.read_parquet(roots["target"] / "targets.parquet", columns=["etf_id"])["etf_id"].drop_duplicates())
+    all_etfs = sorted(pd.read_parquet(roots["target"] / "targets.parquet", columns=["etf_id"])["etf_id"].drop_duplicates())
+    requested_etfs = None if args.etf_ids is None else {str(etf_id) for etf_id in args.etf_ids}
+    if requested_etfs is not None:
+        unknown = sorted(requested_etfs.difference(all_etfs))
+        if unknown:
+            raise ValueError(f"unknown ETF-local selection: {unknown}")
+        expected_etfs = [etf_id for etf_id in all_etfs if etf_id in requested_etfs]
+    else:
+        expected_etfs = all_etfs
     config = {
         "model_scope": "ETF_LOCAL", "model_family": args.model_family,
         "feature_set": args.feature_set, "feature_columns": features,
@@ -101,7 +111,7 @@ def main() -> int:
     for etf_id in expected_etfs:
         trial_id = f"{args.trial_prefix}-{etf_id}"
         records[etf_id] = {
-            "trial_id": trial_id, "parent_trial_id": "tier1-hgb-base15-cost-audited-2005-2024-v1-result",
+            "trial_id": trial_id, "parent_trial_id": args.parent_trial_id,
             "created_at": _now(), "completed_at": None,
             "research_question": "Does this ETF-local Tier 1 model provide promotable OOF long opportunities?",
             "hypothesis": "ETF-specific FFD, liquidity, portfolio, and regime state may rank this ETF's own cost-aware directional events.",
@@ -127,6 +137,7 @@ def main() -> int:
         research_t0_start=args.research_t0_start,
         research_t0_end=args.research_t0_end,
         research_outcome_before=args.research_outcome_before,
+        etf_ids=tuple(expected_etfs),
     )
     root.mkdir(parents=True)
     for etf_id, run in runs.by_etf.items():
