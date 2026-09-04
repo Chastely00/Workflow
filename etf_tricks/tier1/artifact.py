@@ -25,6 +25,42 @@ def write_target_artifact(targets: pd.DataFrame, output_dir: str | Path, metadat
     return manifest
 
 
+def write_feature_extension_artifact(
+    features: pd.DataFrame,
+    output_dir: str | Path,
+    metadata: dict[str, object],
+) -> dict[str, object]:
+    """Persist a keyed, read-only feature sidecar without touching AFML v5."""
+    output = Path(output_dir)
+    required = {"etf_id", "bar_id", "feature_available_at"}
+    if output.exists():
+        raise FileExistsError(f"Tier 1 output already exists: {output}")
+    if missing := required.difference(features.columns):
+        raise ValueError(f"feature extension missing columns: {sorted(missing)}")
+    if features.empty or features.duplicated(["etf_id", "bar_id"]).any():
+        raise ValueError("feature extension requires nonempty unique etf_id-bar_id keys")
+    if pd.to_datetime(features["feature_available_at"], errors="coerce").isna().any():
+        raise ValueError("feature extension requires valid feature availability")
+    output.mkdir(parents=True)
+    table = output / "features.parquet"
+    features.to_parquet(table, index=False)
+    manifest = {
+        "schema_version": "tier1-feature-extension-v1",
+        "metadata": metadata,
+        "tables": {
+            "features": {
+                "path": table.name,
+                "row_count": len(features),
+                "sha256": _sha256(table),
+            }
+        },
+    }
+    (output / "manifest.json").write_text(
+        json.dumps(manifest, sort_keys=True, ensure_ascii=False), encoding="utf-8"
+    )
+    return manifest
+
+
 def write_oof_artifact(handoff: pd.DataFrame, output_dir: str | Path, metadata: dict[str, object]) -> dict[str, object]:
     """Persist an immutable Tier 1 OOF-only hand-off artifact."""
     output = Path(output_dir)

@@ -1,6 +1,10 @@
 import pandas as pd
 
-from etf_tricks.tier1.artifact import write_oof_artifact, write_target_artifact
+from etf_tricks.tier1.artifact import (
+    write_feature_extension_artifact,
+    write_oof_artifact,
+    write_target_artifact,
+)
 
 
 def test_target_artifact_writes_manifest_and_refuses_overwrite(tmp_path) -> None:
@@ -30,3 +34,19 @@ def test_oof_artifact_refuses_future_target_columns(tmp_path) -> None:
         assert "forbidden" in str(exc)
     else:
         raise AssertionError("OOF hand-off must reject future target fields")
+
+
+def test_feature_extension_artifact_requires_unique_pit_keys(tmp_path) -> None:
+    extension = pd.DataFrame(
+        {
+            "etf_id": ["x"],
+            "bar_id": [1],
+            "feature_available_at": pd.to_datetime(["2024-01-02 18:00+08:00"]),
+            "bar_log_return_std_14": [0.01],
+        }
+    )
+
+    result = write_feature_extension_artifact(extension, tmp_path / "extension", {"input_hash": "abc"})
+
+    assert (tmp_path / "extension" / "features.parquet").exists()
+    assert result["schema_version"] == "tier1-feature-extension-v1"

@@ -6,8 +6,10 @@ from etf_tricks.tier1.lab import Tier1Lab
 def test_lab_reads_immutable_artifacts_and_produces_oof_handoff(tmp_path) -> None:
     afml = tmp_path / "afml"
     targets = tmp_path / "targets"
+    extension = tmp_path / "extension"
     (afml / "tables").mkdir(parents=True)
     targets.mkdir()
+    extension.mkdir()
     dates = pd.date_range("2024-01-01", periods=24)
     pd.DataFrame(
         {
@@ -28,8 +30,16 @@ def test_lab_reads_immutable_artifacts_and_produces_oof_handoff(tmp_path) -> Non
             "target_status": ["resolved_upper", "resolved_lower"] * 12,
         }
     ).to_parquet(targets / "targets.parquet", index=False)
+    pd.DataFrame(
+        {
+            "etf_id": ["x", "y"] * 12,
+            "bar_id": range(24),
+            "feature_available_at": pd.date_range("2024-01-01 13:30", periods=24, tz="Asia/Taipei"),
+            "f_extension": [1.0, 0.0] * 12,
+        }
+    ).to_parquet(extension / "features.parquet", index=False)
 
-    result = Tier1Lab.from_artifacts(afml, targets).run_oof(["f"], outer_splits=1)
+    result = Tier1Lab.from_artifacts(afml, targets, extension).run_oof(["f", "f_extension"], outer_splits=1)
 
     assert len(result.training_frame) == 24
     assert result.handoff["prediction_kind"].eq("OOF_CALIBRATED").all()
