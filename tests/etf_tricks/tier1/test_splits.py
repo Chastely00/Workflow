@@ -24,3 +24,17 @@ def test_walk_forward_folds_train_only_on_fully_resolved_past_events() -> None:
     assert [(train.tolist(), valid.tolist()) for train, valid in folds] == [([0], [2, 3]), ([0, 1, 2], [4, 5])]
     for train, valid in folds:
         assert (events.iloc[train]["t1"] < events.iloc[valid]["t0"].min()).all()
+
+
+def test_average_uniqueness_weights_overlapping_event_intervals() -> None:
+    events = pd.DataFrame(
+        {
+            "t0": pd.to_datetime(["2024-01-01", "2024-01-02", "2024-01-03"]),
+            "t1": pd.to_datetime(["2024-01-02", "2024-01-03", "2024-01-03"]),
+        }
+    )
+
+    result = splits.average_uniqueness(events)
+
+    # Concurrency is [1, 2, 2].  The event averages are [0.75, 0.5, 0.5].
+    assert result.tolist() == [0.75, 0.5, 0.5]
