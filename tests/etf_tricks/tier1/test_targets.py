@@ -90,7 +90,14 @@ def test_target_uses_next_open_and_proportional_costs() -> None:
     assert row["entry_raw_open"] == pytest.approx(101.0)
     assert row["exit_date"] == pd.Timestamp("2024-01-31")
     assert row["exit_raw_open"] == pytest.approx(104.0)
+    assert row["gross_simple_return"] == pytest.approx(104.0 / 101.0 - 1.0)
+    assert row["buy_cost_rate"] == pytest.approx(0.001)
+    assert row["sell_cost_rate"] == pytest.approx(0.001)
+    assert row["buy_cost_notional"] == pytest.approx(101.0 * 0.001)
+    assert row["sell_cost_notional"] == pytest.approx(104.0 * 0.001)
+    assert row["net_simple_return"] == pytest.approx((104.0 * 0.999) / (101.0 * 1.001) - 1.0)
     assert row["net_log_return"] == pytest.approx(__import__("math").log((104.0 * 0.999) / (101.0 * 1.001)))
+    assert row["cost_policy_id"] == "tier1-proportional-v1"
 
 
 def test_upper_close_trigger_exits_at_following_open() -> None:

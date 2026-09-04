@@ -16,6 +16,7 @@ class Tier1TargetConfig:
     vertical_bars: int = 60
     buy_cost_rate: float = 0.001425
     sell_cost_rate: float = 0.003
+    cost_policy_id: str = "tier1-proportional-v1"
 
     def __post_init__(self) -> None:
         if self.volatility_span <= 0 or self.min_obs <= 0 or self.min_obs > self.volatility_span:
@@ -24,6 +25,8 @@ class Tier1TargetConfig:
             raise ValueError("barrier configuration must be positive")
         if not 0 <= self.buy_cost_rate < 1 or not 0 <= self.sell_cost_rate < 1:
             raise ValueError("cost rates must be in [0, 1)")
+        if not self.cost_policy_id:
+            raise ValueError("cost_policy_id is required")
 
 
 class Tier1TargetBuilder:
@@ -79,7 +82,18 @@ class Tier1TargetBuilder:
             for position, row in indexed.iterrows():
                 if (start is not None and row.bar_end_date < start) or (end is not None and row.bar_end_date > end):
                     continue
-                event = {"event_id": f"{etf_id}-{int(row.bar_id)}", "etf_id": etf_id, "t0_bar_id": int(row.bar_id), "t0_date": row.bar_end_date, "target_volatility": row.target_volatility, "target_status": "unresolved_tail", "y_direction": np.nan, "trigger_type": pd.NA, "trigger_date": pd.NaT, "trigger_available_at": pd.NaT, "entry_date": pd.NaT, "entry_raw_open": np.nan, "exit_date": pd.NaT, "exit_raw_open": np.nan, "label_available_at": pd.NaT, "net_log_return": np.nan}
+                event = {
+                    "event_id": f"{etf_id}-{int(row.bar_id)}", "etf_id": etf_id,
+                    "t0_bar_id": int(row.bar_id), "t0_date": row.bar_end_date,
+                    "target_volatility": row.target_volatility, "target_status": "unresolved_tail",
+                    "y_direction": np.nan, "trigger_type": pd.NA, "trigger_date": pd.NaT,
+                    "trigger_available_at": pd.NaT, "entry_date": pd.NaT, "entry_raw_open": np.nan,
+                    "exit_date": pd.NaT, "exit_raw_open": np.nan, "label_available_at": pd.NaT,
+                    "gross_simple_return": np.nan, "buy_cost_rate": self.config.buy_cost_rate,
+                    "sell_cost_rate": self.config.sell_cost_rate, "buy_cost_notional": np.nan,
+                    "sell_cost_notional": np.nan, "net_simple_return": np.nan,
+                    "net_log_return": np.nan, "cost_policy_id": self.config.cost_policy_id,
+                }
                 if position + self.config.vertical_bars >= len(indexed):
                     output.append(event)
                     continue
@@ -129,8 +143,26 @@ class Tier1TargetBuilder:
                     output.append(event)
                     continue
                 exit_price = float(exit_row.iloc[0].raw_open_nav)
-                net = math.log((exit_price * (1 - self.config.sell_cost_rate)) / (entry_price * (1 + self.config.buy_cost_rate)))
+                gross_simple = exit_price / entry_price - 1.0
+                buy_cost_notional = entry_price * self.config.buy_cost_rate
+                sell_cost_notional = exit_price * self.config.sell_cost_rate
+                net_simple = (
+                    (exit_price * (1 - self.config.sell_cost_rate))
+                    / (entry_price * (1 + self.config.buy_cost_rate))
+                    - 1.0
+                )
+                net = math.log1p(net_simple)
                 trigger_date = pd.Timestamp(trigger.date if trigger_type != "vertical" else trigger.bar_end_date)
-                event.update({"trigger_type": trigger_type, "trigger_date": trigger_date, "trigger_available_at": trigger_available_at, "entry_date": entry.iloc[0].date, "entry_raw_open": entry_price, "exit_date": exit_row.iloc[0].date, "exit_raw_open": exit_price, "label_available_at": pd.Timestamp(exit_row.iloc[0].available_at), "net_log_return": net, "target_status": f"resolved_{trigger_type}", "y_direction": (1 if net > 0 else -1) if label is None else label})
+                event.update({
+                    "trigger_type": trigger_type, "trigger_date": trigger_date,
+                    "trigger_available_at": trigger_available_at, "entry_date": entry.iloc[0].date,
+                    "entry_raw_open": entry_price, "exit_date": exit_row.iloc[0].date,
+                    "exit_raw_open": exit_price,
+                    "label_available_at": pd.Timestamp(exit_row.iloc[0].available_at),
+                    "gross_simple_return": gross_simple, "buy_cost_notional": buy_cost_notional,
+                    "sell_cost_notional": sell_cost_notional, "net_simple_return": net_simple,
+                    "net_log_return": net, "target_status": f"resolved_{trigger_type}",
+                    "y_direction": (1 if net > 0 else -1) if label is None else label,
+                })
                 output.append(event)
         return pd.DataFrame(output)
