@@ -133,6 +133,7 @@ def main() -> int:
             expected_etf_ids=[etf_id], scope_label="ALL_WITHIN_ETF",
         )
         metrics = _record_metrics(summary, etf_id)
+        metrics["warmup_dropped_rows"] = run.warmup_dropped_rows
         report = evaluate_etf_local_gate(
             metrics, etf_id, str(records[etf_id]["trial_id"]),
             float(records[etf_id]["effective_independent_trial_count"]),

@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import json
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 from .model import oof_logistic_predictions
@@ -18,6 +19,7 @@ class Tier1OOFRun:
     predictions: pd.DataFrame
     handoff: pd.DataFrame
     folds: list[tuple]
+    warmup_dropped_rows: int = 0
 
 
 @dataclass(frozen=True)
@@ -169,6 +171,13 @@ class Tier1Lab:
         runs: dict[str, Tier1OOFRun] = {}
         for etf_id, local in frame.groupby("etf_id", sort=True):
             local = local.reset_index(drop=True)
+            availability = local.loc[:, feature_columns].notna().all(axis=1).to_numpy()
+            if not availability.any():
+                raise ValueError(
+                    f"ETF-local feature availability has no complete warm-up endpoint: {etf_id}"
+                )
+            warmup_dropped_rows = int(np.flatnonzero(availability)[0])
+            local = local.iloc[warmup_dropped_rows:].reset_index(drop=True)
             folds = chronological_purged_folds(
                 local[["t0", "t1"]], n_splits=outer_splits
             )
@@ -190,6 +199,7 @@ class Tier1Lab:
                 predictions=predictions,
                 handoff=build_tier1_handoff(local, predictions),
                 folds=folds,
+                warmup_dropped_rows=warmup_dropped_rows,
             )
         if not runs:
             raise ValueError("ETF-local research frame has no ETF partitions")

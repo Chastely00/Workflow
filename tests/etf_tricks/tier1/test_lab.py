@@ -149,3 +149,30 @@ def test_lab_runs_oof_in_isolated_etf_partitions(tmp_path) -> None:
         result.by_etf["a"].predictions.reset_index(drop=True),
         rerun.by_etf["a"].predictions.reset_index(drop=True),
     )
+
+
+def test_etf_local_oof_discards_only_pre_feature_availability_warmup(tmp_path) -> None:
+    afml = tmp_path / "afml"
+    targets = tmp_path / "targets"
+    (afml / "tables").mkdir(parents=True)
+    targets.mkdir()
+    dates = pd.date_range("2024-01-01", periods=20)
+    values = [None] * 4 + list(range(4, 20))
+    (afml / "metadata.json").write_text(json.dumps({"trading_sessions": [str(date.date()) for date in dates]}), encoding="utf-8")
+    pd.DataFrame({
+        "etf_id": ["a"] * 20, "bar_id": range(20),
+        "feature_available_at": dates.tz_localize("Asia/Taipei") + pd.Timedelta(hours=13, minutes=30),
+        "f": values,
+    }).to_parquet(afml / "tables" / "features.parquet", index=False)
+    labels = [-1, 1] * 10
+    pd.DataFrame({
+        "event_id": [f"event-{i}" for i in range(20)], "etf_id": "a", "t0_bar_id": range(20),
+        "t0_date": dates, "exit_date": dates + pd.Timedelta(days=1), "y_direction": labels,
+        "net_log_return": [-0.01 if label == -1 else 0.02 for label in labels],
+        "target_status": ["resolved_lower" if label == -1 else "resolved_upper" for label in labels],
+    }).to_parquet(targets / "targets.parquet", index=False)
+
+    run = Tier1Lab.from_artifacts(afml, targets).run_oof_per_etf(["f"], outer_splits=1).by_etf["a"]
+
+    assert run.warmup_dropped_rows == 4
+    assert run.training_frame["event_id"].iloc[0] == "event-4"
