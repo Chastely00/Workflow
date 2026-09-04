@@ -402,6 +402,30 @@ def test_expected_outputs_are_registry_derived_and_transitive():
     }.issubset(outputs["dividend_policy"])
 
 
+def test_daily_market_state_requires_all_declared_source_families():
+    contracts = load_artifact_contracts(
+        DataAnalystsContext.from_paths(ROOT), _universe_specs()
+    )
+
+    tradability_only = expected_contract_outputs(
+        contracts, {"daily_tradability"}
+    )
+    all_dependencies = expected_contract_outputs(
+        contracts,
+        {
+            "security_master",
+            "trading_calendar",
+            "daily_price_volume",
+            "daily_tradability",
+        },
+    )
+
+    assert "daily_market_state" not in tradability_only["daily_tradability"]
+    assert any(
+        "daily_market_state" in keys for keys in all_dependencies.values()
+    )
+
+
 def test_registry_rejects_unknown_dependency_token():
     payload = _registry_payload()
     corporate = next(

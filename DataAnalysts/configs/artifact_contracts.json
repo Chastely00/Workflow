@@ -29,7 +29,7 @@
         "artifact_id": "daily_market_state", "layer": "derived", "base_path": "canonical/derived/daily_market_state", "file_name": "part.parquet",
         "required_columns": ["date", "ticker", "market_state", "amount_state", "authoritative_traded_value", "source_available_date", "earliest_execution_session", "data_cutoff_at"], "logical_key": ["date", "ticker"], "publication_mode": "partition_upsert",
         "partition_name": "year", "partition_field": "date", "date_field": "date", "availability_field": "source_available_date",
-        "pit_policy": "after_close_next_session", "source_families": ["security_master", "trading_calendar", "daily_price_volume", "daily_tradability"]
+        "pit_policy": "after_close_next_session", "source_families": ["security_master", "trading_calendar", "daily_price_volume", "daily_tradability"], "source_dependency_mode": "all"
       },
     {
       "artifact_id": "daily_chip", "layer": "raw", "base_path": "canonical/raw/daily_chip", "file_name": "part.parquet",

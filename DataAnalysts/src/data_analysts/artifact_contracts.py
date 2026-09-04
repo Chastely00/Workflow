@@ -14,6 +14,7 @@ from data_analysts.paths import DataAnalystsContext
 PublicationMode: TypeAlias = Literal[
     "full_replace", "partition_upsert", "snapshot_by_value"
 ]
+SourceDependencyMode: TypeAlias = Literal["any", "all"]
 RunScope: TypeAlias = Literal["full_history", "bounded_backfill", "daily"]
 
 SUPPORTED_SCHEMA_VERSION = "1.0"
@@ -179,6 +180,7 @@ class ArtifactContract:
     availability_field: str | None
     pit_policy: str
     source_families: tuple[str, ...]
+    source_dependency_mode: SourceDependencyMode = "any"
     allow_empty: bool = False
 
     @property
@@ -353,7 +355,8 @@ def expected_contract_outputs(
 ) -> dict[str, tuple[str, ...]]:
     """Derive each selected family's transitive output obligations."""
     output: dict[str, tuple[str, ...]] = {}
-    for family_id in sorted(set(selected_family_ids)):
+    selected = set(selected_family_ids)
+    for family_id in sorted(selected):
         available = {family_id}
         expected: set[str] = set()
         while True:
@@ -361,7 +364,9 @@ def expected_contract_outputs(
                 contract.contract_key
                 for contract in contracts.values()
                 if contract.contract_key not in expected
-                and available.intersection(contract.source_families)
+                and _dependencies_are_available(
+                    contract, available, selected
+                )
             }
             if not added:
                 break
@@ -371,6 +376,20 @@ def expected_contract_outputs(
                 available.update((contract.contract_key, contract.artifact_id))
         output[family_id] = tuple(sorted(expected))
     return output
+
+
+def _dependencies_are_available(
+    contract: ArtifactContract,
+    available: Collection[str],
+    selected_family_ids: Collection[str],
+) -> bool:
+    if contract.source_dependency_mode == "all":
+        # A multi-source derived artifact may be scheduled only when every
+        # declared raw dependency belongs to this run's explicit intent.  This
+        # prevents a stale, unrelated existing artifact from being treated as
+        # fresh evidence for a derived publication.
+        return set(contract.source_families).issubset(selected_family_ids)
+    return bool(set(available).intersection(contract.source_families))
 
 
 def _validate_dependency_tokens(
@@ -464,6 +483,11 @@ def _parse_contract(item: dict[str, Any]) -> ArtifactContract:
     source_families = _non_empty_string_tuple(
         item["source_families"], f"{artifact_id} source_families"
     )
+    source_dependency_mode = item.get("source_dependency_mode", "any")
+    if source_dependency_mode not in {"any", "all"}:
+        raise ArtifactContractError(
+            f"{artifact_id} source_dependency_mode must be any or all"
+        )
     allow_empty = item.get("allow_empty", False)
     if not isinstance(allow_empty, bool):
         raise ArtifactContractError(f"{artifact_id} allow_empty must be boolean")
@@ -501,6 +525,7 @@ def _parse_contract(item: dict[str, Any]) -> ArtifactContract:
         availability_field=availability_field,
         pit_policy=pit_policy,
         source_families=source_families,
+        source_dependency_mode=source_dependency_mode,
         allow_empty=allow_empty,
     )
 

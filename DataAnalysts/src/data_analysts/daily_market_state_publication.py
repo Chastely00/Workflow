@@ -13,8 +13,9 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from data_analysts.artifacts import atomic_write_text
+from data_analysts.artifact_contracts import RunScope
 from data_analysts.config import RuntimeConfig
-from data_analysts.dataset_publication import PublicationResult
+from data_analysts.dataset_publication import PublicationResult, publish_dataset
 from data_analysts.paths import DataAnalystsContext
 
 
@@ -64,6 +65,7 @@ def publish_daily_market_state(
     build_start: str,
     build_end: str,
     certified_source_start: str,
+    run_scope: RunScope = "full_history",
 ) -> PublicationResult:
     """Publish immutable partitions, then atomically add DMS authority evidence."""
     return publish_daily_market_state_partitions(
@@ -73,6 +75,7 @@ def publish_daily_market_state(
         build_start=build_start,
         build_end=build_end,
         certified_source_start=certified_source_start,
+        run_scope=run_scope,
     )
 
 
@@ -84,11 +87,25 @@ def publish_daily_market_state_partitions(
     build_start: str,
     build_end: str,
     certified_source_start: str,
+    run_scope: RunScope = "full_history",
 ) -> PublicationResult:
-    """Publish bounded DMS partitions without retaining every year in memory."""
-    del config
+    """Publish DMS with the registered partition-upsert transaction protocol.
+
+    The prior bespoke writer replaced the manifest with only the incoming
+    partitions.  A daily or bounded run could therefore erase older DMS years
+    from the active inventory.  Delegate immutable-version handling and merge
+    semantics to the shared registered publisher instead.
+    """
+    contract = config.artifact_contracts["daily_market_state"]
+    rows = _flatten_and_validate_partitions(partitions)
     dependencies = _dependency_evidence(context)
-    result = _publish_arrow_partition_stream(context, partitions, build_start, build_end)
+    result = publish_dataset(
+        context,
+        contract,
+        rows,
+        run_scope,
+        write_schema=_DMS_SCHEMA,
+    )
     manifest = dict(result.manifest)
     inventory = [_inventory_item(context, path) for path in manifest["artifact_paths"]]
     schema_fingerprint = inventory[0]["schema_fingerprint"]
@@ -105,8 +122,8 @@ def publish_daily_market_state_partitions(
             key: value["version"] for key, value in dependencies.items()
         },
         "dependency_certification_fingerprint": _sha256_json(dependencies),
-        "build_start": build_start,
-        "build_end": build_end,
+        "build_start": manifest["date_range"][0],
+        "build_end": manifest["date_range"][1],
         "certified_source_start": certified_source_start,
         "classification_policy_version": "daily_market_state_v3",
         "state_lattice_policy_version": "daily_market_state_lattice_v5",
@@ -118,6 +135,42 @@ def publish_daily_market_state_partitions(
         result.touched_paths, result.total_row_count, result.date_range, manifest_path, manifest,
         result.cleanup_diagnostics,
     )
+
+
+def _flatten_and_validate_partitions(
+    partitions: Iterable[tuple[str | None, list[dict[str, Any]]]],
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    last_key: tuple[str, str] | None = None
+    for declared_year, partition_rows in partitions:
+        if not partition_rows:
+            continue
+        keys = [(str(row["date"]), str(row["ticker"])) for row in partition_rows]
+        if keys != sorted(keys) or any(left == right for left, right in zip(keys, keys[1:])):
+            raise ValueError("daily_market_state rows must be sorted and unique within each partition")
+        years = {day[:4] for day, _ in keys}
+        if len(years) != 1:
+            raise ValueError("daily_market_state stream partition must contain one calendar year")
+        year = years.pop()
+        if declared_year is not None and declared_year != year:
+            raise ValueError("daily_market_state stream partition year does not match row dates")
+        if last_key is not None and keys[0] <= last_key:
+            raise ValueError("daily_market_state rows must be globally sorted and unique")
+        last_key = keys[-1]
+        # The DMS schema intentionally carries optional audit/provenance
+        # fields.  Normalize absent optional fields to null before delegating
+        # to Arrow's fixed-schema writer; mandatory contract columns were
+        # already validated by the registered publisher.
+        rows.extend(
+            {
+                name: row.get(name)
+                for name in _DMS_SCHEMA.names
+            }
+            for row in partition_rows
+        )
+    if not rows:
+        raise ValueError("daily_market_state bounded publication cannot be empty")
+    return rows
 
 
 def _publish_arrow_partitions(

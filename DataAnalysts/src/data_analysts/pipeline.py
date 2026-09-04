@@ -45,6 +45,10 @@ from data_analysts.dataset_publication import (
     migrate_legacy_variant_manifests,
     publish_dataset,
 )
+from data_analysts.daily_market_state import build_daily_market_state_rows
+from data_analysts.daily_market_state_publication import (
+    publish_daily_market_state_partitions,
+)
 from data_analysts.events import (
     build_capital_action_events,
     build_corporate_actions,
@@ -448,6 +452,28 @@ def run_pipeline(
         daily_tradability_rows = load_canonical_rows(
             context, contracts["daily_tradability"]
         )
+        if "daily_market_state" in expected_contract_keys:
+            if not (
+                daily_prices
+                and security_master
+                and trading_calendar_rows
+                and daily_tradability_rows
+            ):
+                raise ArtifactError(
+                    "daily_market_state requires non-empty canonical security_master, "
+                    "trading_calendar, daily_price_volume, and daily_tradability"
+                )
+            _publish_daily_market_state(
+                context,
+                config,
+                daily_prices=daily_prices,
+                security_master=security_master,
+                trading_calendar_rows=trading_calendar_rows,
+                daily_tradability_rows=daily_tradability_rows,
+                run_scope=effective_run_scope,
+                scope_start=start_date,
+                scope_end=end_date,
+            )
         security_panel_history: list[dict[str, Any]] = []
         history_rebuild_requested = (
             "security_panel_history" in expected_contract_keys
@@ -829,6 +855,131 @@ def _manifest_hashes_by_contract(
             else None
         )
     return output
+
+
+def _publish_daily_market_state(
+    context: DataAnalystsContext,
+    config: RuntimeConfig,
+    *,
+    daily_prices: list[dict[str, Any]],
+    security_master: list[dict[str, Any]],
+    trading_calendar_rows: list[dict[str, Any]],
+    daily_tradability_rows: list[dict[str, Any]],
+    run_scope: RunScope,
+    scope_start: str | None,
+    scope_end: str | None,
+) -> None:
+    """Build DMS only after all four freshly declared dependencies exist."""
+    dependency_ids = (
+        "security_master",
+        "trading_calendar",
+        "daily_price_volume",
+        "daily_tradability",
+    )
+    manifests = {
+        artifact_id: _ready_manifest_payload(context, artifact_id)
+        for artifact_id in dependency_ids
+    }
+    hashes = _manifest_hashes_by_contract(context, config.artifact_contracts)
+    dependency_hashes = {
+        artifact_id: hashes[artifact_id]
+        for artifact_id in dependency_ids
+    }
+    if any(value is None for value in dependency_hashes.values()):
+        raise ArtifactError("daily_market_state dependency manifest hash is missing")
+    # security_master is a snapshot without a date range.  It contributes
+    # lifecycle identity and cutoff provenance, but cannot constrain the
+    # daily overlap interval.
+    build_start, build_end = _common_daily_coverage(
+        {
+            artifact_id: manifests[artifact_id]
+            for artifact_id in (
+                "trading_calendar",
+                "daily_price_volume",
+                "daily_tradability",
+            )
+        }
+    )
+    data_cutoff_at = max_data_cutoff(
+        *(manifest.get("data_cutoff_at") for manifest in manifests.values())
+    )
+    if data_cutoff_at is None:
+        raise ArtifactError("daily_market_state dependency manifests lack data_cutoff_at")
+    processing_start = build_start if run_scope == "full_history" else (scope_start or build_start)
+    processing_end = build_end if run_scope == "full_history" else (scope_end or build_end)
+    processing_start = max(build_start, processing_start)
+    processing_end = min(build_end, processing_end)
+    if processing_start > processing_end:
+        raise ArtifactError("daily_market_state requested scope lies outside dependency coverage")
+    rows = build_daily_market_state_rows(
+        trading_calendar_rows=trading_calendar_rows,
+        price_rows=daily_prices,
+        security_master_rows=security_master,
+        attribute_rows=daily_tradability_rows,
+        manifest_hashes={
+            artifact_id: str(dependency_hashes[artifact_id])
+            for artifact_id in dependency_ids
+        },
+        build_start=build_start,
+        build_end=build_end,
+        data_cutoff_at=data_cutoff_at,
+        certified_source_start=build_start,
+        scope_start=processing_start,
+        scope_end=processing_end,
+    )
+    if not rows:
+        raise ArtifactError("daily_market_state builder returned no rows")
+    by_year: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        by_year[str(row["date"])[:4]].append(row)
+    publish_daily_market_state_partitions(
+        context,
+        config,
+        tuple((year, sorted(year_rows, key=lambda row: (str(row["date"]), str(row["ticker"])))) for year, year_rows in sorted(by_year.items())),
+        build_start=processing_start,
+        build_end=processing_end,
+        certified_source_start=build_start,
+        run_scope=run_scope,
+    )
+
+
+def _ready_manifest_payload(
+    context: DataAnalystsContext, artifact_id: str
+) -> dict[str, Any]:
+    path = context.store_path("manifests", f"{artifact_id}.json")
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ArtifactError(
+            f"daily_market_state cannot read dependency manifest {artifact_id}: {exc}"
+        ) from exc
+    if not isinstance(payload, dict) or payload.get("status") != "ready":
+        raise ArtifactError(
+            f"daily_market_state dependency manifest is not ready: {artifact_id}"
+        )
+    return payload
+
+
+def _common_daily_coverage(
+    manifests: Mapping[str, Mapping[str, Any]],
+) -> tuple[str, str]:
+    ranges: list[tuple[str, str]] = []
+    for artifact_id, manifest in manifests.items():
+        date_range = manifest.get("date_range")
+        if (
+            not isinstance(date_range, list)
+            or len(date_range) != 2
+            or not all(isinstance(value, str) and value for value in date_range)
+        ):
+            raise ArtifactError(
+                f"daily_market_state dependency lacks a valid date_range: {artifact_id}"
+            )
+        ranges.append((date_range[0], date_range[1]))
+    start = max(value[0] for value in ranges)
+    end = min(value[1] for value in ranges)
+    if start > end:
+        raise ArtifactError("daily_market_state dependency date ranges do not overlap")
+    return start, end
 
 
 def _publish_raw_family_outputs(
