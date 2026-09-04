@@ -23,9 +23,11 @@ _FORBIDDEN_FUTURE_COLUMNS = {
 def build_stateful_transitions(oof: pd.DataFrame, *, entry_score: float, exit_score: float) -> pd.DataFrame:
     """Aggregate calibrated OOF probabilities into non-overlapping flat/long transitions.
 
-    Every completed Dollar bar contributes ``p1 - 0.5`` evidence.  Position
-    changes are deliberately sparse: evidence is reset only after a real state
-    transition, so a long position cannot open repeatedly.  This function
+    Every completed Dollar bar contributes ``p1 - 0.5`` evidence.  A one-sided
+    CUSUM prevents stale contrary evidence from trapping a future state: while
+    flat only positive evidence accumulates; while long only negative evidence
+    accumulates. Position changes are deliberately sparse and reset evidence,
+    so a long position cannot open repeatedly. This function
     accepts no realized labels, horizons, prices, or outcomes.
     """
     if missing := _REQUIRED.difference(oof.columns):
@@ -61,7 +63,8 @@ def build_stateful_transitions(oof: pd.DataFrame, *, entry_score: float, exit_sc
     score = 0.0
     for row, probability in zip(oof.itertuples(index=False), p1, strict=True):
         before = score
-        score += float(probability) - 0.5
+        delta = float(probability) - 0.5
+        score = max(0.0, score + delta) if state == "flat" else min(0.0, score + delta)
         transition: str | None = None
         state_before = state
         if state == "flat" and (score > entry_score or np.isclose(score, entry_score, atol=1e-12, rtol=0.0)):
@@ -79,7 +82,7 @@ def build_stateful_transitions(oof: pd.DataFrame, *, entry_score: float, exit_sc
                 "t0_bar_id": row.t0_bar_id,
                 "decision_available_at": row.decision_available_at,
                 "p1": float(probability),
-                "signal_delta": float(probability) - 0.5,
+                "signal_delta": delta,
                 "evidence_score_before": before,
                 "evidence_score_after": score,
                 "state_before": state_before,

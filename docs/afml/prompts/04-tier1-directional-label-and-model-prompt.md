@@ -50,7 +50,7 @@ The authoritative path is daily-close-only. One daily close cannot double-touch,
 
 ### 3.2 Execution-policy hand-off and barrier diagnostics
 
-Every completed Dollar bar may emit OOF `p1`, but this is evidence rather than an order. Convert ETF-local OOF/walk-forward probabilities through a pre-registered stateful aggregation policy into one non-overlapping `flat/long` position ledger. While long, later candidates update evidence but cannot create another entry. Charge execution cost only on actual `flat -> long` and `long -> flat` transitions; the event-level proportional-cost target remains a directional-label baseline and is never strategy PnL.
+Every completed Dollar bar may emit OOF `p1`, but this is evidence rather than an order. Convert ETF-local OOF/walk-forward probabilities through a pre-registered one-sided CUSUM stateful aggregation policy into one non-overlapping `flat/long` position ledger: while flat accumulate only positive `p1-0.5`; while long accumulate only negative `p1-0.5`; reset contrary evidence to zero and reset after each transition. While long, later candidates update evidence but cannot create another entry. Charge execution cost only on actual `flat -> long` and `long -> flat` transitions; the event-level proportional-cost target remains a directional-label baseline and is never strategy PnL.
 
 Persist diagnostics separately for all mature events and selected candidates: first-touch type, time-to-touch bars/days, gross/net return, cost, MFE, MAE, and post-profit-take continuation to the original 60-bar horizon. Diagnose excessive/too-near stops, too-near profits, overly wide barriers, and volatility mismatch. Pre-register any barrier alternatives; a diagnostic alone is not a trial, while an adopted alternative is.
 

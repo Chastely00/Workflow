@@ -54,7 +54,7 @@ def summarize_barriers(events: pd.DataFrame, candidates: pd.DataFrame, paths: pd
         raise ValueError(f"paths missing columns: {sorted(missing)}")
     if events.empty or paths.empty:
         raise ValueError("barrier diagnostics require events and paths")
-    if events["event_id"].duplicated().any() or paths.duplicated(["event_id", "bar_id"]).any():
+    if events["event_id"].duplicated().any() or paths.duplicated(["event_id", "date"]).any():
         raise ValueError("barrier diagnostic keys must be unique")
     if ~events["target_status"].astype(str).str.startswith("resolved").all():
         raise ValueError("barrier diagnostics reject unresolved events")

@@ -44,3 +44,10 @@ def test_policy_is_etf_local_and_requires_strict_bar_order() -> None:
     out_of_order = _oof([0.6, 0.7]).iloc[[1, 0]].reset_index(drop=True)
     with pytest.raises(ValueError, match="strictly increasing"):
         build_stateful_transitions(out_of_order, entry_score=0.1, exit_score=-0.1)
+
+
+def test_policy_uses_one_sided_cusum_so_stale_contrary_evidence_cannot_trap_state() -> None:
+    result = build_stateful_transitions(_oof([0.3, 0.7, 0.7, 0.6, 0.4]), entry_score=0.2, exit_score=-0.1)
+
+    assert result["transition"].dropna().tolist() == ["flat_to_long", "long_to_flat"]
+    assert result.loc[0, "evidence_score_after"] == 0.0
