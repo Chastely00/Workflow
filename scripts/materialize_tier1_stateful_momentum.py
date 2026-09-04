@@ -15,7 +15,7 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from etf_tricks.governance.trials import TrialRegistry
-from etf_tricks.tier1.barrier_diagnostics import summarize_barriers
+from etf_tricks.tier1.barrier_diagnostics import build_barrier_path_inputs, summarize_barriers
 from etf_tricks.tier1.market_snapshot import ExecutionMarketSnapshot
 from etf_tricks.tier1.stateful_ledger import materialize_etf_ledger
 from etf_tricks.tier1.stateful_policy import build_stateful_transitions
@@ -59,26 +59,6 @@ def _args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _barrier_inputs(targets: pd.DataFrame, membership: pd.DataFrame, event_ids: pd.Series, etf_id: str) -> tuple[pd.DataFrame, pd.DataFrame]:
-    selected = targets.loc[targets["event_id"].isin(event_ids)].copy()
-    selected = selected.loc[selected["target_status"].astype(str).str.startswith("resolved_")].copy()
-    if selected.empty:
-        raise ValueError("Momentum OOF has no mature target rows for barrier diagnostics")
-    members = membership.loc[membership["etf_id"].eq(etf_id), ["bar_id", "date", "nav"]].copy()
-    members["date"] = pd.to_datetime(members["date"]).dt.normalize()
-    selected["trigger_date"] = pd.to_datetime(selected["trigger_date"]).dt.normalize()
-    trigger_bar = members.rename(columns={"bar_id": "first_touch_bar_id", "date": "trigger_date"})[["trigger_date", "first_touch_bar_id"]].drop_duplicates()
-    events = selected.merge(trigger_bar, on="trigger_date", how="left", validate="many_to_one")
-    if events["first_touch_bar_id"].isna().any():
-        raise ValueError("cannot map a resolved target touch date to an immutable Dollar bar")
-    events = events.rename(columns={"t0_date": "t0_date", "entry_raw_open": "entry_price", "trigger_type": "first_touch_type"})[
-        ["event_id", "etf_id", "t0_bar_id", "t0_date", "entry_price", "first_touch_type", "first_touch_bar_id", "target_status"]
-    ]
-    paths = selected[["event_id", "t0_bar_id"]].merge(members, how="cross")
-    paths = paths.loc[(paths["bar_id"] > paths["t0_bar_id"]) & (paths["bar_id"] <= paths["t0_bar_id"] + 60), ["event_id", "bar_id", "date", "nav"]]
-    return events, paths.rename(columns={"nav": "close_nav"})
-
-
 def main() -> int:
     args = _args()
     output = Path(args.output_root)
@@ -119,7 +99,7 @@ def main() -> int:
     ].reset_index(drop=True)
     targets = pd.read_parquet(roots["target"] / "targets.parquet")
     membership = pd.read_parquet(roots["afml"] / "tables" / "bar_daily_membership.parquet")
-    events, paths = _barrier_inputs(targets, membership, oof["event_id"], args.etf_id)
+    events, paths = build_barrier_path_inputs(targets, membership, oof["event_id"], args.etf_id)
     barrier = summarize_barriers(events, oof[["event_id", "candidate_indicator"]], paths)
     output.mkdir(parents=True)
     for name, frame in {"transitions": transitions, "daily_nav": ledger_daily_nav, "trades": ledger_tables.trades, "barrier_diagnostics": barrier}.items():

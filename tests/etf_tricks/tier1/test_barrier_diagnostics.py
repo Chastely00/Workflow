@@ -46,3 +46,11 @@ def test_barrier_summary_rejects_unresolved_events() -> None:
     events.loc[0, "target_status"] = "unresolved_tail"
     with pytest.raises(ValueError, match="unresolved"):
         summarize_barriers(events, pd.DataFrame({"event_id": ["e1"]}), _paths())
+
+
+def test_barrier_summary_filters_candidate_indicator_false_rows() -> None:
+    candidates = pd.DataFrame({"event_id": ["e1", "e2"], "candidate_indicator": [True, False]})
+
+    result = summarize_barriers(_events(), candidates, _paths())
+
+    assert result.loc[result["scope"].eq("CANDIDATES"), "event_count"].item() == 1

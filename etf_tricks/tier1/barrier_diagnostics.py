@@ -6,6 +6,40 @@ import numpy as np
 import pandas as pd
 
 
+def build_barrier_path_inputs(
+    targets: pd.DataFrame,
+    membership: pd.DataFrame,
+    event_ids: pd.Series,
+    etf_id: str,
+    *,
+    vertical_bars: int = 60,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Reconstruct outcome-only daily paths for resolved OOF events."""
+    required_targets = {"event_id", "etf_id", "t0_bar_id", "t0_date", "entry_raw_open", "trigger_type", "trigger_date", "target_status"}
+    required_membership = {"etf_id", "bar_id", "date", "nav"}
+    if missing := required_targets.difference(targets.columns):
+        raise ValueError(f"targets missing columns: {sorted(missing)}")
+    if missing := required_membership.difference(membership.columns):
+        raise ValueError(f"membership missing columns: {sorted(missing)}")
+    selected = targets.loc[targets["event_id"].isin(event_ids) & targets["etf_id"].eq(etf_id)].copy()
+    selected = selected.loc[selected["target_status"].astype(str).str.startswith("resolved_")].copy()
+    if selected.empty:
+        raise ValueError(f"{etf_id} OOF has no mature target rows for barrier diagnostics")
+    members = membership.loc[membership["etf_id"].eq(etf_id), ["bar_id", "date", "nav"]].copy()
+    members["date"] = pd.to_datetime(members["date"]).dt.normalize()
+    selected["trigger_date"] = pd.to_datetime(selected["trigger_date"]).dt.normalize()
+    trigger_bar = members.rename(columns={"bar_id": "first_touch_bar_id", "date": "trigger_date"})[["trigger_date", "first_touch_bar_id"]].drop_duplicates()
+    events = selected.merge(trigger_bar, on="trigger_date", how="left", validate="many_to_one")
+    if events["first_touch_bar_id"].isna().any():
+        raise ValueError("cannot map a resolved target touch date to an immutable Dollar bar")
+    events = events.rename(columns={"entry_raw_open": "entry_price", "trigger_type": "first_touch_type"})[
+        ["event_id", "etf_id", "t0_bar_id", "t0_date", "entry_price", "first_touch_type", "first_touch_bar_id", "target_status"]
+    ]
+    paths = selected[["event_id", "t0_bar_id"]].merge(members, how="cross")
+    paths = paths.loc[(paths["bar_id"] > paths["t0_bar_id"]) & (paths["bar_id"] <= paths["t0_bar_id"] + vertical_bars), ["event_id", "bar_id", "date", "nav"]]
+    return events, paths.rename(columns={"nav": "close_nav"})
+
+
 def _summarize(scope: str, events: pd.DataFrame, paths: pd.DataFrame) -> dict[str, object]:
     event_ids = set(events["event_id"])
     path = paths.loc[paths["event_id"].isin(event_ids)].copy()
@@ -62,7 +96,12 @@ def summarize_barriers(events: pd.DataFrame, candidates: pd.DataFrame, paths: pd
         raise ValueError("resolved events require positive entry price and touch bar")
     if ~events["first_touch_type"].isin({"upper", "lower", "vertical"}).all():
         raise ValueError("resolved events require supported first_touch_type")
-    candidate_ids = candidates["event_id"].dropna().unique()
+    candidate_rows = candidates
+    if "candidate_indicator" in candidates.columns:
+        if candidates["candidate_indicator"].isna().any():
+            raise ValueError("candidate_indicator must be explicit when supplied")
+        candidate_rows = candidates.loc[candidates["candidate_indicator"].astype(bool)]
+    candidate_ids = candidate_rows["event_id"].dropna().unique()
     unknown = set(candidate_ids).difference(events["event_id"])
     if unknown:
         raise ValueError(f"candidates reference unknown events: {sorted(unknown)}")
