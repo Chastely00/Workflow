@@ -1,4 +1,5 @@
 import pandas as pd
+import pytest
 import json
 from pathlib import Path
 
@@ -35,6 +36,33 @@ def test_snapshot_uses_previous_holdings_and_raw_open() -> None:
     assert row["date"] == pd.Timestamp("2024-01-03")
     assert row["raw_open_nav"] == 1080.0
     assert row["is_legal_execution"]
+
+
+def test_snapshot_reuses_one_prior_holding_date_for_multiple_market_dates() -> None:
+    holdings = pd.DataFrame(
+        {
+            "date": [pd.Timestamp("2024-01-02")],
+            "etf_id": ["x"],
+            "ticker": ["A"],
+            "actual_weight": [1.0],
+        }
+    )
+    prices = pd.DataFrame(
+        {
+            "date": pd.to_datetime(["2024-01-03", "2024-01-04"]),
+            "ticker": ["A", "A"],
+            "open": [110.0, 120.0],
+            "previous_close": [100.0, 110.0],
+            "source_available_at": pd.to_datetime(["2024-01-03 13:30+08:00", "2024-01-04 13:30+08:00"]),
+            "is_legal_execution": [True, True],
+        }
+    )
+    nav = pd.DataFrame({"date": [pd.Timestamp("2024-01-02")], "etf_id": ["x"], "nav": [1000.0]})
+
+    result = ExecutionMarketSnapshot.from_frames(holdings, prices, nav)
+
+    assert result["date"].tolist() == [pd.Timestamp("2024-01-03"), pd.Timestamp("2024-01-04")]
+    assert result["raw_open_nav"].tolist() == pytest.approx([1100.0, 1000.0 * 120.0 / 110.0])
 
 
 def test_snapshot_fails_closed_when_a_constituent_is_not_executable() -> None:

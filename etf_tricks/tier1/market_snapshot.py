@@ -134,7 +134,9 @@ class ExecutionMarketSnapshot:
             h.rename(columns={"date": "holding_as_of"}),
             on=["etf_id", "holding_as_of"],
             how="left",
-            validate="one_to_many",
+            # One held date is intentionally reused by multiple future market
+            # dates, and each held date carries multiple constituents.
+            validate="many_to_many",
         ).merge(
             p,
             on=["date", "ticker"],
