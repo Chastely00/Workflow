@@ -1,7 +1,9 @@
 import json
 from pathlib import Path
 
-from data_analysts.config import load_runtime_config
+import pytest
+
+from data_analysts.config import ConfigError, _validate_families, load_runtime_config
 from data_analysts.paths import DataAnalystsContext
 
 
@@ -67,3 +69,18 @@ def test_runtime_config_loads_with_raw_family_profiles():
     assert "daily_tradability" in config.family_ids
     assert "financial_statement_raw" in config.family_ids
     assert "taiwan_index_futures_near_month" in config.family_ids
+
+
+def test_unknown_data_cutoff_policy_is_rejected():
+    with pytest.raises(ConfigError, match="unsupported data_cutoff_policy"):
+        _validate_families(
+            {"families": [{
+                "family_id": "daily_chip",
+                "enabled": True,
+                "connection": "local",
+                "source_profile": "large_daily_panel",
+                "primary_key": ["date", "ticker"],
+                "data_cutoff_policy": "silently_accept_epoch",
+            }]},
+            {"local": {}},
+        )

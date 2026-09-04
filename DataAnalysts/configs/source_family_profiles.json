@@ -173,6 +173,7 @@
       "date_fields": {
         "source_date": "mdate"
       },
+      "data_cutoff_policy": "extraction_completed_fallback",
       "availability": {
         "type": "source_available_date",
         "field": "mdate"

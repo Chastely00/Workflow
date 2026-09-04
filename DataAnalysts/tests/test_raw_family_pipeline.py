@@ -8,7 +8,7 @@ import pytest
 
 from data_analysts.artifacts import ArtifactPublisher
 from data_analysts.config import load_runtime_config
-from data_analysts.extract import ExtractError
+from data_analysts.extract import ExtractError, extract_family_rows_from_database
 from data_analysts.paths import DataAnalystsContext
 import data_analysts.pipeline as pipeline_module
 from data_analysts.pipeline import run_pipeline
@@ -42,6 +42,35 @@ class FakeDatabase:
 
     def list_collection_names(self):
         return list(self.collections)
+
+
+def test_daily_chip_mongo_extraction_replaces_epoch_cutoff_with_extraction_snapshot():
+    family = {
+        "family_id": "daily_chip",
+        "collection_pattern": "{ticker}",
+        "source_profile": "large_daily_panel",
+        "primary_key": ["date", "ticker"],
+        "date_fields": {"source_date": "mdate"},
+        "data_cutoff_policy": "extraction_completed_fallback",
+    }
+    database = FakeDatabase({
+        "2330": FakeCollection([{
+            "coid": "2330", "mdate": "2024-01-02",
+            "data_cutoff_at": "1970-01-01T00:00:00Z",
+        }]),
+    })
+
+    rows = extract_family_rows_from_database(
+        database,
+        family,
+        start_date="2024-01-02",
+        end_date="2024-01-02",
+        run_scope="bounded_backfill",
+        extraction_completed_at="2026-09-04T01:23:45Z",
+    )
+
+    assert rows[0]["data_cutoff_at"] == "2026-09-04T01:23:45Z"
+    assert rows[0]["data_cutoff_origin"] == "extraction_completed_fallback"
 
 
 def _write_configs(root: Path) -> None:

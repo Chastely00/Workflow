@@ -71,6 +71,7 @@ large_daily_panel
 - PIT table 必須定義 availability rule。
 - large daily panel 必須有 bounded query rule。
 - unknown `source_profile` 必須 blocked。
+- `data_cutoff_policy` 省略時為 `source_required`，要求來源列具有非 epoch 的 `data_cutoff_at`；只有明確設為 `extraction_completed_fallback` 的 family 才可將缺失或 epoch cutoff 替換為本次 Mongo extraction 完成時間，並必須輸出 `data_cutoff_origin=extraction_completed_fallback`。此欄位是 source snapshot provenance，不是 PIT availability；PIT selection 仍只依該 family 的 availability rule。
 
 ## `universe_specs.json`
 

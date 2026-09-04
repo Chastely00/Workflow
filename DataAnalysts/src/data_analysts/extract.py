@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 import hashlib
 import json
 import os
@@ -56,6 +56,7 @@ def extract_family_rows_from_database(
     start_date: str | None = None,
     end_date: str | None = None,
     run_scope: RunScope = "bounded_backfill",
+    extraction_completed_at: str | None = None,
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for collection_name in resolve_collection_names(database, family):
@@ -75,7 +76,35 @@ def extract_family_rows_from_database(
                 _stable_source_row_id(collection_name, row, family),
             )
             rows.append(row)
+    if family.get("data_cutoff_policy") == "extraction_completed_fallback":
+        cutoff = _extraction_completed_at(extraction_completed_at)
+        for row in rows:
+            if not _is_real_cutoff(row.get("data_cutoff_at")):
+                row["data_cutoff_at"] = cutoff
+                row["data_cutoff_origin"] = "extraction_completed_fallback"
     return rows
+
+
+def _extraction_completed_at(value: str | None) -> str:
+    if value is None:
+        return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace(
+            "+00:00", "Z"
+        )
+    if not _is_real_cutoff(value):
+        raise ExtractError(f"invalid extraction_completed_at: {value!r}")
+    return value
+
+
+def _is_real_cutoff(value: Any) -> bool:
+    if not isinstance(value, str) or ("T" not in value and " " not in value):
+        return False
+    try:
+        parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc).timestamp() != 0.0
 
 
 def resolve_collection_names(database: DatabaseLike, family: dict[str, Any]) -> list[str]:

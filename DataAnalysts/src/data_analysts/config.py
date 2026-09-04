@@ -21,6 +21,7 @@ from data_analysts.source_catalog import (
 
 SUPPORTED_SCHEMA_VERSION = "1.0"
 SUPPORTED_SOURCE_PROFILES = {"small_snapshot", "medium_pit_table", "large_daily_panel"}
+SUPPORTED_DATA_CUTOFF_POLICIES = {"source_required", "extraction_completed_fallback"}
 SECURITY_PANEL_FIELDS = {
     "as_of_date",
     "effective_date",
@@ -181,6 +182,12 @@ def _validate_families(payload: dict[str, Any], connections: dict[str, Any]) -> 
         source_profile = family.get("source_profile")
         if source_profile not in SUPPORTED_SOURCE_PROFILES:
             raise ConfigError(f"unsupported source_profile for {family_id}: {source_profile}")
+
+        data_cutoff_policy = family.get("data_cutoff_policy", "source_required")
+        if data_cutoff_policy not in SUPPORTED_DATA_CUTOFF_POLICIES:
+            raise ConfigError(
+                f"unsupported data_cutoff_policy for {family_id}: {data_cutoff_policy}"
+            )
 
         connection = family.get("connection")
         if connection not in connections:
