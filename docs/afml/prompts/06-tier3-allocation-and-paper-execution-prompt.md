@@ -20,9 +20,9 @@ HRP is an allocation overlay, not a required AFML meta-label component. Non-sync
 
 ## 3. Execution ledger
 
-Use the shared allocation/execution engine only. Entry and every actual exit use constituent raw OPEN on the next legal executable session. Compute integer shares, commission, sale tax, one-NTD minimum commission, cash feasibility, residual cash, delayed/rejected orders, forced exits, and verified corporate actions. Do not assume fills during suspension, price absence, or unverified corporate-action transitions.
+Use the shared allocation/execution engine only. Entry and every actual exit use constituent raw OPEN on the next legal executable session. Compute integer shares, commission, sale tax, one-NTD minimum commission, cash feasibility, residual cash, delayed/rejected orders, forced exits, and verified corporate actions. Each submitted constituent order must contain at least one whole share; do not net fractional share intent across unrelated tickers or erase a sub-one-share residual. Apply commission/tax and NTD rounding to each actual constituent ticket, including every rolling-rebalance slice, rather than once to an ETF-level theoretical notional. Do not assume fills during suspension, price absence, limit-state/non-executable market conditions, delisting, or unverified corporate-action transitions.
 
-Persist a reconciled paper ledger: decision time, candidate/acceptance scores, policy, allocated NTD, target basket, order lifecycle, fills, costs, cash, holdings, daily NAV, gross/net PnL, exposure, HHI, turnover, active ETF count, and label-versus-execution gap. The ledger is the only strategy-level PnL source.
+Persist a reconciled paper ledger: decision time, candidate/acceptance scores, policy, allocated NTD, target basket, order lifecycle, fills, costs, cash, holdings, daily NAV, gross/net PnL, exposure, HHI, turnover, active ETF count, and label-versus-execution gap. Split the gap into price/timing, minimum-commission/rounding, residual-cash, and execution-feasibility components where each is measurable. The ledger is the only strategy-level PnL source.
 
 ## 4. Required evidence
 

@@ -24,7 +24,9 @@ Do not select `close_path_open_nav`, `close_path_high_nav`, `close_path_low_nav`
 
 Use each ETF’s past-only 60-bar EWMA log-return volatility, at least 20 valid observations. Defaults are configurable: `pt_mult=2`, `sl_mult=2`, `vertical_bars=60`.
 
-The Tier 1 target uses exactly these declared proportional frictions: `buy_cost_rate=0.001425` and `sell_cost_rate=0.003`. They are rate costs for this capital-neutral research target, not the one-NTD minimum commission. Minimum commissions, integer shares, residual cash, and exact external basket costs belong to `08`, because they cannot be known before allocation without circularity. Do not silently add a second sell-side commission rate to `sell_cost_rate`; any change requires a new registered configuration and trial.
+The Tier 1 target uses exactly these declared minimum proportional frictions: `buy_cost_rate=0.001425` and `sell_cost_rate=0.003`. Treat the pair as the fixed, all-in research-label assumption: enter with `entry_price * (1 + buy_cost_rate)` and exit with `exit_price * (1 - sell_cost_rate)`. Do not reinterpret `sell_cost_rate` as a tax component and silently add a second sell-side commission rate; any such economic-policy change requires a new registered configuration and trial.
+
+These rates are deliberately not a substitute for the constituent paper ledger. Tier 1 is capital-neutral and cannot know order fragmentation or allocated capital. Minimum one-NTD commission, integer-only shares (at least one share per submitted order), residual cash, per-ticket rounding, rolling-rebalance slices, broker-specific commission discounts, delayed/rejected orders, and exact external basket costs belong to `08`. The ledger must apply its declared policy per constituent order and persist `label_vs_execution_cost_gap`; it must not overwrite the Tier 1 target or make its cost model look identical to the research label.
 
 ```text
 r_net = log(exit_value_after_rate_costs / entry_value_including_rate_costs)
@@ -32,9 +34,9 @@ upper: r_net >= +pt_mult * sigma_t0
 lower: r_net <= -sl_mult * sigma_t0
 ```
 
-Use daily-close path only for horizontal barrier detection. Entry is the next legal-session raw OPEN, not the signal close. A horizontal trigger is known after daily close; actual paper exit occurs at the next legal raw OPEN. Persist both the mark-to-market trigger and later execution facts; do not rewrite the label because of an adverse opening gap.
+Use daily-close path only for horizontal barrier detection. Entry is the next legal-session raw OPEN, not the signal close. A horizontal trigger is known after daily close; actual paper exit occurs at the next legal raw OPEN. Entry, exit, cost, and fill checks use original raw prices only: never adjusted prices, FFD values, or reconstructed ETF OHLC. Persist both the mark-to-market trigger and later execution facts; do not rewrite the label because of an adverse opening gap.
 
-At vertical horizon, label by actual executable net return. Events without full horizon, valid volatility, legal path, or source evidence stay unresolved and are excluded.
+At vertical horizon, label by actual executable net return. Events without full horizon, valid volatility, legal path, or source evidence stay unresolved and are excluded. A missing/zero/non-positive raw price, suspension, delisting, or non-executable market state is not a synthetic zero-cost fill. Retain the reason and the pending/forced-exit lifecycle for the later ledger instead of fabricating a price.
 
 ### 3.1 Barrier observation policy
 
