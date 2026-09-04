@@ -87,6 +87,7 @@ def verify_runtime(
 ) -> dict[str, Any]:
     checks: list[dict[str, Any]] = []
     manifests = load_manifests(context)
+    scoped_manifests = _manifests_for_contract_scope(manifests, audit_contract_keys)
     metrics = _verification_metrics(context, manifests)
     metadata_exists = context.store_path("metadata", "data_store_manifest.json").exists()
 
@@ -208,7 +209,7 @@ def verify_runtime(
 
     # Validate manifest-local contracts first so the blocked step identifies
     # the semantic defect rather than a downstream inventory symptom.
-    for manifest in manifests:
+    for manifest in scoped_manifests:
         path_error = _check_manifest_paths(context, manifest)
         if path_error:
             result = _blocked(
@@ -288,8 +289,12 @@ def verify_runtime(
             _write_verification_result(context, result)
             return result
 
-    store_audit = audit_store(
-        context, config.artifact_contracts, contract_keys=audit_contract_keys
+    store_audit = (
+        audit_store(context, config.artifact_contracts)
+        if audit_contract_keys is None
+        else audit_store(
+            context, config.artifact_contracts, contract_keys=audit_contract_keys
+        )
     )
     metrics.update(store_audit["metrics"])
     checks.append(
@@ -362,7 +367,7 @@ def verify_runtime(
         _write_verification_result(context, result)
         return result
 
-    for manifest in manifests:
+    for manifest in scoped_manifests:
         path_error = _check_manifest_paths(context, manifest)
         if path_error:
             result = _blocked(
@@ -492,6 +497,30 @@ def verify_runtime(
         result["run_attestation"] = pipeline_state.get("run_attestation")
     _write_verification_result(context, result)
     return result
+
+
+def _manifests_for_contract_scope(
+    manifests: list[dict[str, Any]],
+    audit_contract_keys: set[str] | None,
+) -> list[dict[str, Any]]:
+    """Select manifest-local semantic checks for a transactional output scope.
+
+    A formal standalone verification has no scope and remains a full-store
+    verification.  A producer transaction, however, has already declared the
+    exact contracts it published.  It must not be rejected by an unrelated
+    legacy artifact's semantic policy (for example, adjusted-price evidence)
+    while the declared contracts still go through their complete local checks
+    and the inventory audit below.
+    """
+    if audit_contract_keys is None:
+        return manifests
+    requested = {str(key) for key in audit_contract_keys}
+    return [
+        manifest
+        for manifest in manifests
+        if str(manifest.get("contract_key", manifest.get("artifact_id"))) in requested
+        or str(manifest.get("artifact_id")) in requested
+    ]
 
 
 def _validate_run_attestation(

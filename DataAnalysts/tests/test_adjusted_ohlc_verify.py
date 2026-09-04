@@ -205,6 +205,65 @@ def test_verify_blocks_missing_formal_adjusted_ohlc_evidence(tmp_path, monkeypat
     assert result["blocked_step"] == "adjusted_ohlc"
 
 
+def test_scoped_verify_does_not_apply_unrelated_adjusted_ohlc_gate(
+    tmp_path, monkeypatch
+):
+    """A transactional producer must validate only its declared output scope.
+
+    ``daily_price_volume`` is deliberately malformed here.  It is an existing
+    unrelated artifact, while the requested financial contract is valid enough
+    for the mocked inventory check.  A full standalone verification still must
+    inspect daily prices; this scoped producer verification must not.
+    """
+    daily_manifest = _manifest()
+    daily_manifest.pop("adjustment_policy_id")
+    financial_manifest = {
+        "artifact_id": "financial_statement_raw",
+        "contract_key": "financial_statement_raw",
+        "schema_version": "1.0",
+        "status": "ready",
+        "artifact_paths": ["canonical/raw/financial_statement_raw/part.parquet"],
+        "columns": ["ticker", "date"],
+        "row_count": 1,
+        "date_range": ["2026-01-02", "2026-01-02"],
+    }
+    context = DataAnalystsContext.from_paths(tmp_path)
+    for manifest in (daily_manifest, financial_manifest):
+        for artifact_path in manifest["artifact_paths"]:
+            artifact = context.artifact_path(artifact_path)
+            artifact.parent.mkdir(parents=True, exist_ok=True)
+            artifact.write_bytes(b"not-opened")
+    metrics = {
+        "manifest_count": 2,
+        "absolute_artifact_path_count": 0,
+        "artifact_path_escape_count": 0,
+        "forbidden_path_segment_count": 0,
+        "required_manifest_missing_count": 0,
+    }
+    config = SimpleNamespace(
+        source_catalog={"sources": [], "forbidden_sources": []},
+        pit_registry={"families": {}},
+        universe_specs={},
+        artifact_contracts=_formal_contracts(),
+    )
+    monkeypatch.setattr(
+        verify_module, "load_manifests", lambda context: [daily_manifest, financial_manifest]
+    )
+    monkeypatch.setattr(
+        verify_module, "_verification_metrics", lambda context, manifests: dict(metrics)
+    )
+    monkeypatch.setattr(verify_module, "load_runtime_config", lambda context: config)
+    monkeypatch.setattr(
+        verify_module, "audit_store", lambda *args, **kwargs: {"status": "ready", "issues": [], "metrics": {}}
+    )
+    monkeypatch.setattr(verify_module, "_metadata_gate", lambda context, metrics: (None, []))
+    monkeypatch.setattr(verify_module, "check_raw_family_diagnostics", lambda context: (None, {}))
+
+    result = verify_runtime(context, audit_contract_keys={"financial_statement_raw"})
+
+    assert result["status"] == "ready"
+
+
 def test_verify_does_not_treat_missing_manifest_schema_as_legacy(
     tmp_path, monkeypatch
 ):
