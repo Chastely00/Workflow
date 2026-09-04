@@ -1,13 +1,12 @@
-"""Conservative admission gate for an ETF-local stateful Tier 1 proxy ledger."""
+"""Descriptive status classifier for an ETF-local stateful Tier 1 proxy ledger."""
 
 from __future__ import annotations
 
-import numpy as np
 import pandas as pd
 
 
 def evaluate_stateful_gate(summary: pd.DataFrame, *, minimum_completed_round_trips: int) -> dict[str, object]:
-    """Decide Tier 2 research admission without promoting proxy marks to paper PnL."""
+    """Classify execution evidence without using it to admit Tier 2."""
     required = {"etf_id", "completed_round_trip_count", "open_position_at_end", "sharpe_proxy", "mark_price_kind"}
     if missing := required.difference(summary.columns):
         raise ValueError(f"stateful summary missing columns: {sorted(missing)}")
@@ -26,11 +25,8 @@ def evaluate_stateful_gate(summary: pd.DataFrame, *, minimum_completed_round_tri
         "tier3_permitted": False,
         "paper_trade_permitted": False,
     }
-    if completed < minimum_completed_round_trips:
-        return {**result, "status": "INSUFFICIENT_EXECUTED_TRADES", "reason": "completed stateful OOF round trips are below the pre-registered minimum"}
     if bool(row["open_position_at_end"]):
-        return {**result, "status": "MARK_TO_MARKET_ONLY", "reason": "proxy ledger ends with an open position"}
-    sharpe = float(row["sharpe_proxy"])
-    if not np.isfinite(sharpe) or sharpe <= 0:
-        return {**result, "status": "FAILED_PROXY_ECONOMICS", "reason": "closed proxy ledger has non-positive Sharpe"}
-    return {**result, "status": "RESEARCH_PASS_PROXY_LEDGER", "reason": "sufficient closed proxy-ledger trades and positive proxy Sharpe", "tier2_permitted": True}
+        return {**result, "status": "MARK_TO_MARKET_ONLY", "reason": "proxy ledger ends with an open position; it is not an admission decision"}
+    if completed < minimum_completed_round_trips:
+        return {**result, "status": "INSUFFICIENT_EXECUTED_TRADES", "reason": "completed trades are reported for uncertainty, not used to block Tier 2"}
+    return {**result, "status": "COMPLETED_TRADE_LEDGER", "reason": "closed proxy ledger is descriptive only; Tier 2 uses the ETF-local model/economic gate"}
