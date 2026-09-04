@@ -323,6 +323,43 @@ def test_financial_statement_selected_pit_uses_later_raw_key3_timestamp_for_same
     assert result["diagnostics"]["unresolved_duplicate_count"] == 0
 
 
+def test_financial_statement_raw_collapses_same_day_key3_timestamp_duplicate_before_publish():
+    result = normalize_raw_family(
+        "financial_statement_raw",
+        [
+            {
+                "coid": "1210",
+                "no": "A",
+                "sem": "3",
+                "curr": "NTD",
+                "merg": "Y",
+                "endd": "2023-09-30",
+                "key3": "2024-11-12 10:06:04.734000",
+                "mdate": "2023-09-01",
+                "r103": 12.35,
+                "source_row_id": "early",
+            },
+            {
+                "coid": "1210",
+                "no": "A",
+                "sem": "3",
+                "curr": "NTD",
+                "merg": "Y",
+                "endd": "2023-09-30",
+                "key3": "2024-11-12 14:02:15.030000",
+                "mdate": "2023-09-01",
+                "r103": 12.35,
+                "source_row_id": "late",
+            },
+        ],
+        _registry(),
+    )
+
+    assert [row["source_row_id"] for row in result["raw_rows"]] == ["late"]
+    assert result["diagnostics"]["raw_same_day_source_timestamp_resolved_count"] == 1
+    assert result["diagnostics"]["duplicate_logical_key_count"] == 0
+
+
 def test_financial_statement_selected_pit_evolves_across_multiple_decision_dates():
     result = normalize_raw_family(
         "financial_statement_raw",

@@ -27,6 +27,9 @@ def normalize_raw_family(
     raw_rows, diagnostics = normalizer(family_id, rows, rule)
     selected_rows: list[dict[str, object]] = []
     if family_id == "financial_statement_raw":
+        raw_timestamp_resolved_count = int(
+            diagnostics.get("raw_same_day_source_timestamp_resolved_count", 0)
+        )
         selected_rows, selected_diag = _selected_rows(
             raw_rows,
             selected_family_id="financial_statement_pit_selected",
@@ -34,6 +37,14 @@ def normalize_raw_family(
             decision_dates=decision_dates,
         )
         diagnostics.update(selected_diag)
+        diagnostics["resolved_same_day_source_timestamp_count"] = (
+            raw_timestamp_resolved_count
+            + int(selected_diag.get("resolved_same_day_source_timestamp_count", 0))
+        )
+        diagnostics["resolved_duplicate_count"] = (
+            raw_timestamp_resolved_count
+            + int(selected_diag.get("resolved_duplicate_count", 0))
+        )
     elif family_id == "self_reported_numbers_raw":
         selected_rows, selected_diag = _selected_rows(
             raw_rows,
@@ -152,7 +163,15 @@ def _normalize_financial_statement(
                 },
             )
         )
-    return output, {"rows_by_no": dict(by_no)}
+    collapsed, resolved_count = _collapse_raw_same_day_timestamp_duplicates(
+        output,
+        logical_key=list(rule["logical_key"]),
+        source_timestamp_field="key3",
+    )
+    return collapsed, {
+        "rows_by_no": dict(by_no),
+        "raw_same_day_source_timestamp_resolved_count": resolved_count,
+    }
 
 
 def _normalize_self_reported_numbers(
@@ -477,6 +496,46 @@ def _resolve_same_day_source_timestamp_ties(
         if len(latest_rows) == 1:
             resolved_count += len(candidates) - 1
 
+    return output, resolved_count
+
+
+def _collapse_raw_same_day_timestamp_duplicates(
+    rows: list[dict[str, object]],
+    *,
+    logical_key: list[str],
+    source_timestamp_field: str,
+) -> tuple[list[dict[str, object]], int]:
+    """Resolve one normalized raw key to its latest distinct source timestamp.
+
+    The raw contract uses date-only availability, while AINVFINB may contain
+    multiple intraday ``key3`` timestamps for the same canonical raw key.
+    Persisting both would violate the raw artifact key.  A unique latest source
+    timestamp is the PIT-safe daily representation; a tie at that timestamp is
+    deliberately left unresolved for the artifact contract to reject.
+    """
+    grouped: dict[tuple[str, ...], list[dict[str, object]]] = defaultdict(list)
+    for row in rows:
+        grouped[_logical_key(row, logical_key)].append(row)
+
+    output: list[dict[str, object]] = []
+    resolved_count = 0
+    for candidates in grouped.values():
+        if len(candidates) == 1:
+            output.append(candidates[0])
+            continue
+        timestamped = [
+            (_required_timestamp(candidate, source_timestamp_field, "financial_statement_raw"), candidate)
+            for candidate in candidates
+        ]
+        latest_timestamp = max(timestamp for timestamp, _candidate in timestamped)
+        latest_rows = [
+            candidate
+            for timestamp, candidate in timestamped
+            if timestamp == latest_timestamp
+        ]
+        output.extend(latest_rows)
+        if len(latest_rows) == 1:
+            resolved_count += len(candidates) - 1
     return output, resolved_count
 
 
