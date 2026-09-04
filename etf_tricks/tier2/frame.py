@@ -57,6 +57,8 @@ def build_meta_training_frame(
         return pd.DataFrame(
             columns=["event_id", "etf_id", "t0_bar_id", "t0", "t1", "p1", *feature_columns, "y_meta", "tier2_decision_available_at"]
         )
+    if candidates["etf_id"].astype(str).nunique() != 1:
+        raise ValueError("Tier 2 candidate input must contain exactly one ETF")
     if not candidates["prediction_kind"].eq(_OOF_PREDICTION_KIND).all():
         raise ValueError("Tier 2 accepts only OOF_CALIBRATED Tier 1 candidates")
     if candidates["p1"].isna().any():

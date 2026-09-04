@@ -58,3 +58,18 @@ def test_meta_frame_rejects_a_candidate_without_oof_prediction() -> None:
 
     with pytest.raises(ValueError, match="OOF"):
         build_meta_training_frame(oof, targets, features, ["f"])
+
+
+def test_meta_frame_rejects_cross_etf_candidate_pooling() -> None:
+    oof, targets, features = _inputs()
+    extra_oof = oof.iloc[[0]].assign(event_id="d", etf_id="volume_ratio", t0_bar_id=20)
+    extra_target = targets.iloc[[0]].assign(event_id="d", etf_id="volume_ratio", t0_bar_id=20)
+    extra_feature = features.iloc[[0]].assign(etf_id="volume_ratio", bar_id=20)
+
+    with pytest.raises(ValueError, match="exactly one ETF"):
+        build_meta_training_frame(
+            pd.concat([oof, extra_oof], ignore_index=True),
+            pd.concat([targets, extra_target], ignore_index=True),
+            pd.concat([features, extra_feature], ignore_index=True),
+            ["f"],
+        )
