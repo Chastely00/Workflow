@@ -6,6 +6,7 @@ import json
 import os
 import shutil
 import sqlite3
+import tempfile
 import uuid
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
@@ -58,7 +59,14 @@ class _SpillKeyIndex:
     """Disk-backed exact-key index used by streaming publication/audit paths."""
 
     def __init__(self) -> None:
-        self.connection = sqlite3.connect("")
+        descriptor, temporary_path = tempfile.mkstemp(prefix="data-analysts-keys-", suffix=".sqlite3")
+        os.close(descriptor)
+        self._temporary_path = Path(temporary_path)
+        self.connection = sqlite3.connect(self._temporary_path)
+        self.connection.execute("PRAGMA journal_mode=OFF")
+        self.connection.execute("PRAGMA synchronous=OFF")
+        self.connection.execute("PRAGMA temp_store=FILE")
+        self.connection.execute("PRAGMA cache_size=-32768")
         self.connection.execute("CREATE TABLE keys (key TEXT PRIMARY KEY)")
         self.connection.execute("CREATE TABLE sources (source TEXT PRIMARY KEY)")
 
@@ -91,7 +99,13 @@ class _SpillKeyIndex:
         )]
 
     def close(self) -> None:
-        self.connection.close()
+        try:
+            self.connection.close()
+        finally:
+            self._temporary_path.unlink(missing_ok=True)
+
+    def flush(self) -> None:
+        self.connection.commit()
 
 
 def archive_superseded_paths(
@@ -699,6 +713,7 @@ def _write_partition_stream(
                 f"{contract.artifact_id} duplicate logical key in incoming batch "
                 f"row {index}: {key!r}"
             )
+    incoming_keys.flush()
     writer: pq.ParquetWriter | None = None
     schema: pa.Schema | None = None
 
@@ -1009,6 +1024,7 @@ def _manifest_from_files(
                         candidate = (parsed.astimezone(timezone.utc), text)
                         if cutoff_max is None or candidate[0] > cutoff_max[0]:
                             cutoff_max = candidate
+                    seen.flush()
             finally:
                 parquet.close()
 
@@ -1361,6 +1377,9 @@ def _validate_unique_rows_spill(
                     f"{contract.artifact_id} duplicate logical key in {label} "
                     f"row {row_index}: {key!r}"
                 )
+            if row_index and row_index % 65536 == 0:
+                index.flush()
+        index.flush()
     finally:
         index.close()
 

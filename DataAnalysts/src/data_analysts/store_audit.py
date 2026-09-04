@@ -3,7 +3,9 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 import sqlite3
+import tempfile
 from datetime import date, datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterable
@@ -19,9 +21,22 @@ from data_analysts.artifact_contracts import RunScope
 from data_analysts.paths import DataAnalystsContext, PathBoundaryError
 
 
+_AUDIT_BATCH_SIZE = 4096
+
+
 class _BoundedEvidenceState:
     def __init__(self) -> None:
-        self.connection = sqlite3.connect("")
+        descriptor, temporary_path = tempfile.mkstemp(prefix="data-analysts-audit-", suffix=".sqlite3")
+        os.close(descriptor)
+        self._temporary_path = Path(temporary_path)
+        self.connection = sqlite3.connect(self._temporary_path)
+        # Exact duplicate evidence can contain millions of keys.  It is a
+        # disposable audit index, so bound SQLite's page cache and commit each
+        # streamed parquet batch rather than retaining one giant transaction.
+        self.connection.execute("PRAGMA journal_mode=OFF")
+        self.connection.execute("PRAGMA synchronous=OFF")
+        self.connection.execute("PRAGMA temp_store=FILE")
+        self.connection.execute("PRAGMA cache_size=-32768")
         self.connection.execute(
             "CREATE TABLE logical_keys (key TEXT PRIMARY KEY, first_path TEXT NOT NULL)"
         )
@@ -63,7 +78,13 @@ class _BoundedEvidenceState:
             self.cutoff_max = candidate
 
     def close(self) -> None:
-        self.connection.close()
+        try:
+            self.connection.close()
+        finally:
+            self._temporary_path.unlink(missing_ok=True)
+
+    def flush(self) -> None:
+        self.connection.commit()
 
 
 def audit_store(
@@ -460,7 +481,9 @@ def _derive_evidence_with_state(
                 )
             )
             row_offset = 0
-            for batch in parquet.iter_batches(columns=bounded, batch_size=65536):
+            for batch in parquet.iter_batches(
+                columns=bounded, batch_size=_AUDIT_BATCH_SIZE
+            ):
                 rows = batch.to_pylist()
                 for batch_index, row in enumerate(rows):
                     index = row_offset + batch_index
@@ -469,6 +492,7 @@ def _derive_evidence_with_state(
                         issues, metrics,
                     )
                 row_offset += len(rows)
+                state.flush()
         finally:
             parquet.close()
 
