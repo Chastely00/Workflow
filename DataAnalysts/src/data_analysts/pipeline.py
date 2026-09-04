@@ -249,7 +249,12 @@ def run_pipeline(
         end_date = end_date or as_of_date
     total_families = _selected_family_count(config, families)
     try:
-        migrate_legacy_variant_manifests(context, contracts.values())
+        # Legacy migration is a publication side effect.  Restrict it to the
+        # current run's declared outputs so an unrelated stale artifact cannot
+        # prevent a bounded source repair from even starting.
+        migrate_legacy_variant_manifests(
+            context, (contracts[key] for key in expected_contract_keys)
+        )
         pre_run_manifest_hashes = _manifest_hashes_by_contract(
             context, contracts
         )
