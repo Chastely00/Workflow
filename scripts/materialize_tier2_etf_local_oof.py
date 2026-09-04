@@ -10,15 +10,14 @@ from pathlib import Path
 import subprocess
 import sys
 
-import numpy as np
 import pandas as pd
-from sklearn.metrics import brier_score_loss, roc_auc_score
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from etf_tricks.governance.trials import TrialRegistry
 from etf_tricks.tier1.long_history import feature_columns_for
 from etf_tricks.tier2.artifact import write_tier2_oof_artifact
+from etf_tricks.tier2.diagnostics import summarize_tier2_oof
 from etf_tricks.tier2.lab import Tier2Lab
 
 
@@ -55,23 +54,6 @@ def _args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _metrics(frame: pd.DataFrame, predictions: pd.DataFrame) -> dict[str, object]:
-    observed = predictions["p2"].notna()
-    x = frame.loc[observed, ["event_id", "y_meta"]].join(predictions.loc[observed, ["p2", "accepted"]])
-    targets = (x["y_meta"] == 1).astype(int)
-    accepted = x.loc[x["accepted"].astype(bool)]
-    return {
-        "oof_rows": int(len(x)),
-        "oof_auc": None if targets.nunique() != 2 else float(roc_auc_score(targets, x["p2"])),
-        "oof_brier": None if x.empty else float(brier_score_loss(targets, x["p2"])),
-        "candidate_count": int(len(x)),
-        "accepted_count": int(len(accepted)),
-        "accepted_share": None if x.empty else float(len(accepted) / len(x)),
-        "candidate_positive_rate": None if x.empty else float(targets.mean()),
-        "accepted_positive_rate": None if accepted.empty else float(accepted["y_meta"].mean()),
-    }
-
-
 def main() -> int:
     args = _args()
     output = Path(args.output_root)
@@ -86,6 +68,7 @@ def main() -> int:
         "afml": Path(args.afml_root), "target": Path(args.target_root),
         "extension": Path(args.feature_extension_root), "tier1_oof": Path(args.tier1_oof_root),
     }
+    targets = pd.read_parquet(roots["target"] / "targets.parquet")
     manifests = {name: path / "manifest.json" for name, path in roots.items() if name != "tier1_oof"}
     if missing := [str(path) for path in manifests.values() if not path.is_file()]:
         raise ValueError(f"missing immutable input manifest: {missing}")
@@ -129,7 +112,7 @@ def main() -> int:
         }
         registry.append(record)
         run = lab.run_oof(tier1_oof, features, outer_splits=args.outer_splits, model_family=args.model_family)
-        metrics = _metrics(run.training_frame, run.predictions)
+        metrics = summarize_tier2_oof(run.training_frame, run.predictions, targets)
         diagnostics_root = output / etf_id / "diagnostics"
         diagnostics_root.mkdir(parents=True)
         pd.DataFrame([metrics]).to_parquet(diagnostics_root / "metrics.parquet", index=False)
