@@ -1,7 +1,7 @@
 import pandas as pd
 import pytest
 
-from etf_tricks.tier1.stateful_ledger import execute_stateful_transitions
+from etf_tricks.tier1.stateful_ledger import execute_stateful_transitions, materialize_etf_ledger
 
 
 def _transitions() -> pd.DataFrame:
@@ -48,3 +48,21 @@ def test_ledger_uses_minimum_ticket_fee_and_rejects_non_transition_rows() -> Non
     invalid.loc[0, "transition"] = "not_a_transition"
     with pytest.raises(ValueError, match="transition"):
         execute_stateful_transitions(invalid, _opens(), initial_capital=10_000.0)
+
+
+def test_materialized_ledger_marks_each_daily_nav_without_extra_ticket_costs() -> None:
+    daily = pd.DataFrame(
+        {
+            "etf_id": "momentum",
+            "date": pd.to_datetime(["2024-01-02", "2024-01-03", "2024-01-04", "2024-01-05"]),
+            "nav": [100.0, 105.0, 107.0, 110.0],
+        }
+    )
+
+    result = materialize_etf_ledger(_transitions(), _opens(), daily, initial_capital=10_000.0)
+
+    assert result.trades["commission"].sum() == pytest.approx(46.7775)
+    assert result.daily_nav["shares"].tolist() == [0, 99, 99, 0]
+    assert result.daily_nav.loc[1, "total_assets"] == pytest.approx(10_480.8925)
+    assert result.daily_nav.loc[3, "total_assets"] == pytest.approx(10_943.2225)
+    assert result.daily_nav.loc[3, "strategy_nav"] == pytest.approx(109.432225)

@@ -3,12 +3,21 @@
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
 
 
 _TRANSITIONS = {"flat_to_long", "long_to_flat"}
+
+
+@dataclass(frozen=True)
+class StatefulLedgerTables:
+    """Daily mark-to-market and the only executable transition tickets."""
+
+    daily_nav: pd.DataFrame
+    trades: pd.DataFrame
 
 
 def _commission(notional: float, rate: float, minimum: float) -> float:
@@ -116,3 +125,75 @@ def execute_stateful_transitions(
             }
         )
     return pd.DataFrame(records)
+
+
+def materialize_etf_ledger(
+    transitions: pd.DataFrame,
+    opens: pd.DataFrame,
+    daily_nav: pd.DataFrame,
+    *,
+    initial_capital: float,
+    buy_cost_rate: float = 0.001425,
+    sell_cost_rate: float = 0.003,
+    minimum_ticket_fee: float = 1.0,
+) -> StatefulLedgerTables:
+    """Build a daily ETF-NAV proxy ledger from raw-open state-transition fills.
+
+    The execution price is the constituent-derived ``raw_open_nav``. Daily
+    marking is the already-produced ETF Trick NAV, explicitly a proxy pending
+    the constituent ticket ledger; it never supplies a fill price or a signal.
+    """
+    required = {"etf_id", "date", "nav"}
+    if missing := required.difference(daily_nav.columns):
+        raise ValueError(f"daily_nav missing columns: {sorted(missing)}")
+    if daily_nav.empty:
+        raise ValueError("daily_nav is empty")
+    daily = daily_nav.loc[:, ["etf_id", "date", "nav"]].copy()
+    daily["date"] = pd.to_datetime(daily["date"], errors="raise").dt.normalize()
+    daily["nav"] = pd.to_numeric(daily["nav"], errors="coerce")
+    if daily["etf_id"].nunique(dropna=False) != 1 or daily.duplicated(["etf_id", "date"]).any():
+        raise ValueError("daily_nav must be a unique ETF-local daily series")
+    if ~np.isfinite(daily["nav"]).all() or daily["nav"].le(0).any():
+        raise ValueError("daily_nav requires finite positive nav")
+    daily = daily.sort_values("date", kind="stable").reset_index(drop=True)
+    trades = execute_stateful_transitions(
+        transitions,
+        opens,
+        initial_capital=initial_capital,
+        buy_cost_rate=buy_cost_rate,
+        sell_cost_rate=sell_cost_rate,
+        minimum_ticket_fee=minimum_ticket_fee,
+    )
+    if not trades.empty and set(trades["execution_date"]).difference(set(daily["date"])):
+        raise ValueError("daily_nav does not cover every execution date")
+    trade_by_date = {pd.Timestamp(row.execution_date): row for row in trades.itertuples(index=False)}
+    cash = float(initial_capital)
+    shares = 0
+    rows: list[dict[str, object]] = []
+    for row in daily.itertuples(index=False):
+        trade = trade_by_date.get(pd.Timestamp(row.date))
+        commission = 0.0
+        transition: str | None = None
+        if trade is not None:
+            cash = float(trade.cash_after)
+            shares = int(trade.shares_after)
+            commission = float(trade.commission)
+            transition = str(trade.transition)
+        total_assets = cash + shares * float(row.nav)
+        rows.append(
+            {
+                "etf_id": row.etf_id,
+                "date": row.date,
+                "mark_nav": float(row.nav),
+                "cash": cash,
+                "shares": shares,
+                "total_assets": total_assets,
+                "strategy_nav": 100.0 * total_assets / float(initial_capital),
+                "transition": transition,
+                "commission": commission,
+                "mark_price_kind": "ETF_TRICK_DAILY_NAV_PROXY",
+            }
+        )
+    marked = pd.DataFrame(rows)
+    marked["daily_log_return"] = np.log(marked["strategy_nav"]).diff()
+    return StatefulLedgerTables(daily_nav=marked, trades=trades)

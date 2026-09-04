@@ -17,7 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from etf_tricks.governance.trials import TrialRegistry
 from etf_tricks.tier1.barrier_diagnostics import summarize_barriers
 from etf_tricks.tier1.market_snapshot import ExecutionMarketSnapshot
-from etf_tricks.tier1.stateful_ledger import execute_stateful_transitions
+from etf_tricks.tier1.stateful_ledger import materialize_etf_ledger
 from etf_tricks.tier1.stateful_policy import build_stateful_transitions
 
 
@@ -97,20 +97,22 @@ def main() -> int:
     daily_nav = pd.read_parquet(etf_root / "daily_etf.parquet")
     holdings = holdings.loc[holdings["etf_id"].eq("momentum")]
     daily_nav = daily_nav.loc[daily_nav["etf_id"].eq("momentum")]
+    oof_dates = pd.to_datetime(oof["decision_available_at"], utc=True).dt.tz_localize(None).dt.normalize()
+    daily_nav = daily_nav.loc[daily_nav["date"].between(oof_dates.min(), oof_dates.max())]
     years = list(range(int(pd.to_datetime(oof["decision_available_at"]).min().year), int(pd.to_datetime(oof["decision_available_at"]).max().year) + 1))
     prices, states = ExecutionMarketSnapshot.read_bounded_constituent_snapshot(data_store, years)
     opens = ExecutionMarketSnapshot.from_frames(holdings, ExecutionMarketSnapshot.prepare_prices(prices, states), daily_nav)
-    ledger = execute_stateful_transitions(transitions.loc[transitions["transition"].notna()], opens, initial_capital=args.initial_capital)
+    ledger_tables = materialize_etf_ledger(transitions.loc[transitions["transition"].notna()], opens, daily_nav, initial_capital=args.initial_capital)
     targets = pd.read_parquet(roots["target"] / "targets.parquet")
     membership = pd.read_parquet(roots["afml"] / "tables" / "bar_daily_membership.parquet")
     events, paths = _barrier_inputs(targets, membership, oof["event_id"])
     barrier = summarize_barriers(events, oof[["event_id", "candidate_indicator"]], paths)
     output.mkdir(parents=True)
-    for name, frame in {"transitions": transitions, "trades": ledger, "barrier_diagnostics": barrier}.items():
+    for name, frame in {"transitions": transitions, "daily_nav": ledger_tables.daily_nav, "trades": ledger_tables.trades, "barrier_diagnostics": barrier}.items():
         frame.to_parquet(output / f"{name}.parquet", index=False)
     manifest = {"schema_version": "tier1-stateful-oof-v1", "config": config, "upstream": upstream, "tables": {path.stem: {"path": path.name, "row_count": len(pd.read_parquet(path)), "sha256": _sha256(path)} for path in output.glob("*.parquet")}}
     (output / "manifest.json").write_text(json.dumps(manifest, sort_keys=True, ensure_ascii=False), encoding="utf-8")
-    metrics = {"transition_count": int(len(ledger)), "round_trip_count": int((ledger["side"].eq("sell")).sum()), "total_commission": float(ledger["commission"].sum()), "final_cash_after_last_transition": float(ledger["cash_after"].iloc[-1]) if not ledger.empty else None}
+    metrics = {"transition_count": int(len(ledger_tables.trades)), "round_trip_count": int((ledger_tables.trades["side"].eq("sell")).sum()), "total_commission": float(ledger_tables.trades["commission"].sum()), "final_cash_after_last_transition": float(ledger_tables.trades["cash_after"].iloc[-1]) if not ledger_tables.trades.empty else None, "final_strategy_nav": float(ledger_tables.daily_nav["strategy_nav"].iloc[-1]), "daily_mark_price_kind": "ETF_TRICK_DAILY_NAV_PROXY"}
     registry.append({**registered, "trial_id": f"{trial_id}-result", "parent_trial_id": trial_id, "created_at": _now(), "completed_at": _now(), "upstream_artifact_hashes": {**upstream, "stateful_manifest": _sha256(output / "manifest.json")}, "validation_metrics": metrics, "selection_status": "RESEARCH_ONLY", "selection_reason": "Stateful OOF ledger materialized; economic gate remains to be evaluated before Tier 2 admission."})
     print({"output": str(output), **metrics})
     return 0
