@@ -116,5 +116,6 @@ class Tier1Lab:
             candidate_threshold_objective=candidate_threshold_objective,
             minimum_candidate_weight_share=minimum_candidate_weight_share,
             trading_sessions=self.trading_sessions,
+            uniqueness_entity_column="etf_id",
         )
         return Tier1OOFRun(training_frame=frame, predictions=predictions, handoff=build_tier1_handoff(frame, predictions), folds=folds)

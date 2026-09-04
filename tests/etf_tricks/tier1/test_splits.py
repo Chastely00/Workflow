@@ -55,3 +55,21 @@ def test_average_uniqueness_excludes_non_trading_days_from_event_concurrency() -
 
     # Sessions have concurrency [1, 2, 2]; Saturday and Sunday are not observations.
     assert result.tolist() == [2 / 3, 0.5]
+
+
+def test_average_uniqueness_does_not_treat_distinct_etfs_as_duplicate_events() -> None:
+    events = pd.DataFrame(
+        {
+            "etf_id": ["a", "b"],
+            "t0": pd.to_datetime(["2024-01-02", "2024-01-02"]),
+            "t1": pd.to_datetime(["2024-01-03", "2024-01-03"]),
+        }
+    )
+
+    result = splits.average_uniqueness(
+        events,
+        trading_sessions=pd.to_datetime(["2024-01-02", "2024-01-03"]),
+        entity_column="etf_id",
+    )
+
+    assert result.tolist() == [1.0, 1.0]

@@ -7,10 +7,21 @@ import pandas as pd
 def average_uniqueness(
     events: pd.DataFrame,
     trading_sessions: pd.DatetimeIndex | list[pd.Timestamp] | None = None,
+    entity_column: str | None = None,
 ) -> pd.Series:
     """Return each event's mean inverse concurrency across active trading sessions."""
     if not {"t0", "t1"}.issubset(events.columns):
         raise ValueError("events require t0 and t1")
+    if entity_column is not None:
+        if entity_column not in events.columns:
+            raise ValueError(f"events missing uniqueness entity column: {entity_column}")
+        if not events.index.is_unique or events[entity_column].isna().any():
+            raise ValueError("entity-aware uniqueness requires unique rows and nonmissing entities")
+        per_entity = [
+            average_uniqueness(group, trading_sessions=trading_sessions)
+            for _, group in events.groupby(entity_column, sort=False)
+        ]
+        return pd.concat(per_entity).reindex(events.index)
     starts = pd.to_datetime(events["t0"], errors="coerce").dt.normalize()
     ends = pd.to_datetime(events["t1"], errors="coerce").dt.normalize()
     if starts.isna().any() or ends.isna().any() or (ends < starts).any():
