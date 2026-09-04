@@ -69,6 +69,7 @@ REQUIRED_STATIC_ARTIFACT_IDS = {
 }
 SOURCE_ONLY_FAMILY_IDS = {
     "afml_chip_snapshot",
+    "afml_price_snapshot",
     "afml_roe_snapshot",
     "capital_formation",
     "dividend_policy",

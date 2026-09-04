@@ -10,6 +10,37 @@ class ExecutionMarketSnapshot:
     """Derive an executable ETF raw-open proxy from prior realized holdings."""
 
     @staticmethod
+    def read_bounded_constituent_snapshot(
+        data_store: str | Path, years: list[int]
+    ) -> tuple[pd.DataFrame, pd.DataFrame]:
+        """Read only the manifest-declared, bounded raw constituent price snapshot."""
+        root = Path(data_store)
+        manifests: dict[str, dict[str, object]] = {}
+        for artifact in ("daily_price_volume_etf_constituents", "daily_market_state"):
+            path = root / "manifests" / f"{artifact}.json"
+            if not path.exists():
+                raise ValueError(f"missing manifest: {artifact}")
+            manifest = json.loads(path.read_text(encoding="utf-8"))
+            if manifest.get("artifact_id") != artifact or manifest.get("status") != "ready":
+                raise ValueError(f"invalid ready manifest identity: {artifact}")
+            manifests[artifact] = manifest
+        price_manifest = manifests["daily_price_volume_etf_constituents"]
+        if price_manifest.get("source_price_semantics") != "raw_unadjusted_execution_prices":
+            raise ValueError("constituent price snapshot is not raw execution pricing")
+        cutoff = str(price_manifest.get("data_cutoff_at") or "")
+        if not cutoff or cutoff.startswith("1970-01-01"):
+            raise ValueError("constituent price snapshot has invalid data cutoff")
+
+        def load(artifact: str) -> pd.DataFrame:
+            allowed = {str(item) for item in manifests[artifact].get("artifact_paths", [])}
+            paths = [item for item in allowed if any(f"year={year}/" in item for year in years)]
+            if not paths:
+                raise ValueError(f"manifest has no requested partitions: {artifact}")
+            return pd.concat([pd.read_parquet(root / item) for item in sorted(paths)], ignore_index=True)
+
+        return load("daily_price_volume_etf_constituents"), load("daily_market_state")
+
+    @staticmethod
     def read_canonical(data_store: str | Path, years: list[int]) -> tuple[pd.DataFrame, pd.DataFrame]:
         root = Path(data_store)
         manifests: dict[str, dict[str, object]] = {}
@@ -41,11 +72,18 @@ class ExecutionMarketSnapshot:
         for frame in (p, s):
             frame["date"] = pd.to_datetime(frame["date"]).dt.normalize()
             frame["ticker"] = frame["ticker"].astype(str)
+        if "source_available_date" in p.columns:
+            p = p.rename(columns={"source_available_date": "price_source_available_date"})
+        s = s.rename(columns={"source_available_date": "state_source_available_date"})
         p = p.sort_values(["ticker", "date"], kind="stable")
         p["previous_close"] = p.groupby("ticker", sort=False)["close"].shift(1)
         merged = p.merge(s, on=["date", "ticker"], how="inner", validate="one_to_one")
         merged["is_legal_execution"] = merged["market_state"].eq("TRADING") & merged["exchange_tradable"].eq(True)
-        merged["source_available_at"] = pd.to_datetime(merged["source_available_date"])
+        availability_columns = ["state_source_available_date"]
+        if "price_source_available_date" in merged.columns:
+            availability_columns.append("price_source_available_date")
+        availability = merged[availability_columns].apply(pd.to_datetime, utc=True)
+        merged["source_available_at"] = availability.max(axis=1)
         return merged[["date", "ticker", "open", "previous_close", "source_available_at", "is_legal_execution"]]
 
     @staticmethod
@@ -126,11 +164,17 @@ class ExecutionMarketSnapshot:
             anchor_nav=("anchor_nav", "first"),
         )
         valid = (
-            np.isclose(grouped["weight_sum"], 1.0)
+            grouped["weight_sum"].ge(0.0)
+            & grouped["weight_sum"].le(1.0 + 1e-8)
             & grouped["all_constituents_legal"]
             & pd.to_numeric(grouped["anchor_nav"], errors="coerce").gt(0)
         )
+        grouped["cash_weight"] = (1.0 - grouped["weight_sum"]).clip(lower=0.0)
         grouped["is_legal_execution"] = valid
-        grouped["raw_open_nav"] = np.where(valid, grouped["open_factor"] * grouped["anchor_nav"], np.nan)
+        grouped["raw_open_nav"] = np.where(
+            valid,
+            (grouped["cash_weight"] + grouped["open_factor"]) * grouped["anchor_nav"],
+            np.nan,
+        )
         grouped.loc[~valid, "available_at"] = pd.NaT
         return grouped[["etf_id", "date", "raw_open_nav", "available_at", "is_legal_execution", "holding_as_of"]].sort_values(["etf_id", "date"], kind="stable").reset_index(drop=True)
