@@ -130,13 +130,22 @@ def main() -> int:
         registry.append(record)
         run = lab.run_oof(tier1_oof, features, outer_splits=args.outer_splits, model_family=args.model_family)
         metrics = _metrics(run.training_frame, run.predictions)
-        artifact_metadata = {**upstream, **common, "etf_scope": etf_id, "trial_id": trial_id}
-        manifest = write_tier2_oof_artifact(run.handoff, output / etf_id / "oof", artifact_metadata)
         diagnostics_root = output / etf_id / "diagnostics"
         diagnostics_root.mkdir(parents=True)
         pd.DataFrame([metrics]).to_parquet(diagnostics_root / "metrics.parquet", index=False)
         diagnostic_manifest = {"schema_version": "tier2-diagnostics-v1", "research_only": True, "sealed_status": "NOT_SEALED", "table_sha256": _sha256(diagnostics_root / "metrics.parquet")}
         (diagnostics_root / "manifest.json").write_text(json.dumps(diagnostic_manifest, sort_keys=True), encoding="utf-8")
+        if run.handoff.empty:
+            registry.append({
+                **record, "trial_id": f"{trial_id}-result", "parent_trial_id": trial_id,
+                "created_at": _now(), "completed_at": _now(), "validation_metrics": metrics,
+                "upstream_artifact_hashes": {**upstream, "diagnostics_manifest": _sha256(diagnostics_root / "manifest.json")},
+                "selection_status": "INSUFFICIENT_MATURE_EVENTS", "selection_reason": "No fold emitted calibrated Tier 2 OOF predictions; no synthetic handoff was written.",
+            })
+            print({"etf_id": etf_id, **metrics, "status": "INSUFFICIENT_MATURE_EVENTS", "oof_sha256": None})
+            continue
+        artifact_metadata = {**upstream, **common, "etf_scope": etf_id, "trial_id": trial_id}
+        manifest = write_tier2_oof_artifact(run.handoff, output / etf_id / "oof", artifact_metadata)
         registry.append({
             **record, "trial_id": f"{trial_id}-result", "parent_trial_id": trial_id,
             "created_at": _now(), "completed_at": _now(), "validation_metrics": metrics,
